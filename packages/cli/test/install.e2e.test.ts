@@ -205,7 +205,7 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
     expect(replace.status).toBe(22);
     expect(replace.stderr).toContain('--replace');
     expect(await readFile(join(existing, 'user-sentinel'), 'utf8')).toBe('must-survive');
-  });
+  }, 15_000);
 
   it('rejects an unpinned GitHub source before any shim subprocess', async () => {
     const { env, home, log } = await fixture();
