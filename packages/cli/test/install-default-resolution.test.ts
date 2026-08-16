@@ -122,6 +122,44 @@ describe('install manifest resolution mode', () => {
     expect(await snapshot(source)).toEqual(sourceBefore);
   });
 
+  it.each(['missing', 'stale'] as const)(
+    'keeps the non-interactive default-resolution replay executable with a %s source lock',
+    async (lockState) => {
+      const source = await enginePack({ plugin: {} });
+      if (lockState === 'missing') await rm(join(source, 'pack.lock.yml'));
+      else await writeFile(join(source, 'pack.lock.yml'), 'stale: true\n');
+      const fake = fakeRuntime();
+
+      const report = await installPack(
+        { source, dshHome: await home(), interactive: false },
+        withResolver(fake.runtime, fake.calls),
+      );
+
+      expect(report).toMatchObject({
+        exitCode: 21,
+        diagnostics: [expect.objectContaining({ code: 'E_CONFIRMATION_REQUIRED' })],
+      });
+      expect(report.diagnostics[0]?.hint).toContain(`-- '${source}'`);
+      expect(report.diagnostics[0]?.hint).not.toContain('--frozen');
+    },
+  );
+
+  it('keeps transitive-build replay in manifest resolution mode', async () => {
+    const source = await enginePack({ plugin: {} });
+    await rm(join(source, 'pack.lock.yml'));
+    const fake = fakeRuntime({ transitive: ['transitive-build'] });
+
+    const report = await installPack(
+      { source, dshHome: await home(), yes: true, interactive: false },
+      withResolver(fake.runtime, fake.calls),
+    );
+
+    expect(report).toMatchObject({ exitCode: 21, metadata: { status: 'rolled-back' } });
+    expect(report.metadata.requiredCommand?.argv).toContain('transitive-build');
+    expect(report.metadata.requiredCommand?.argv).not.toContain('--frozen');
+    expect(report.metadata.requiredCommand?.powerShell).not.toContain('--frozen');
+  });
+
   it('persists a new effective lock only from post-add installed facts', async () => {
     const source = await enginePack({ plugin: {} });
     await rm(join(source, 'pack.lock.yml'));

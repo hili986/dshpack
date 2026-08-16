@@ -17,14 +17,8 @@ export function nonInteractiveInstallArgv(
   plan: InstallPlan,
   environment: Pick<InstallEnvironmentFacts, 'dshHome'>,
 ): string[] {
-  const args = [
-    'install',
-    '--as',
-    plan.targetProfile,
-    '--dsh-home',
-    environment.dshHome,
-    '--frozen',
-  ];
+  const args = ['install', '--as', plan.targetProfile, '--dsh-home', environment.dshHome];
+  if (options.frozen === true) args.push('--frozen');
   if (plan.replaceExistingProfile) args.push('--replace');
   if (plan.plugins.some(({ integrity }) => integrity.kind === 'unverified'))
     args.push('--allow-unverified');
