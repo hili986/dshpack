@@ -4,7 +4,6 @@ import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { parse, stringify } from 'yaml';
-import { digestTargetBeforeState } from '../src/install/build-plan.js';
 import { prepareInstallPlan } from '../src/install/plan.js';
 import { readValidatedPack, validationExitCode } from '../src/install/read.js';
 import { fixture, input, manifest, targetBeforeState } from './install-plan-fixture.js';
@@ -13,19 +12,6 @@ const sha256 = (value: unknown): string =>
   `sha256-${createHash('sha256').update(JSON.stringify(value)).digest('base64url')}`;
 
 describe('install plan review mutants', () => {
-  it('canonicalizes before-state asset order for a stable apply digest', () => {
-    const base = {
-      profile: { path: 'profiles/research-pack', state: 'absent' as const },
-      presets: [],
-      settings: { path: 'settings.yaml', state: 'absent' as const },
-    };
-    const a = { path: 'skills/a', state: 'absent' as const };
-    const b = { path: 'skills/b', state: 'absent' as const };
-    expect(digestTargetBeforeState({ ...base, skills: [b, a] })).toBe(
-      digestTargetBeforeState({ ...base, skills: [a, b] }),
-    );
-  });
-
   it('validates the exact private snapshot bytes even when the source performs an A→B→A ABA', async () => {
     const sourceA = await fixture();
     const changedManifest = manifest();

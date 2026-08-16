@@ -5,6 +5,19 @@ import { prepareInstallPlan } from '../src/install/plan.js';
 import { fixture, input, manifest } from './install-plan-fixture.js';
 
 describe('install plan external state binding', () => {
+  it('canonicalizes before-state asset order for a stable apply digest', () => {
+    const base = {
+      profile: { path: 'profiles/research-pack', state: 'absent' as const },
+      presets: [],
+      settings: { path: 'settings.yaml', state: 'absent' as const },
+    };
+    const a = { path: 'skills/a', state: 'absent' as const };
+    const b = { path: 'skills/b', state: 'absent' as const };
+    expect(digestTargetBeforeState({ ...base, skills: [b, a] })).toBe(
+      digestTargetBeforeState({ ...base, skills: [a, b] }),
+    );
+  });
+
   it('binds an external default preset path, existence, and digest into before-state', async () => {
     const pack = manifest();
     pack.defaults.agentPreset = 'external';
