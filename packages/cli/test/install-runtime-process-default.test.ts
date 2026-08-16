@@ -39,9 +39,11 @@ describe('install default PATH subprocess', () => {
 
     await process.probe(freshHome);
 
-    const firstOptions = vi.mocked(execa).mock.calls[0]?.[2];
+    const firstOptions = vi.mocked(execa).mock.calls[0]?.at(-1) as
+      | { cwd?: string; env?: NodeJS.ProcessEnv }
+      | undefined;
     expect(firstOptions?.cwd).toBe(globalThis.process.cwd());
-    expect(firstOptions?.env.DSH_HOME).toBe(freshHome);
+    expect(firstOptions?.env?.DSH_HOME).toBe(freshHome);
   });
 
   it('uses execa directly with no shell, no rejection, and no descendant killing', async () => {
