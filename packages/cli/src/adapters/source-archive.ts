@@ -1,27 +1,63 @@
+import { once } from 'node:events';
+import { createReadStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { x as extractTar, t as inspectTar, type ReadEntry } from 'tar';
+import { createGunzip } from 'node:zlib';
+import { x as extractTar, Parser, type ReadEntry } from 'tar';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
-const MAX_FILES = 1000;
+const MAX_ENTRIES = 1000;
 
 type ArchiveError = (code: string, message: string) => Error;
+
+function dataAfterNul(block: Buffer, offset: number, length: number): boolean {
+  const field = block.subarray(offset, offset + length);
+  const nul = field.indexOf(0);
+  return nul >= 0 && field.subarray(nul + 1).some((byte) => byte !== 0);
+}
+
+async function rawHeadersSafe(filename: string): Promise<boolean> {
+  let pending = Buffer.alloc(0);
+  let remaining = 0;
+  let expanded = 0;
+  try {
+    const stream = createReadStream(filename).pipe(createGunzip());
+    for await (const value of stream) {
+      const chunk = Buffer.from(value);
+      expanded += chunk.byteLength;
+      if (expanded > 12 * 1024 * 1024) return false;
+      pending = Buffer.concat([pending, chunk]);
+      while (pending.byteLength >= 512) {
+        const block = pending.subarray(0, 512);
+        pending = pending.subarray(512);
+        if (remaining > 0) {
+          remaining -= 512;
+          continue;
+        }
+        if (block.every((byte) => byte === 0)) continue;
+        if (dataAfterNul(block, 0, 100) || dataAfterNul(block, 345, 155)) return false;
+        const sizeField = block.subarray(124, 136).toString('ascii').replace(/\0.*$/u, '').trim();
+        if (!/^[0-7]+$/u.test(sizeField)) return false;
+        remaining = Math.ceil(Number.parseInt(sizeField, 8) / 512) * 512;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return pending.byteLength === 0 && remaining === 0;
+}
 
 function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
   const raw =
     entry.type === 'Directory' && entry.path.endsWith('/') ? entry.path.slice(0, -1) : entry.path;
-  const hasControl = [...raw].some((character) => {
-    const code = character.charCodeAt(0);
-    return code < 32 || code === 127;
-  });
   if (
     raw === '' ||
     isAbsolute(raw) ||
     /^[A-Za-z]:/u.test(raw) ||
     raw.includes('\\') ||
     entry.header.path?.includes('\\') === true ||
-    hasControl
+    /\p{Cc}/u.test(raw)
   ) {
     throw fail('ARCHIVE_UNSAFE', '归档包含不安全路径。');
   }
@@ -31,7 +67,7 @@ function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
       segment === '' ||
       segment === '.' ||
       segment === '..' ||
-      segment.includes(':') ||
+      /[<>:"|?*\uF000-\uF0FF]/u.test(segment) ||
       /[. ]$/u.test(segment) ||
       /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(
         segment,
@@ -50,12 +86,20 @@ function inspectEntry(
     terminals: Set<string>;
     parents: Set<string>;
     filePaths: Set<string>;
-    files: number;
     bytes: number;
   },
   fail: ArchiveError,
+  expectedGitHubCommit?: string,
 ): void {
-  if (entry.extended !== undefined || entry.globalExtended !== undefined) {
+  const global = entry.globalExtended;
+  const unsafeGlobal =
+    global !== undefined &&
+    (expectedGitHubCommit === undefined ||
+      global.comment !== expectedGitHubCommit ||
+      Object.entries(global).some(
+        ([key, value]) => value !== undefined && key !== 'global' && key !== 'comment',
+      ));
+  if (entry.extended !== undefined || unsafeGlobal) {
     throw fail('ARCHIVE_UNSAFE', '归档包含扩展元数据。');
   }
   if (entry.type !== 'File' && entry.type !== 'OldFile' && entry.type !== 'Directory') {
@@ -91,44 +135,75 @@ function inspectEntry(
   if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > MAX_FILE_BYTES) {
     throw fail('ARCHIVE_LIMIT', '归档单文件超过 1 MiB 限制。');
   }
-  state.files += 1;
   state.bytes += entry.size;
-  if (state.files > MAX_FILES || state.bytes > MAX_TOTAL_BYTES) {
-    throw fail('ARCHIVE_LIMIT', '归档超过文件数量或总大小限制。');
+  if (state.bytes > MAX_TOTAL_BYTES) {
+    throw fail('ARCHIVE_LIMIT', '归档超过总大小限制。');
   }
 }
 
-async function preflight(filename: string, fail: ArchiveError): Promise<void> {
+async function preflight(
+  filename: string,
+  fail: ArchiveError,
+  expectedGitHubCommit?: string,
+): Promise<void> {
+  if (!(await rawHeadersSafe(filename)))
+    throw fail('ARCHIVE_UNSAFE', '归档原始 header 不安全或无效。');
   const state = {
     paths: new Map<string, string>(),
     terminals: new Set<string>(),
     parents: new Set<string>(),
     filePaths: new Set<string>(),
-    files: 0,
     bytes: 0,
   };
   let entries = 0;
+  let metaHeaders = 0;
+  let consumedMeta = 0;
+  let sawGlobal = false;
   let failure: Error | undefined;
+  let parserError: unknown;
+  const record = (error: Error): void => {
+    failure ??= error;
+  };
   try {
-    await inspectTar({
-      file: filename,
-      strict: true,
-      preservePaths: true,
-      win32: false,
-      onReadEntry: (entry) => {
-        entries += 1;
-        if (failure !== undefined) return;
-        try {
-          inspectEntry(entry, state, fail);
-        } catch (error) {
-          failure = error instanceof Error ? error : fail('ARCHIVE_UNSAFE', '归档检查失败。');
-        }
-      },
+    const parser = new Parser({ file: filename, strict: true });
+    parser.on('meta', () => {
+      metaHeaders += 1;
     });
+    parser.on('ignoredEntry', (entry: ReadEntry) => {
+      record(fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。'));
+      entry.resume();
+    });
+    parser.on('entry', (entry: ReadEntry) => {
+      entries += 1;
+      if (entries > MAX_ENTRIES) record(fail('ARCHIVE_LIMIT', '归档超过条目数量限制。'));
+      if (entry.globalExtended !== undefined && !sawGlobal) {
+        sawGlobal = true;
+        consumedMeta += 1;
+      }
+      if (failure === undefined) {
+        try {
+          inspectEntry(entry, state, fail, expectedGitHubCommit);
+        } catch (error) {
+          record(error instanceof Error ? error : fail('ARCHIVE_UNSAFE', '归档检查失败。'));
+        }
+      }
+      entry.resume();
+    });
+    const ended = once(parser, 'end').catch((error: unknown) => {
+      parserError = error;
+    });
+    for await (const chunk of createReadStream(filename)) {
+      if (!parser.write(chunk)) await once(parser, 'drain');
+    }
+    parser.end();
+    await ended;
+    if (parserError !== undefined) throw parserError;
   } catch {
+    if (failure !== undefined) throw failure;
     throw fail('ARCHIVE_UNSAFE', '归档格式无效或无法安全读取。');
   }
   if (failure !== undefined) throw failure;
+  if (metaHeaders !== consumedMeta) throw fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。');
   if (entries === 0) throw fail('ARCHIVE_UNSAFE', '归档为空或无效。');
 }
 
@@ -136,8 +211,9 @@ export async function inspectAndExtractArchive(
   archivePath: string,
   workspace: string,
   fail: ArchiveError,
+  expectedGitHubCommit?: string,
 ): Promise<string> {
-  await preflight(archivePath, fail);
+  await preflight(archivePath, fail, expectedGitHubCommit);
   const directory = join(workspace, 'contents');
   await mkdir(directory, { mode: 0o700 });
   try {
