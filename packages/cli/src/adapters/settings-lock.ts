@@ -96,35 +96,40 @@ async function releaseOwnedLock(
 }
 
 type LockAttempt =
-  | { kind: 'acquired'; identity: LockIdentity }
+  | { kind: 'acquired'; guard: FileHandle; identity: LockIdentity }
   | { kind: 'contended' }
   | { kind: 'io-error' };
 
 async function tryAcquireLock(
   lockPath: string,
   owner: string,
-  writer: (handle: FileHandle, owner: string) => Promise<void>,
+  write: (handle: FileHandle, owner: string) => Promise<void>,
   remove: (path: string) => Promise<void>,
 ): Promise<LockAttempt> {
-  let handle: FileHandle;
+  let guard: FileHandle;
   try {
-    handle = await open(lockPath, 'wx', 0o600);
+    guard = await open(lockPath, 'wx', 0o600);
   } catch (error) {
     return isErrorCode(error, 'EEXIST') ? { kind: 'contended' } : { kind: 'io-error' };
   }
 
   let identity: LockIdentity | undefined;
+  let writeHandle: FileHandle | undefined;
   try {
-    const stats = await handle.stat({ bigint: true });
+    const stats = await guard.stat({ bigint: true });
     identity = { dev: stats.dev, ino: stats.ino };
-    await writer(handle, owner);
-    await handle.close();
-    return { kind: 'acquired', identity };
+    writeHandle = await open(lockPath, 'r+');
+    if (!sameIdentity(await writeHandle.stat({ bigint: true }), identity))
+      throw new Error('lock replaced');
+    await write(writeHandle, owner);
+    await writeHandle.close();
+    return { kind: 'acquired', guard, identity };
   } catch {
-    await handle.close().catch(() => undefined);
+    await writeHandle?.close().catch(() => undefined);
     if (identity !== undefined) {
       await removeMatchingLock(lockPath, identity, remove).catch(() => undefined);
     }
+    await guard.close().catch(() => undefined);
     return { kind: 'io-error' };
   }
 }
@@ -140,6 +145,7 @@ export async function withSettingsFileLock<T>(
   const owner = `${process.pid}\n`;
   const deadline = clock.now() + LOCK_TIMEOUT_MS;
   let delay = LOCK_RETRY_INITIAL_MS;
+  let guard: FileHandle;
   let identity: LockIdentity;
 
   for (;;) {
@@ -159,6 +165,7 @@ export async function withSettingsFileLock<T>(
       options.removeLock ?? removeLock,
     );
     if (attempt.kind === 'acquired') {
+      guard = attempt.guard;
       identity = attempt.identity;
       break;
     }
@@ -183,9 +190,18 @@ export async function withSettingsFileLock<T>(
   } catch {
     result = settingsIoFailure(filename);
   }
+  let releaseFailed = false;
   try {
     await releaseOwnedLock(lockPath, owner, identity, options.removeLock ?? removeLock);
   } catch {
+    releaseFailed = true;
+  }
+  try {
+    await guard.close();
+  } catch {
+    releaseFailed = true;
+  }
+  if (releaseFailed) {
     return settingsIoFailure(lockPath);
   }
   return result;
