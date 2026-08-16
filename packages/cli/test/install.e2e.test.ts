@@ -78,7 +78,10 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
     expect(doctor.stderr).toBe('');
     expect(JSON.parse(doctor.stdout)).toMatchObject({
       profile: 'engine-pack',
-      sideEffects: ['profile/cordis.yml'],
+      sideEffects: [
+        { owner: 'dsh', path: 'profile/cordis.yml' },
+        { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+      ],
     });
     expect(await readFile(join(home, 'settings.yaml'), 'utf8')).toContain('agent-presets');
     const profilePatch = await readFile(
