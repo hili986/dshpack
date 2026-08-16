@@ -192,7 +192,7 @@ describe('JSON mode closure', () => {
     },
   );
 
-  it.each(['install', 'init', 'pack'] as const)(
+  it.each(['init', 'pack'] as const)(
     'serializes the %s placeholder for root and child JSON placement',
     async (command) => {
       for (const args of [
@@ -209,6 +209,19 @@ describe('JSON mode closure', () => {
       }
     },
   );
+
+  it.each([
+    ['root', ['--json', 'install']],
+    ['child', ['install', '--json']],
+  ] as const)('serializes install usage as one %s JSON object', async (_placement, args) => {
+    const result = await capture(args);
+
+    expect(result).toMatchObject({ exitCode: 2, stderr: '' });
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'E_USAGE', severity: 'error' })],
+    });
+  });
 
   it.each([
     ['root', ['--json', '--help']],

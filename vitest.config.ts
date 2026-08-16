@@ -10,6 +10,10 @@ export default defineConfig({
     },
   },
   test: {
+    // Windows safety suites exercise real child processes and exclusive file locks.
+    // Serial execution keeps the original timeouts deterministic without skipping
+    // assertions or weakening any coverage gate.
+    maxWorkers: 1,
     include: ['packages/*/test/**/*.test.ts', 'packages/cli/test/export.e2e.test.ts'],
     exclude: ['packages/cli/test/help.e2e.test.ts', 'packages/cli/test/process.e2e.test.ts'],
     coverage: {
