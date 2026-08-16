@@ -8,6 +8,7 @@ import { parse } from 'yaml';
 import { InstallProfileError, validateOfficialProfileInit } from '../src/install/profile-init.js';
 import {
   buildAuthorizationKey,
+  updateWorkspaceAllowBuildKey,
   updateWorkspaceAllowBuilds,
 } from '../src/install/profile-workspace.js';
 
@@ -172,6 +173,31 @@ describe('workspace allowBuilds RMW', () => {
         allowBuilds: true,
       }),
     ).toBe('tar-plugin');
+  });
+
+  it('updates an independently confirmed exact transitive key through the same safe RMW', () => {
+    const source = '# keep\npackages: [.]\nallowBuilds:\n  existing: false\n';
+    const output = updateWorkspaceAllowBuildKey(source, '@scope/transitive');
+    expect(output).toContain('# keep');
+    expect(parse(output).allowBuilds).toEqual({ existing: false, '@scope/transitive': true });
+    expect(updateWorkspaceAllowBuildKey(output, '@scope/transitive')).toBe(output);
+  });
+
+  it.each([
+    '*',
+    'scope/*',
+    'pkg@*',
+    'npm:alias@1.0.0',
+    'pkg\nother: true',
+    'pkg\0name',
+    'pkg:anchor',
+    'pkg@github:owner/repo',
+    'pkg@git+https://evil.example/owner/repo.git',
+    'pkg@git+https://github.com/owner/repo.git#main',
+  ])('rejects broad or non-exact independent build key %j', (key) => {
+    expect(() => updateWorkspaceAllowBuildKey('packages: [.]\n', key)).toThrowError(
+      expect.objectContaining({ code: 'E_WORKSPACE_BUILD_KEY' }),
+    );
   });
 
   it.each([

@@ -4,9 +4,10 @@ import { type Diagnostic, scanSecrets } from '@dshpack/core';
 import { execa } from 'execa';
 import { parseDocument } from 'yaml';
 
-import { DshProcessError, runDsh } from '../adapters/process.js';
+import { DshProcessError, runDsh as defaultRunDsh } from '../adapters/process.js';
 import { diagnostic } from '../commands/shared.js';
 import {
+  type DoctorDshRunner,
   type DoctorInput,
   dshOptions,
   type ProfileFacts,
@@ -18,6 +19,7 @@ import {
 export async function dshVersion(
   input: DoctorInput,
   diagnostics: Diagnostic[],
+  runDsh: DoctorDshRunner = defaultRunDsh,
 ): Promise<string | undefined> {
   try {
     const result = await runDsh(['--version'], {
@@ -81,6 +83,7 @@ export async function checkBundles(
   facts: ProfileFacts,
   input: DoctorInput,
   diagnostics: Diagnostic[],
+  runDsh: DoctorDshRunner = defaultRunDsh,
 ): Promise<void> {
   const external = facts.bundles.filter((name) => name !== '@deepseek-ai/dsh-base');
   for (const name of external)

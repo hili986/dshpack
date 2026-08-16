@@ -4,7 +4,7 @@ import { join, relative, sep } from 'node:path';
 
 import { type Diagnostic, scanSecrets } from '@dshpack/core';
 
-import type { runDsh } from '../adapters/process.js';
+import type { DshProcessResult, RunDshOptions, runDsh } from '../adapters/process.js';
 import { diagnostic } from '../commands/shared.js';
 
 export interface DoctorInput {
@@ -20,6 +20,15 @@ export interface DoctorInput {
 export interface DoctorMetadata {
   profile?: string;
   sideEffects: readonly ['profile/cordis.yml'];
+}
+
+export type DoctorDshRunner = (
+  args: readonly string[],
+  options: RunDshOptions,
+) => Promise<Pick<DshProcessResult, 'stdout'>>;
+
+export interface DoctorDependencies {
+  runDsh?: DoctorDshRunner;
 }
 
 export interface ProfileFacts {

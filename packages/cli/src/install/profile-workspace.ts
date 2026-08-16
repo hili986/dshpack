@@ -3,6 +3,13 @@ import { isAlias, isMap, isPair, isSeq, parseDocument } from 'yaml';
 
 import { assertPluginDeclaration, InstallProfileError, isRecord } from './profile-common.js';
 
+const packageNamePattern = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
+const githubIdentifier = '[A-Za-z0-9][A-Za-z0-9._-]*';
+const gitAuthorizationPattern = new RegExp(
+  `^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@git\\+https://github\\.com/${githubIdentifier}/${githubIdentifier}\\.git$`,
+  'u',
+);
+
 export function buildAuthorizationKey(plugin: PluginDeclaration): string {
   assertPluginDeclaration(plugin);
   if (plugin.source.kind === 'github')
@@ -31,6 +38,16 @@ function sharesYamlIdentity(node: unknown): boolean {
  */
 export function updateWorkspaceAllowBuilds(source: string, plugin: PluginDeclaration): string {
   const authorization = buildAuthorizationKey(plugin);
+  return updateWorkspaceAllowBuildKey(source, authorization);
+}
+
+/** Accept only one exact pnpm authorization key; glob, alias and mutable git syntax are rejected. */
+export function updateWorkspaceAllowBuildKey(source: string, authorization: string): string {
+  if (!packageNamePattern.test(authorization) && !gitAuthorizationPattern.test(authorization))
+    throw new InstallProfileError(
+      'E_WORKSPACE_BUILD_KEY',
+      `allowBuilds key 不是精确包名或固定 GitHub 授权键：${JSON.stringify(authorization)}`,
+    );
   const document = parseDocument(source, { version: '1.2', uniqueKeys: true, merge: false });
   const root = document.contents;
   if (document.errors.length > 0 || !isMap(root))

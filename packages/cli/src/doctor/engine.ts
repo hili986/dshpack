@@ -8,7 +8,7 @@ import {
   preparePatchExport,
 } from '@dshpack/core';
 
-import { runDsh } from '../adapters/process.js';
+import { runDsh as defaultRunDsh } from '../adapters/process.js';
 import { type CommandReport, diagnostic, strictDiagnostics } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import {
@@ -19,6 +19,7 @@ import {
   dshVersion,
 } from './checks.js';
 import {
+  type DoctorDependencies,
   type DoctorInput,
   type DoctorMetadata,
   dshOptions,
@@ -90,15 +91,19 @@ async function fixSkillName(
 }
 
 /** Registered DSH001–018 checks. Dump checks may cause dsh to write profile/cordis.yml. */
-export async function runDoctor(input: DoctorInput): Promise<CommandReport<DoctorMetadata>> {
+export async function runDoctor(
+  input: DoctorInput,
+  dependencies: DoctorDependencies = {},
+): Promise<CommandReport<DoctorMetadata>> {
   const diagnostics: Diagnostic[] = [];
+  const runDsh = dependencies.runDsh ?? defaultRunDsh;
   const nodeVersion = input.nodeVersion ?? process.versions.node;
   if (!versionAtLeast(nodeVersion, [22, 19, 0]) || nodeVersion.startsWith('25.'))
     diagnostics.push(
       profileDiagnostic('DSH001', 'Node 版本必须是 >=22.19 且 <25。', '切换到受支持 Node 版本。'),
     );
   await checkPnpm(input, diagnostics);
-  const version = await dshVersion(input, diagnostics);
+  const version = await dshVersion(input, diagnostics, runDsh);
   if (input.profile !== undefined) {
     const profile = await readProfile(input.dshHome, input.profile);
     diagnostics.push(...profile.diagnostics);
@@ -137,7 +142,7 @@ export async function runDoctor(input: DoctorInput): Promise<CommandReport<Docto
           ),
         );
       await fixEmptyPatch(profile.facts, input, diagnostics);
-      await checkBundles(profile.facts, input, diagnostics);
+      await checkBundles(profile.facts, input, diagnostics, runDsh);
       await checkBuildAuthorization(profile.facts, diagnostics);
       const dump = await runDsh(['--profile', input.profile, '--dump-default-config'], {
         cwd: profile.facts.root,
