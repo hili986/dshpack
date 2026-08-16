@@ -2,6 +2,8 @@
 
 Certification date: 2026-08-17.  All `dsh` invocations used an explicitly supplied, isolated `DSH_HOME`; no user DSH home was read or written.
 
+Raw Windows stdout, stderr, and exit-code files are retained in [`docs/adr/stage8-raw/windows`](adr/stage8-raw/windows).  The native Linux originals remain under `/tmp/dshpack-stage8-linux-34718c5a/raw` as part of the retained smoke root described below.
+
 | OS | Starter pack | `dsh` | Commands and exit codes | Key assertions |
 | --- | --- | --- | --- | --- |
 | Windows | `web-dev` | `0.1.0-rc.6` | `install --yes -- <web-dev>` → 0; `dsh --profile web-dev --dump-config` → 0; `doctor --profile web-dev --strict --yes` → 0 | Dump contains `id: mcp-context7`, `@deepseek-ai/dsh-mcp-client`, `serverName: context7`, `transport: streamable-http`, and `https://mcp.context7.com/mcp`; four web skills exist. |
