@@ -1,0 +1,10 @@
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      yocto-queue:
+        specifier: 1.2.2
+        version: 1.2.2
+packages:
+  yocto-queue@1.2.2:
+    resolution: {}

@@ -1,0 +1,102 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PackManifest TypeBox truth source > snapshots all Ajv diagnostic shapes without generic validation wording 1`] = `
+[
+  [
+    {
+      "code": "E_SCHEMA_REQUIRED",
+      "evidence": "local",
+      "hint": "补充 //name 字段。",
+      "message": "缺少必填字段 “name”。",
+      "path": "//name",
+      "severity": "error",
+    },
+  ],
+  [
+    {
+      "code": "E_SCHEMA_ENUM",
+      "evidence": "local",
+      "hint": "改为 schema 声明的枚举值。",
+      "message": "字段 /mcp/0/transport 的值不在允许范围内。",
+      "path": "/mcp/0/transport",
+      "severity": "error",
+    },
+  ],
+  [
+    {
+      "code": "E_SCHEMA_REQUIRED",
+      "evidence": "local",
+      "hint": "补充 /plugins/0/source/range 字段。",
+      "message": "缺少必填字段 “range”。",
+      "path": "/plugins/0/source/range",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_UNKNOWN_FIELD",
+      "evidence": "local",
+      "hint": "删除 /plugins/0/source/owner。",
+      "message": "不允许未知字段 “owner”。",
+      "path": "/plugins/0/source/owner",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_ENUM",
+      "evidence": "local",
+      "hint": "改为 schema 声明的枚举值。",
+      "message": "字段 /plugins/0/source/kind 的值不在允许范围内。",
+      "path": "/plugins/0/source/kind",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_REQUIRED",
+      "evidence": "local",
+      "hint": "补充 /plugins/0/source/repo 字段。",
+      "message": "缺少必填字段 “repo”。",
+      "path": "/plugins/0/source/repo",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_REQUIRED",
+      "evidence": "local",
+      "hint": "补充 /plugins/0/source/ref 字段。",
+      "message": "缺少必填字段 “ref”。",
+      "path": "/plugins/0/source/ref",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_REQUIRED",
+      "evidence": "local",
+      "hint": "补充 /plugins/0/source/url 字段。",
+      "message": "缺少必填字段 “url”。",
+      "path": "/plugins/0/source/url",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_UNKNOWN_FIELD",
+      "evidence": "local",
+      "hint": "删除 /plugins/0/source/owner。",
+      "message": "不允许未知字段 “owner”。",
+      "path": "/plugins/0/source/owner",
+      "severity": "error",
+    },
+    {
+      "code": "E_SCHEMA_ENUM",
+      "evidence": "local",
+      "hint": "改为 schema 声明的枚举值。",
+      "message": "字段 /plugins/0/source/kind 的值不在允许范围内。",
+      "path": "/plugins/0/source/kind",
+      "severity": "error",
+    },
+  ],
+  [
+    {
+      "code": "E_SCHEMA_UNKNOWN_FIELD",
+      "evidence": "local",
+      "hint": "删除 //unexpected。",
+      "message": "不允许未知字段 “unexpected”。",
+      "path": "//unexpected",
+      "severity": "error",
+    },
+  ],
+]
+`;

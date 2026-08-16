@@ -1,0 +1,13 @@
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      yocto-queue:
+        specifier: github:sindresorhus/yocto-queue#main
+        version: https://codeload.github.com/sindresorhus/yocto-queue/tar.gz/main
+packages:
+  yocto-queue@https://codeload.github.com/sindresorhus/yocto-queue/tar.gz/main:
+    resolution:
+      gitHosted: true
+      integrity: sha512-synthetic
+      tarball: https://codeload.github.com/sindresorhus/yocto-queue/tar.gz/main

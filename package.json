@@ -8,7 +8,7 @@
     "node": ">=22.19.0 <25"
   },
   "scripts": {
-    "build": "pnpm --recursive build",
+    "build": "pnpm --recursive build && pnpm schemas:generate",
     "typecheck": "pnpm --recursive typecheck",
     "lint": "biome check .",
     "format": "biome check --write .",
@@ -16,9 +16,11 @@
     "test:e2e": "pnpm build && vitest run --config vitest.e2e.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "pack:validate": "node scripts/validate-example-pack.mjs",
+    "schemas:generate": "node scripts/generate-pack-schemas.mjs",
+    "verify:pack-schema": "node scripts/verify-pack-schema.mjs",
     "pack:dry-run": "pnpm --filter @dshpack/core pack --dry-run && pnpm --filter dshpack pack --dry-run",
     "publint": "publint packages/core && publint packages/cli",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e && pnpm pack:validate",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e && pnpm pack:validate && pnpm verify:pack-schema",
     "release:check": "pnpm check && pnpm pack:dry-run && pnpm publint"
   },
   "devDependencies": {
@@ -26,6 +28,7 @@
     "@changesets/cli": "3.0.0",
     "@types/node": "22.20.1",
     "@vitest/coverage-v8": "4.1.10",
+    "fast-check": "4.9.0",
     "publint": "0.3.23",
     "tsdown": "0.22.14",
     "typescript": "6.0.3",
