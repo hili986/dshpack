@@ -210,6 +210,64 @@ describe('doctor', () => {
     );
   });
 
+  it('scans profile-visible files for DSH014 secrets without exposing their values', async () => {
+    const home = await makeDshHome();
+    const token = 'sk-TESTONLY-012345678901234567890123';
+    await writeFile(
+      join(home, 'profiles', 'demo', '.credentials.yaml'),
+      `token: ${token}\n`,
+      'utf8',
+    );
+
+    const report = await runDoctor({
+      dshHome: home,
+      profile: 'demo',
+      yes: true,
+      env: doctorEnvironment(home),
+    });
+
+    expect(report.exitCode).toBe(31);
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'DSH014', severity: 'error' }),
+    );
+    expect(JSON.stringify(report.diagnostics)).not.toContain(token.slice(0, 8));
+  });
+
+  it('preserves DSH010 through DSH013 identifiers in doctor diagnostics', async () => {
+    const home = await makeDshHome();
+    const skills = join(home, 'skills');
+    await mkdir(join(skills, 'missing-name'), { recursive: true });
+    await mkdir(join(skills, 'legacy-key'), { recursive: true });
+    await mkdir(join(skills, 'camel-key'), { recursive: true });
+    await mkdir(join(skills, 'bad-name'), { recursive: true });
+    await writeFile(join(skills, 'missing-name', 'SKILL.md'), '---\ndescription: demo\n---\n', 'utf8');
+    await writeFile(
+      join(skills, 'legacy-key', 'SKILL.md'),
+      '---\nname: legacy-key\ndescription: demo\nwhen_to_use: legacy\n---\n',
+      'utf8',
+    );
+    await writeFile(
+      join(skills, 'camel-key', 'SKILL.md'),
+      '---\nname: camel-key\ndescription: demo\ndisableModelInvocation: true\n---\n',
+      'utf8',
+    );
+    await writeFile(
+      join(skills, 'bad-name', 'SKILL.md'),
+      '---\nname: Bad_Name\ndescription: demo\n---\n',
+      'utf8',
+    );
+
+    const report = await runDoctor({
+      dshHome: home,
+      profile: 'demo',
+      yes: true,
+      env: doctorEnvironment(home),
+    });
+    expect(report.diagnostics.map(({ code }) => code)).toEqual(
+      expect.arrayContaining(['DSH010', 'DSH011', 'DSH012', 'DSH013']),
+    );
+  });
+
   it('covers no-profile, absent-profile, deferred fix, and DSH010 repair branches', async () => {
     const home = await makeDshHome('');
     const env = doctorEnvironment(home);

@@ -272,7 +272,7 @@ function lockDiagnostics(
   return diagnostics;
 }
 
-function manifestDiagnostics(manifest: PackManifest): Diagnostic[] {
+export function manifestDiagnostics(manifest: PackManifest): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   for (const plugin of manifest.plugins) {
     if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(plugin.name)) {

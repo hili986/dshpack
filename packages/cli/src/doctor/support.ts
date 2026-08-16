@@ -1,8 +1,8 @@
 import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
-import type { Diagnostic } from '@dshpack/core';
+import { type Diagnostic, scanSecrets } from '@dshpack/core';
 
 import type { runDsh } from '../adapters/process.js';
 import { diagnostic } from '../commands/shared.js';
@@ -156,4 +156,39 @@ export async function markdownFiles(root: string): Promise<string[]> {
   };
   await visit(root);
   return output;
+}
+
+/** Scan only profile-owned source files; dependencies and their lockfile are not profile payload. */
+export async function profileSecretDiagnostics(root: string): Promise<Diagnostic[]> {
+  const diagnostics: Diagnostic[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    let entries: Dirent<string>[];
+    try {
+      entries = await readdir(directory, { encoding: 'utf8', withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      diagnostics.push(
+        profileDiagnostic(
+          'DSH014',
+          '无法完整扫描 profile 中的凭据泄漏。',
+          '检查 profile 文件权限后重试。',
+          directory,
+        ),
+      );
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === 'pnpm-lock.yaml') continue;
+      const absolute = join(directory, entry.name);
+      const path = relative(root, absolute).split(sep).join('/');
+      diagnostics.push(...scanSecrets({ path }));
+      if (entry.isDirectory() && !entry.isSymbolicLink()) await visit(absolute);
+      if (entry.isFile()) {
+        const content = await text(absolute);
+        if (content !== undefined) diagnostics.push(...scanSecrets({ path, content }));
+      }
+    }
+  };
+  await visit(root);
+  return diagnostics;
 }

@@ -6,7 +6,6 @@ import {
   inspectSkill,
   parseCanonicalYaml,
   preparePatchExport,
-  scanSecrets,
 } from '@dshpack/core';
 
 import { runDsh } from '../adapters/process.js';
@@ -24,6 +23,7 @@ import {
   type DoctorMetadata,
   dshOptions,
   markdownFiles,
+  profileSecretDiagnostics,
   type ProfileFacts,
   profileDiagnostic,
   readProfile,
@@ -162,7 +162,10 @@ export async function runDoctor(input: DoctorInput): Promise<CommandReport<Docto
             await fixSkillName(path, source, input, diagnostics);
         }
       diagnostics.push(
-        ...scanSecrets({ path: profile.facts.root }).map((item) => ({ ...item, code: 'DSH014' })),
+        ...(await profileSecretDiagnostics(profile.facts.root)).map((item) => ({
+          ...item,
+          code: 'DSH014',
+        })),
       );
       diagnostics.push(
         diagnostic(

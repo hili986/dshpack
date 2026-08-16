@@ -4,7 +4,14 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { dshOptions, markdownFiles, readProfile, text, versionAtLeast } from '../src/doctor/support.js';
+import {
+  dshOptions,
+  markdownFiles,
+  profileSecretDiagnostics,
+  readProfile,
+  text,
+  versionAtLeast,
+} from '../src/doctor/support.js';
 
 const temporaryRoots: string[] = [];
 
@@ -105,5 +112,20 @@ describe('doctor support', () => {
     await expect(markdownFiles(join(skills, 'first.md'))).rejects.toMatchObject({
       code: expect.any(String),
     });
+  });
+
+  it('scans profile source files but excludes dependency payload and lock noise', async () => {
+    const root = await temporaryRoot();
+    await expect(profileSecretDiagnostics(join(root, 'missing'))).resolves.toEqual([]);
+    await mkdir(join(root, 'node_modules', '.credentials.yaml'), { recursive: true });
+    await writeFile(join(root, 'pnpm-lock.yaml'), 'sk-TESTONLY-01234567890123456789\n', 'utf8');
+    await writeFile(join(root, '.credentials.yaml'), 'token: sk-TESTONLY-01234567890123456789\n', 'utf8');
+
+    await expect(profileSecretDiagnostics(root)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'E_SECRET_FILENAME' })]),
+    );
+    await expect(profileSecretDiagnostics(join(root, '.credentials.yaml'))).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'DSH014' })]),
+    );
   });
 });
