@@ -18,10 +18,11 @@
     "pack:validate": "node scripts/validate-example-pack.mjs",
     "schemas:generate": "node scripts/generate-pack-schemas.mjs",
     "verify:pack-schema": "node scripts/verify-pack-schema.mjs",
+    "verify:adr-text-encoding": "node scripts/verify-adr-text-encoding.mjs",
     "verify:release-pack": "node scripts/verify-release-pack.mjs",
     "pack:dry-run": "pnpm --filter @dshpack/core pack --dry-run && pnpm --filter dshpack pack --dry-run",
     "publint": "publint packages/core && publint packages/cli",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e && pnpm pack:validate && pnpm verify:pack-schema",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e && pnpm pack:validate && pnpm verify:pack-schema && pnpm verify:adr-text-encoding",
     "release:check": "pnpm check && pnpm pack:dry-run && pnpm verify:release-pack && pnpm publint"
   },
   "devDependencies": {

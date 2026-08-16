@@ -1,5 +1,8 @@
 * text=auto eol=lf
 
+# Stage evidence is byte-faithful raw capture; preserve its original line endings during encoding repair.
+docs/adr/stage8-raw/** -text
+
 *.gif binary
 *.ico binary
 *.jpg binary
