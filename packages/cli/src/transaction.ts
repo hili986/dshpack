@@ -1,7 +1,7 @@
 import { dirname, join, resolve } from 'node:path';
 import { EXIT_CODES } from './exit-codes.js';
+import { createArtifact, replaceArtifact, writeDocument } from './transaction-actions.js';
 import {
-  actionId,
   diagnostic,
   errorMessage,
   invalidTxidDiagnostic,
@@ -9,10 +9,7 @@ import {
 } from './transaction-journal.js';
 import { rollbackTransaction } from './transaction-rollback.js';
 import {
-  type CreateJournalAction,
-  type ReplaceJournalAction,
   type RunTransactionOptions,
-  type SettingsJournalAction,
   type TransactionArtifactLock,
   type TransactionContext,
   TransactionFailure,
@@ -96,126 +93,52 @@ export async function runTransaction<T>(
     backupDirectory,
     journalPath,
     async create(kind, path, apply) {
-      return serializeAction(async () => {
-        const lock = requireArtifactLock();
-        await adapter.validateMutationPath(lock, kind, path);
-        await adapter.ensureDirectory(dirname(path));
-        const id = actionId(journal.actions.length + 1);
-        const rollbackPath = join(backupDirectory, 'new', id);
-        const action: CreateJournalAction = {
-          id,
-          kind: 'create',
-          artifact: kind,
-          ownership: 'pending',
-          phase: 'planned',
-          old: { path, exists: false },
-          new: { path, exists: true, rollbackPath },
-        };
-        journal.actions.push(action);
-        await adapter.ensureDirectory(dirname(rollbackPath));
-        await persist();
-        if (!(await adapter.createDirectoryExclusive(path))) {
-          action.ownership = 'not-owned';
-          await persist();
-          throw new TransactionFailure(EXIT_CODES.PROFILE_CONFLICT_OR_LOCK, [
-            diagnostic(
-              'E_TRANSACTION_CREATE_CONFLICT',
-              '事务不能把既有路径记作本事务新建项。',
-              '跳过同名 skill/preset，或先使用明确的 replace 流程。',
-              path,
-            ),
-          ]);
-        }
-        const identity = await adapter.pathIdentity(path);
-        if (identity === undefined) throw new Error(`reserved artifact is missing: ${path}`);
-        action.new.identity = identity;
-        action.ownership = 'owned';
-        await persist();
-        await apply();
-        action.phase = 'applied';
-        await persist();
-      });
+      return serializeAction(() =>
+        createArtifact(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          kind,
+          path,
+          apply,
+        ),
+      );
+    },
+    async replaceArtifact(kind, path) {
+      return serializeAction(() =>
+        replaceArtifact(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          kind,
+          path,
+        ),
+      );
     },
     async replaceProfile(path) {
-      return serializeAction(async () => {
-        const lock = requireArtifactLock();
-        await adapter.validateMutationPath(lock, 'profile', path);
-        if (!(await adapter.pathExists(path))) {
-          throw new TransactionFailure(EXIT_CODES.PROFILE_CONFLICT_OR_LOCK, [
-            diagnostic(
-              'E_TRANSACTION_REPLACE_MISSING',
-              'replace 目标 profile 不存在。',
-              '移除 --replace，或确认目标 profile 路径。',
-              path,
-            ),
-          ]);
-        }
-        const id = actionId(journal.actions.length + 1);
-        const preservedAt = join(backupDirectory, 'old', id);
-        await adapter.ensureDirectory(dirname(preservedAt));
-        const action: ReplaceJournalAction = {
-          id,
-          kind: 'replace',
-          artifact: 'profile',
-          phase: 'planned',
-          old: { path, exists: true },
-          new: { path, exists: false, preservedAt },
-        };
-        journal.actions.push(action);
-        await persist();
-        await adapter.moveArtifactPath(lock, 'profile', path, preservedAt, 'to-backup');
-        action.phase = 'applied';
-        await persist();
-      });
+      return serializeAction(() =>
+        replaceArtifact(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          'profile',
+          path,
+        ),
+      );
+    },
+    async writeManagedDocument(path, newDocument) {
+      return serializeAction(() =>
+        writeDocument(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          'managed-document',
+          path,
+          newDocument,
+        ),
+      );
     },
     async writeSettings(path, newDocument) {
-      return serializeAction(async () => {
-        await adapter.validateMutationPath(requireArtifactLock(), 'settings', path);
-        const originalDocument = await adapter.readTextIfExists(path);
-        const id = actionId(journal.actions.length + 1);
-        const documentPath = join(backupDirectory, 'documents', `${id}-settings-original.yaml`);
-        const newDocumentPath = join(backupDirectory, 'documents', `${id}-settings-new.yaml`);
-        const rollbackPath = join(backupDirectory, 'new', `${id}-settings.yaml`);
-        await adapter.ensureDirectory(dirname(documentPath));
-        if (originalDocument !== undefined) {
-          await adapter.atomicWriteText(documentPath, originalDocument);
-        }
-        await adapter.atomicWriteText(newDocumentPath, newDocument);
-        const action: SettingsJournalAction = {
-          id,
-          kind: 'settings-write',
-          writeState: 'pending',
-          phase: 'planned',
-          old:
-            originalDocument === undefined
-              ? { path, exists: false }
-              : { path, exists: true, documentPath },
-          new: {
-            path,
-            exists: true,
-            documentPath: newDocumentPath,
-            rollbackPath,
-          },
-        };
-        journal.actions.push(action);
-        await persist();
-        if (!(await adapter.compareAndSwapText(path, originalDocument, newDocument))) {
-          action.writeState = 'not-written';
-          await persist();
-          throw new TransactionFailure(EXIT_CODES.CONTRACT, [
-            diagnostic(
-              'E_TRANSACTION_SETTINGS_CHANGED',
-              'settings.yaml 在事务读取后被其他写入者修改。',
-              '重新读取最新 settings 后重试安装。',
-              path,
-            ),
-          ]);
-        }
-        action.writeState = 'written';
-        await persist();
-        action.phase = 'applied';
-        await persist();
-      });
+      return serializeAction(() =>
+        writeDocument(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          'settings',
+          path,
+          newDocument,
+        ),
+      );
     },
   };
 

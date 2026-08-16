@@ -31,6 +31,7 @@ export default defineConfig({
         'packages/cli/src/adapters/source-archive.ts': { branches: 90 },
         'packages/cli/src/adapters/source-network.ts': { branches: 90 },
         'packages/cli/src/transaction-journal.ts': { branches: 90 },
+        'packages/cli/src/transaction-actions.ts': { branches: 90 },
         'packages/cli/src/transaction-node-adapter.ts': { branches: 90 },
         'packages/cli/src/transaction-rollback.ts': { branches: 90 },
         'packages/cli/src/transaction-types.ts': { branches: 90 },

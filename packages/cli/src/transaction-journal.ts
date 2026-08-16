@@ -67,6 +67,8 @@ export function actionId(index: number): string {
 }
 
 export function recoveryStep(action: TransactionJournalAction, reason: string): ManualRecoveryStep {
+  const documentAction =
+    action.kind === 'settings-write' || action.kind === 'managed-document-write';
   const sourcePath =
     action.kind === 'create'
       ? action.new.path
@@ -75,13 +77,13 @@ export function recoveryStep(action: TransactionJournalAction, reason: string): 
         : action.old.exists
           ? action.old.documentPath
           : action.new.path;
-  const missingSettings = action.kind === 'settings-write' && !action.old.exists;
+  const missingDocument = documentAction && !action.old.exists;
   return {
     actionId: action.id,
-    operation: action.kind === 'settings-write' && !missingSettings ? 'atomic-write' : 'rename',
+    operation: documentAction && !missingDocument ? 'atomic-write' : 'rename',
     sourcePath,
     destinationPath:
-      action.kind === 'create' || missingSettings ? action.new.rollbackPath : action.old.path,
+      action.kind === 'create' || missingDocument ? action.new.rollbackPath : action.old.path,
     reason,
   };
 }
@@ -118,9 +120,13 @@ export async function rollbackAction(
     }
     return;
   }
-  if (action.kind === 'settings-write') {
+  if (action.kind === 'settings-write' || action.kind === 'managed-document-write') {
     if (action.writeState === 'not-written') return;
-    await adapter.validateMutationPath(lock, 'settings', action.new.path);
+    await adapter.validateMutationPath(
+      lock,
+      action.kind === 'settings-write' ? 'settings' : 'managed-document',
+      action.new.path,
+    );
     if (action.writeState === 'pending') {
       throw new Error(`settings write outcome is unresolved: ${action.new.path}`);
     }
@@ -139,14 +145,14 @@ export async function rollbackAction(
     if (!restored) throw new Error(`settings changed after transaction write: ${action.new.path}`);
     return;
   }
-  await adapter.validateMutationPath(lock, 'profile', action.old.path);
+  await adapter.validateMutationPath(lock, action.artifact, action.old.path);
   const preserved = await adapter.pathExists(action.new.preservedAt);
   const occupied = await adapter.pathExists(action.old.path);
   if (preserved && occupied) throw new Error(`restore target still exists: ${action.old.path}`);
   if (preserved) {
     await adapter.moveArtifactPath(
       lock,
-      'profile',
+      action.artifact,
       action.old.path,
       action.new.preservedAt,
       'from-backup',

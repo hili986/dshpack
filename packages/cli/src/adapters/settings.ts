@@ -46,6 +46,18 @@ interface ParsedSettings {
   root: Record<string, unknown>;
 }
 
+export interface PrepareAgentPresetsMergeInput {
+  currentDocument: string | undefined;
+  fragment: string;
+  settingsPath: string;
+  fragmentPath: string;
+}
+
+export interface PreparedAgentPresetsMerge {
+  document: string;
+  section: Readonly<Record<string, unknown>>;
+}
+
 function parseSettings(source: string, filename: string): Result<ParsedSettings> {
   const document = parseDocument(source, { prettyErrors: true });
   if (document.errors.length > 0) {
@@ -95,11 +107,10 @@ function patchNode(
   if (!isDeepStrictEqual(current, next)) document.setIn(path, next);
 }
 
-function hasAliasBoundary(document: Document): boolean {
-  const namespace = document.getIn([AGENT_PRESETS], true);
-  if (!isNode(namespace)) return false;
+function hasAliasOrAnchor(value: unknown): boolean {
+  if (!isNode(value)) return false;
   let found = false;
-  visit(namespace, {
+  visit(value, {
     Alias: () => {
       found = true;
       return visit.BREAK;
@@ -111,6 +122,92 @@ function hasAliasBoundary(document: Document): boolean {
     },
   });
   return found;
+}
+
+function hasAliasBoundary(document: Document): boolean {
+  return hasAliasOrAnchor(document.getIn([AGENT_PRESETS], true));
+}
+
+function parseFragment(source: string, filename: string): Result<Record<string, unknown>> {
+  const document = parseDocument(source, { prettyErrors: true });
+  if (document.errors.length > 0) {
+    return fail([
+      diagnostic(
+        'E_SETTINGS_FRAGMENT_INVALID_YAML',
+        'agent-presets fragment 不是有效 YAML。',
+        '修复 settings/agent-presets.yml 的 YAML 语法后重试。',
+        filename,
+      ),
+    ]);
+  }
+  if (hasAliasOrAnchor(document.contents)) {
+    return fail([
+      diagnostic(
+        'E_SETTINGS_FRAGMENT_ALIAS',
+        'agent-presets fragment 含 YAML alias 或 anchor。',
+        '展开 fragment 中的 alias/anchor，避免跨边界联动修改。',
+        filename,
+      ),
+    ]);
+  }
+  const value: unknown = document.toJS() ?? {};
+  if (!isMap(value)) {
+    return fail([
+      diagnostic(
+        'E_SETTINGS_FRAGMENT_ROOT',
+        'agent-presets fragment 根节点必须是 namespace 的叶 mapping。',
+        '直接写 agent-presets 的叶键，不要使用 sequence 或 scalar 根节点。',
+        filename,
+      ),
+    ]);
+  }
+  if (Object.hasOwn(value, AGENT_PRESETS)) {
+    return fail([
+      diagnostic(
+        'E_SETTINGS_FRAGMENT_NAMESPACE',
+        'agent-presets fragment 不得再次包装 agent-presets namespace。',
+        '移除顶层 agent-presets:，文件只保留该 namespace 的叶内容。',
+        filename,
+      ),
+    ]);
+  }
+  return pass(value);
+}
+
+/**
+ * Purely prepare the exact settings.yaml document that install may later submit to its CAS
+ * transaction. The pack file is the `agent-presets` leaf, never a replacement settings document.
+ */
+export function prepareAgentPresetsMerge(
+  input: PrepareAgentPresetsMergeInput,
+): Result<PreparedAgentPresetsMerge> {
+  const parsed = parseSettings(input.currentDocument ?? '', input.settingsPath);
+  if (!parsed.ok || parsed.value === undefined) return fail(parsed.diagnostics);
+  if (hasAliasBoundary(parsed.value.document)) {
+    return fail([
+      diagnostic(
+        'E_SETTINGS_ALIAS',
+        'agent-presets 含 YAML alias 或 anchor，已拒绝覆盖。',
+        '先展开该 namespace 的 alias/anchor，避免修改联动到其他 namespace。',
+        input.settingsPath,
+      ),
+    ]);
+  }
+  const fragment = parseFragment(input.fragment, input.fragmentPath);
+  if (!fragment.ok || fragment.value === undefined) return fail(fragment.diagnostics);
+  const secretDiagnostics = scanSecrets({
+    path: input.fragmentPath,
+    content: input.fragment,
+    settingsNamespace: AGENT_PRESETS,
+  });
+  if (secretDiagnostics.length > 0) return fail(secretDiagnostics);
+  patchNode(
+    parsed.value.document,
+    [AGENT_PRESETS],
+    parsed.value.root[AGENT_PRESETS],
+    fragment.value,
+  );
+  return pass({ document: parsed.value.document.toString(), section: fragment.value });
 }
 
 async function nearestExistingAncestorIsDirectory(filename: string): Promise<boolean> {

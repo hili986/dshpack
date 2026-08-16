@@ -100,6 +100,21 @@ async function validateMutationPath(
     await assertCanonicalMapping(home, canonicalHome, path, failure);
     return;
   }
+  if (kind === 'managed-document') {
+    const installed = join(home, '.dshpack', 'installed');
+    const child = relative(installed, resolve(path));
+    const failure = scopeFailure('E_TRANSACTION_MANAGED_DOCUMENT_PATH_SCOPE', path);
+    if (child === '' || isAbsolute(child) || dirname(child) !== '.' || !child.endsWith('.json')) {
+      throw failure;
+    }
+    await assertCanonicalMapping(
+      installed,
+      join(canonicalHome, '.dshpack', 'installed'),
+      path,
+      failure,
+    );
+    return;
+  }
   const rootName = ARTIFACT_ROOTS[kind];
   const root = join(home, rootName);
   const child = relative(root, resolve(path));

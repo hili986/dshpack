@@ -40,7 +40,7 @@ export interface TransactionAdapter {
 }
 
 export type TransactionArtifactKind = 'profile' | 'skill' | 'preset';
-export type TransactionMutationKind = TransactionArtifactKind | 'settings';
+export type TransactionMutationKind = TransactionArtifactKind | 'settings' | 'managed-document';
 export type TransactionArtifactMoveDirection = 'to-backup' | 'from-backup';
 export type TransactionPhase = 'planned' | 'applied' | 'rolled-back' | 'rollback-failed';
 export type TransactionState =
@@ -64,10 +64,21 @@ export interface CreateJournalAction {
 export interface ReplaceJournalAction {
   id: string;
   kind: 'replace';
-  artifact: 'profile';
+  artifact: TransactionArtifactKind;
   phase: TransactionPhase;
   old: { path: string; exists: true };
   new: { path: string; exists: false; preservedAt: string };
+}
+
+export type DocumentJournalOld =
+  | { path: string; exists: true; documentPath: string }
+  | { path: string; exists: false };
+
+export interface DocumentJournalNew {
+  path: string;
+  exists: true;
+  documentPath: string;
+  rollbackPath: string;
 }
 
 export interface SettingsJournalAction {
@@ -75,19 +86,24 @@ export interface SettingsJournalAction {
   kind: 'settings-write';
   writeState: 'pending' | 'not-written' | 'written';
   phase: TransactionPhase;
-  old: { path: string; exists: true; documentPath: string } | { path: string; exists: false };
-  new: {
-    path: string;
-    exists: true;
-    documentPath: string;
-    rollbackPath: string;
-  };
+  old: DocumentJournalOld;
+  new: DocumentJournalNew;
+}
+
+export interface ManagedDocumentJournalAction {
+  id: string;
+  kind: 'managed-document-write';
+  writeState: 'pending' | 'not-written' | 'written';
+  phase: TransactionPhase;
+  old: DocumentJournalOld;
+  new: DocumentJournalNew;
 }
 
 export type TransactionJournalAction =
   | CreateJournalAction
   | ReplaceJournalAction
-  | SettingsJournalAction;
+  | SettingsJournalAction
+  | ManagedDocumentJournalAction;
 
 export interface TransactionJournal {
   version: 0;
@@ -111,7 +127,9 @@ export interface TransactionContext {
   readonly backupDirectory: string;
   readonly journalPath: string;
   create(kind: TransactionArtifactKind, path: string, apply: () => Promise<void>): Promise<void>;
+  replaceArtifact(kind: TransactionArtifactKind, path: string): Promise<void>;
   replaceProfile(path: string): Promise<void>;
+  writeManagedDocument(path: string, newDocument: string): Promise<void>;
   writeSettings(path: string, newDocument: string): Promise<void>;
 }
 

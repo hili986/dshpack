@@ -10,6 +10,8 @@ export type {
 } from './adapters/process.js';
 export { DshProcessError, runDsh } from './adapters/process.js';
 export type {
+  PrepareAgentPresetsMergeInput,
+  PreparedAgentPresetsMerge,
   SettingsAdapter,
   SettingsClock,
   YamlSettingsAdapterOptions,
@@ -17,6 +19,7 @@ export type {
 export {
   compareAndMoveText,
   compareAndSwapText,
+  prepareAgentPresetsMerge,
   withSettingsFileLock,
   YamlSettingsAdapter,
 } from './adapters/settings.js';
