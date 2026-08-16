@@ -123,6 +123,24 @@ describe('installed build-script audit', () => {
     expect(result.transitive).toHaveLength(1);
   });
 
+  it('does not let a nested same-name package inherit the direct physical root authorization', async () => {
+    const root = await temporary();
+    const directRoot = await pkg(root, direct.name, {
+      dependencies: { 'direct-plugin': '2.0.0' },
+    });
+    await pkg(directRoot, direct.name, { scripts: { install: 'nested install' } });
+
+    const result = await auditInstalledBuildScripts(
+      root,
+      [direct],
+      new Set([buildAuthorizationKey(direct)]),
+    );
+    expect(result.approvedDirect).toEqual([]);
+    expect(result.unapprovedDirectBuildKeys).toEqual([]);
+    expect(result.unexpectedTransitiveBuildKeys).toEqual(['direct-plugin']);
+    expect(result.transitive[0]?.name).toBe('direct-plugin');
+  });
+
   it('fails closed for missing required dependencies and package aliases', async () => {
     const missing = await temporary();
     await pkg(missing, direct.name, { dependencies: { absent: '1.0.0' } });

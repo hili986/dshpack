@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 
 import {
   type LockedPlugin,
@@ -11,8 +10,19 @@ import {
 import { satisfies, valid } from 'semver';
 
 import { assertPluginDeclaration, InstallProfileError, isRecord } from './profile-common.js';
+import {
+  type ProfileReadHooks,
+  readAtomicFile,
+  readConfinedAtomicFile,
+  requireSecureDirectory,
+} from './profile-fs.js';
+import { type StagedPluginTarball, verifyStagedPluginTarball } from './profile-tarball.js';
+
+export type { StagedPluginTarball } from './profile-tarball.js';
+export { stageVerifiedPluginTarball } from './profile-tarball.js';
 
 export interface InstalledPluginFact {
+  name: string;
   packageJsonSha512: string;
   bundlePatch: string;
   actualResolved: LockedPlugin['resolved'];
@@ -27,8 +37,20 @@ function sha512(bytes: Uint8Array): string {
   return `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
 }
 
-function same(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+function sameResolved(
+  left: LockedPlugin['resolved'],
+  right: PackLockedPlugin['resolved'],
+): boolean {
+  if ('version' in left) return 'version' in right && left.version === right.version;
+  if ('commit' in left) return 'commit' in right && left.commit === right.commit;
+  return 'url' in right && left.url === right.url;
+}
+
+function sameIntegrity(
+  left: LockedPlugin['integrity'],
+  right: Exclude<PackLockedPlugin['integrity'], { kind: 'unverified' }>,
+): boolean {
+  return left.kind === right.kind && left.value === right.value;
 }
 
 function assertMatchingName(plugin: PluginDeclaration, locked: PackLockedPlugin): void {
@@ -40,47 +62,25 @@ function assertMatchingName(plugin: PluginDeclaration, locked: PackLockedPlugin)
     );
 }
 
-async function ordinaryFile(path: string, code: string): Promise<Buffer> {
-  let metadata: Awaited<ReturnType<typeof lstat>>;
-  try {
-    metadata = await lstat(path);
-  } catch {
-    throw new InstallProfileError(code, `缺少必须文件：${path}`, path);
-  }
-  if (!metadata.isFile() || metadata.isSymbolicLink())
-    throw new InstallProfileError(code, `拒绝 symlink 或非普通文件：${path}`, path);
-  return readFile(path);
-}
-
-async function ordinaryDirectory(path: string): Promise<void> {
-  let metadata: Awaited<ReturnType<typeof lstat>>;
-  try {
-    metadata = await lstat(path);
-  } catch {
-    throw new InstallProfileError('E_PLUGIN_PATH_ALIAS', `插件目录不存在：${path}`, path);
-  }
-  if (!metadata.isDirectory() || metadata.isSymbolicLink())
-    throw new InstallProfileError(
-      'E_PLUGIN_PATH_ALIAS',
-      `拒绝 symlink、junction 或非目录插件路径：${path}`,
-      path,
-    );
-}
-
 function installedPackageRoot(profileRoot: string, name: string): string {
   const segments = name.split('/');
   return join(profileRoot, 'node_modules', ...segments);
 }
 
-async function assertPackagePath(profileRoot: string, name: string): Promise<string> {
-  await ordinaryDirectory(profileRoot);
+async function assertPackagePath(
+  profileRoot: string,
+  name: string,
+  hooks: ProfileReadHooks,
+): Promise<{ root: string; identity: string }> {
+  await requireSecureDirectory(profileRoot, hooks);
   const modules = join(profileRoot, 'node_modules');
-  await ordinaryDirectory(modules);
+  await requireSecureDirectory(modules, hooks);
   const segments = name.split('/');
-  if (segments.length === 2) await ordinaryDirectory(join(modules, segments[0] as string));
+  if (segments.length === 2)
+    await requireSecureDirectory(join(modules, segments[0] as string), hooks);
   const packageRoot = installedPackageRoot(profileRoot, name);
-  await ordinaryDirectory(packageRoot);
-  return packageRoot;
+  const packageDirectory = await requireSecureDirectory(packageRoot, hooks);
+  return { root: packageRoot, identity: packageDirectory.identity };
 }
 
 function safeBundlePatch(value: unknown): string {
@@ -93,11 +93,21 @@ function safeBundlePatch(value: unknown): string {
     throw new InstallProfileError('E_PLUGIN_BUNDLE_PATCH', '实际包未声明安全的 dsh.bundle.patch。');
   const normalized = value.startsWith('./') ? value.slice(2) : value;
   const segments = normalized.split('/');
+  const windowsDevice = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
   if (
     normalized.length === 0 ||
     normalized.startsWith('/') ||
     /^[A-Za-z]:/u.test(normalized) ||
-    segments.some((segment) => segment === '' || segment === '.' || segment === '..')
+    segments.some(
+      (segment) =>
+        segment === '' ||
+        segment === '.' ||
+        segment === '..' ||
+        /[<>:"|?*]/u.test(segment) ||
+        /\p{Cc}/u.test(segment) ||
+        /[. ]$/u.test(segment) ||
+        windowsDevice.test(segment),
+    )
   )
     throw new InstallProfileError(
       'E_PLUGIN_BUNDLE_PATCH_PATH',
@@ -146,7 +156,8 @@ function githubSpec(plugin: SourceKind<'github'>, locked: PackLockedPlugin): str
 async function tarballSpec(
   plugin: SourceKind<'tarball'>,
   locked: PackLockedPlugin,
-  stagedTarball: string | undefined,
+  stagedTarball: StagedPluginTarball | undefined,
+  hooks: ProfileReadHooks,
 ): Promise<string> {
   if (!('url' in locked.resolved) || locked.resolved.url !== plugin.source.url)
     throw new InstallProfileError(
@@ -158,31 +169,25 @@ async function tarballSpec(
       'E_PLUGIN_TARBALL_UNVERIFIED',
       '远程 tarball 没有可重验的 sha512 SRI，不能交给 dsh。',
     );
-  if (stagedTarball === undefined || !isAbsolute(stagedTarball) || !stagedTarball.endsWith('.tgz'))
+  if (stagedTarball === undefined)
     throw new InstallProfileError(
       'E_PLUGIN_TARBALL_PATH',
       'tarball 必须先校验并落为绝对本地 .tgz 路径。',
     );
-  const bytes = await ordinaryFile(stagedTarball, 'E_PLUGIN_TARBALL_PATH');
-  if (sha512(bytes) !== locked.integrity.value)
-    throw new InstallProfileError(
-      'E_PLUGIN_TARBALL_INTEGRITY',
-      '本地 staged tarball 的 sha512 与 lock 不一致。',
-      stagedTarball,
-    );
-  return stagedTarball;
+  return verifyStagedPluginTarball(stagedTarball, locked.integrity.value, hooks);
 }
 
 /** Generate only exact, pinned specs; a remote tarball URL is never returned. */
 export async function exactPluginAddSpec(
   plugin: PluginDeclaration,
   locked: PackLockedPlugin,
-  stagedTarball?: string,
+  stagedTarball?: StagedPluginTarball,
+  hooks: ProfileReadHooks = {},
 ): Promise<string> {
   assertMatchingName(plugin, locked);
   if (plugin.source.kind === 'npm') return npmSpec(plugin as SourceKind<'npm'>, locked);
   if (plugin.source.kind === 'github') return githubSpec(plugin as SourceKind<'github'>, locked);
-  return tarballSpec(plugin as SourceKind<'tarball'>, locked, stagedTarball);
+  return tarballSpec(plugin as SourceKind<'tarball'>, locked, stagedTarball, hooks);
 }
 
 function parseJson(bytes: Uint8Array, code: string, path: string): Record<string, unknown> {
@@ -218,13 +223,20 @@ function reconcileLock(
   expected: PackLockedPlugin,
 ): LockedPlugin {
   const resolved = resolveIntegrityFromPnpmLock(source, plugin);
-  if (!resolved.ok || resolved.value === undefined)
-    throw new InstallProfileError('E_PLUGIN_LOCK', 'pnpm-lock 四处联合提取失败。');
-  if (!same(resolved.value.resolved, expected.resolved))
+  if (!resolved.ok || resolved.value === undefined) {
+    const reasonCode = resolved.diagnostics.map(({ code }) => code).join(',');
+    throw new InstallProfileError(
+      'E_PLUGIN_LOCK',
+      `pnpm-lock 四处联合提取失败：${reasonCode}。`,
+      undefined,
+      reasonCode,
+    );
+  }
+  if (!sameResolved(resolved.value.resolved, expected.resolved))
     throw new InstallProfileError('E_PLUGIN_LOCK_MISMATCH', '实际 lock 来源与 pack lock 不一致。');
   if (
     expected.integrity.kind !== 'unverified' &&
-    !same(resolved.value.integrity, expected.integrity)
+    !sameIntegrity(resolved.value.integrity, expected.integrity)
   )
     throw new InstallProfileError(
       'E_PLUGIN_LOCK_MISMATCH',
@@ -238,11 +250,13 @@ export async function verifyInstalledPlugin(
   profileRoot: string,
   plugin: PluginDeclaration,
   expected: PackLockedPlugin,
+  hooks: ProfileReadHooks = {},
 ): Promise<InstalledPluginFact> {
   assertMatchingName(plugin, expected);
-  const packageRoot = await assertPackagePath(profileRoot, plugin.name);
+  const installed = await assertPackagePath(profileRoot, plugin.name, hooks);
+  const packageRoot = installed.root;
   const packagePath = join(packageRoot, 'package.json');
-  const packageBytes = await ordinaryFile(packagePath, 'E_PLUGIN_PACKAGE_JSON');
+  const packageBytes = (await readAtomicFile(packagePath, 'E_PLUGIN_PACKAGE_JSON', hooks)).bytes;
   const packageJson = parseJson(packageBytes, 'E_PLUGIN_PACKAGE_JSON', packagePath);
   if (packageJson.name !== plugin.name)
     throw new InstallProfileError(
@@ -254,10 +268,10 @@ export async function verifyInstalledPlugin(
   const bundle = isRecord(dsh) ? dsh.bundle : undefined;
   const bundlePatch = safeBundlePatch(isRecord(bundle) ? bundle.patch : undefined);
   const normalizedPatch = bundlePatch.startsWith('./') ? bundlePatch.slice(2) : bundlePatch;
-  await ordinaryFile(
-    join(packageRoot, ...normalizedPatch.split('/')),
-    'E_PLUGIN_BUNDLE_PATCH_PATH',
-  );
+  await readConfinedAtomicFile(packageRoot, normalizedPatch, 'E_PLUGIN_BUNDLE_PATCH_PATH', hooks);
+  const currentPackageRoot = await requireSecureDirectory(packageRoot, hooks);
+  if (currentPackageRoot.identity !== installed.identity)
+    throw new InstallProfileError('E_PROFILE_FILE_CHANGED', '插件目录在验证期间被替换。');
   const packageJsonSha512 = sha512(packageBytes);
   if (packageJsonSha512 !== expected.packageJsonSha512)
     throw new InstallProfileError(
@@ -272,7 +286,7 @@ export async function verifyInstalledPlugin(
 
   const profilePath = join(profileRoot, 'package.json');
   const profile = parseJson(
-    await ordinaryFile(profilePath, 'E_PLUGIN_PROFILE_PACKAGE'),
+    (await readAtomicFile(profilePath, 'E_PLUGIN_PROFILE_PACKAGE', hooks)).bytes,
     'E_PLUGIN_PROFILE_PACKAGE',
     profilePath,
   );
@@ -286,9 +300,10 @@ export async function verifyInstalledPlugin(
     throw new InstallProfileError('E_PLUGIN_PROFILE_BUNDLE', '插件未出现在 profile bundles。');
 
   const lockPath = join(profileRoot, 'pnpm-lock.yaml');
-  const lockSource = await ordinaryFile(lockPath, 'E_PLUGIN_LOCK');
-  const actual = reconcileLock(lockSource.toString('utf8'), plugin, expected);
+  const lockSource = await readAtomicFile(lockPath, 'E_PLUGIN_LOCK', hooks);
+  const actual = reconcileLock(lockSource.bytes.toString('utf8'), plugin, expected);
   return {
+    name: plugin.name,
     packageJsonSha512,
     bundlePatch,
     actualResolved: actual.resolved,

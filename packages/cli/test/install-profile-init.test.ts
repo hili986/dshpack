@@ -184,6 +184,16 @@ describe('workspace allowBuilds RMW', () => {
     expect(() => updateWorkspaceAllowBuilds(source, npmPlugin)).toThrow(InstallProfileError);
   });
 
+  it.each([
+    'shared: &shared {}\nallowBuilds: *shared\n',
+    'allowBuilds: &shared {}\nmirror: *shared\n',
+    'allowBuilds:\n  plugin: &decision true\nmirror: *decision\n',
+  ])('rejects alias/anchor sharing across the allowBuilds boundary', (source) => {
+    expect(() => updateWorkspaceAllowBuilds(source, npmPlugin)).toThrowError(
+      expect.objectContaining({ code: 'E_WORKSPACE_ALLOW_BUILDS_ALIAS' }),
+    );
+  });
+
   it('rejects invalid package/source identifiers instead of constructing a broad key', () => {
     try {
       buildAuthorizationKey({ ...npmPlugin, name: '../bad' });

@@ -1,4 +1,3 @@
-import { lstat, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import type { PluginDeclaration } from '@dshpack/core';
@@ -9,6 +8,7 @@ import {
   InstallProfileError,
   isRecord,
 } from './profile-common.js';
+import { inspectSecureDirectory, type ProfileReadHooks, readAtomicFile } from './profile-fs.js';
 import { buildAuthorizationKey } from './profile-workspace.js';
 
 const lifecycleScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
@@ -29,38 +29,21 @@ export interface BuildScriptAudit {
 interface PackageFacts {
   name: string;
   root: string;
+  identity: string;
   requiredDependencies: string[];
   optionalDependencies: string[];
   scripts: (typeof lifecycleScripts)[number][];
 }
 
-async function directoryKind(path: string): Promise<'missing' | 'directory'> {
-  try {
-    const metadata = await lstat(path);
-    if (!metadata.isDirectory() || metadata.isSymbolicLink())
-      throw new InstallProfileError(
-        'E_PLUGIN_PATH_ALIAS',
-        `拒绝 symlink、junction 或非目录依赖路径：${path}`,
-        path,
-      );
-    return 'directory';
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
-    throw error;
-  }
-}
-
-async function packageJson(path: string): Promise<Record<string, unknown>> {
+async function packageJson(
+  path: string,
+  hooks: ProfileReadHooks,
+): Promise<Record<string, unknown>> {
   const file = join(path, 'package.json');
   try {
-    const metadata = await lstat(file);
-    if (!metadata.isFile() || metadata.isSymbolicLink())
-      throw new InstallProfileError(
-        'E_PLUGIN_PATH_ALIAS',
-        `package.json 不是普通文件：${file}`,
-        file,
-      );
-    const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
+    const parsed: unknown = JSON.parse(
+      (await readAtomicFile(file, 'E_PLUGIN_PACKAGE_JSON', hooks)).bytes.toString('utf8'),
+    );
     if (isRecord(parsed)) return parsed;
   } catch (error) {
     if (error instanceof InstallProfileError) throw error;
@@ -97,14 +80,22 @@ function scriptFacts(value: unknown, packageName: string): (typeof lifecycleScri
   });
 }
 
-async function readPackage(root: string, expectedName: string): Promise<PackageFacts> {
-  if ((await directoryKind(root)) === 'missing')
+async function readPackage(
+  root: string,
+  expectedName: string,
+  hooks: ProfileReadHooks,
+): Promise<PackageFacts> {
+  const directory = await inspectSecureDirectory(root, hooks);
+  if (directory === undefined)
     throw new InstallProfileError(
       'E_PLUGIN_DEPENDENCY_MISSING',
       `依赖未安装：${expectedName}`,
       root,
     );
-  const json = await packageJson(root);
+  const json = await packageJson(root, hooks);
+  const currentDirectory = await inspectSecureDirectory(root, hooks);
+  if (currentDirectory?.identity !== directory.identity)
+    throw new InstallProfileError('E_PROFILE_FILE_CHANGED', `依赖目录在读取期间被替换：${root}`);
   if (json.name !== expectedName)
     throw new InstallProfileError(
       'E_PLUGIN_PACKAGE_ALIAS',
@@ -121,6 +112,7 @@ async function readPackage(root: string, expectedName: string): Promise<PackageF
   return {
     name: expectedName,
     root,
+    identity: directory.identity,
     requiredDependencies,
     optionalDependencies: [...new Set([...optional, ...peers])],
     scripts: scriptFacts(json.scripts, expectedName),
@@ -137,12 +129,13 @@ async function resolveDependency(
   packageRoot: string,
   name: string,
   optional: boolean,
+  hooks: ProfileReadHooks,
 ): Promise<string | undefined> {
   let cursor = packageRoot;
   while (isInside(profileRoot, cursor)) {
     const candidate = join(cursor, 'node_modules', ...name.split('/'));
-    const kind = await directoryKind(candidate);
-    if (kind === 'directory') return candidate;
+    const directory = await inspectSecureDirectory(candidate, hooks);
+    if (directory !== undefined) return candidate;
     if (resolve(cursor) === resolve(profileRoot)) break;
     cursor = dirname(cursor);
   }
@@ -162,10 +155,11 @@ export async function auditInstalledBuildScripts(
   profileRoot: string,
   directPlugins: readonly PluginDeclaration[],
   approvedBuildKeys: ReadonlySet<string>,
+  hooks: ProfileReadHooks = {},
 ): Promise<BuildScriptAudit> {
-  if ((await directoryKind(profileRoot)) !== 'directory')
+  if ((await inspectSecureDirectory(profileRoot, hooks)) === undefined)
     throw new InstallProfileError('E_PLUGIN_PATH_ALIAS', 'profile 根目录不存在。', profileRoot);
-  if ((await directoryKind(join(profileRoot, 'node_modules'))) !== 'directory')
+  if ((await inspectSecureDirectory(join(profileRoot, 'node_modules'), hooks)) === undefined)
     throw new InstallProfileError(
       'E_PLUGIN_PATH_ALIAS',
       'profile node_modules 不存在。',
@@ -178,10 +172,15 @@ export async function auditInstalledBuildScripts(
     directByName.set(plugin.name, plugin);
   }
   const queue: PackageFacts[] = [];
+  const directByIdentity = new Map<string, PluginDeclaration>();
   for (const plugin of directByName.values()) {
-    queue.push(
-      await readPackage(join(profileRoot, 'node_modules', ...plugin.name.split('/')), plugin.name),
+    const facts = await readPackage(
+      join(profileRoot, 'node_modules', ...plugin.name.split('/')),
+      plugin.name,
+      hooks,
     );
+    queue.push(facts);
+    directByIdentity.set(facts.identity, plugin);
   }
 
   const approvedDirect: BuildScriptFinding[] = [];
@@ -192,10 +191,9 @@ export async function auditInstalledBuildScripts(
 
   while (queue.length > 0) {
     const current = queue.shift() as PackageFacts;
-    const identity = resolve(current.root).toLocaleLowerCase('en-US');
-    if (visited.has(identity)) continue;
-    visited.add(identity);
-    const direct = directByName.get(current.name);
+    if (visited.has(current.identity)) continue;
+    visited.add(current.identity);
+    const direct = directByIdentity.get(current.identity);
     if (current.scripts.length > 0) {
       const authorizationKey = direct === undefined ? current.name : buildAuthorizationKey(direct);
       const finding = { name: current.name, authorizationKey, scripts: current.scripts };
@@ -206,12 +204,12 @@ export async function auditInstalledBuildScripts(
       else unapprovedDirect.push(authorizationKey);
     }
     for (const name of current.requiredDependencies) {
-      const dependencyRoot = await resolveDependency(profileRoot, current.root, name, false);
-      queue.push(await readPackage(dependencyRoot as string, name));
+      const dependencyRoot = await resolveDependency(profileRoot, current.root, name, false, hooks);
+      queue.push(await readPackage(dependencyRoot as string, name, hooks));
     }
     for (const name of current.optionalDependencies) {
-      const dependencyRoot = await resolveDependency(profileRoot, current.root, name, true);
-      if (dependencyRoot !== undefined) queue.push(await readPackage(dependencyRoot, name));
+      const dependencyRoot = await resolveDependency(profileRoot, current.root, name, true, hooks);
+      if (dependencyRoot !== undefined) queue.push(await readPackage(dependencyRoot, name, hooks));
     }
   }
 

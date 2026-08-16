@@ -1,9 +1,10 @@
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parseDocument } from 'yaml';
 
 import { InstallProfileError, isRecord, sameKeys } from './profile-common.js';
+import { type ProfileReadHooks, readAtomicFile, requireSecureDirectory } from './profile-fs.js';
 
 export { InstallProfileError } from './profile-common.js';
 
@@ -15,15 +16,8 @@ export interface OfficialProfileFacts {
   bundles: ['@deepseek-ai/dsh-base'];
 }
 
-async function requireRegularFile(path: string): Promise<string> {
-  const metadata = await lstat(path);
-  if (!metadata.isFile() || metadata.isSymbolicLink())
-    throw new InstallProfileError(
-      'E_PROFILE_INIT_FILE_TYPE',
-      `官方初始化文件不是普通文件：${path}`,
-      path,
-    );
-  return readFile(path, 'utf8');
+async function requireRegularFile(path: string, hooks: ProfileReadHooks): Promise<string> {
+  return (await readAtomicFile(path, 'E_PROFILE_INIT_FILE_TYPE', hooks)).bytes.toString('utf8');
 }
 
 function parseObjectYaml(source: string, code: string, path: string): Record<string, unknown> {
@@ -110,15 +104,13 @@ function validateWorkspace(source: string, path: string): void {
 export async function validateOfficialProfileInit(
   profileRoot: string,
   profileName: string,
+  hooks: ProfileReadHooks = {},
 ): Promise<OfficialProfileFacts> {
-  const rootMetadata = await lstat(profileRoot);
-  if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink())
-    throw new InstallProfileError(
-      'E_PROFILE_INIT_ROOT',
-      'profile 根目录不是普通目录。',
-      profileRoot,
-    );
+  const initialRoot = await requireSecureDirectory(profileRoot, hooks);
   const entries = await readdir(profileRoot, { withFileTypes: true });
+  const currentRoot = await requireSecureDirectory(profileRoot, hooks);
+  if (currentRoot.identity !== initialRoot.identity)
+    throw new InstallProfileError('E_PROFILE_FILE_CHANGED', 'profile 根目录在校验期间被替换。');
   const names = entries.map(({ name }) => name).sort();
   if (
     names.length !== initialFiles.length ||
@@ -133,12 +125,15 @@ export async function validateOfficialProfileInit(
   const patchPath = join(profileRoot, 'cordis.patch.yml');
   const workspacePath = join(profileRoot, 'pnpm-workspace.yaml');
   const [packageSource, patchSource, workspaceSource] = await Promise.all([
-    requireRegularFile(packagePath),
-    requireRegularFile(patchPath),
-    requireRegularFile(workspacePath),
+    requireRegularFile(packagePath, hooks),
+    requireRegularFile(patchPath, hooks),
+    requireRegularFile(workspacePath, hooks),
   ]);
   const facts = validatePackage(packageSource, profileName, packagePath);
   validatePatch(patchSource, patchPath);
   validateWorkspace(workspaceSource, workspacePath);
+  const finalRoot = await requireSecureDirectory(profileRoot, hooks);
+  if (finalRoot.identity !== initialRoot.identity)
+    throw new InstallProfileError('E_PROFILE_FILE_CHANGED', 'profile 根目录在校验期间被替换。');
   return facts;
 }

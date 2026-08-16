@@ -9,6 +9,7 @@ export class InstallProfileError extends Error {
     readonly code: string,
     message: string,
     readonly path?: string,
+    readonly reasonCode?: string,
   ) {
     super(message);
     this.name = 'InstallProfileError';

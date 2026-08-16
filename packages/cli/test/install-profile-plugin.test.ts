@@ -6,7 +6,12 @@ import { join } from 'node:path';
 import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { exactPluginAddSpec, verifyInstalledPlugin } from '../src/install/profile-plugin.js';
+import {
+  exactPluginAddSpec,
+  type StagedPluginTarball,
+  stageVerifiedPluginTarball,
+  verifyInstalledPlugin,
+} from '../src/install/profile-plugin.js';
 
 const roots: string[] = [];
 const commit = 'b07eac099753833b29d06c614149904445739776';
@@ -125,14 +130,13 @@ describe('exact dsh plugin add specs', () => {
       bundlePatch: 'patch.yml',
     };
 
-    await expect(exactPluginAddSpec(declaration, locked, path)).resolves.toBe(path);
+    const staged = await stageVerifiedPluginTarball(path, root, integrity);
+    await expect(exactPluginAddSpec(declaration, locked, staged)).resolves.toBe(staged.path);
     await writeFile(path, 'mutated');
-    await expect(exactPluginAddSpec(declaration, locked, path)).rejects.toMatchObject({
-      code: 'E_PLUGIN_TARBALL_INTEGRITY',
-    });
+    await expect(exactPluginAddSpec(declaration, locked, staged)).resolves.toBe(staged.path);
   });
 
-  it('fails closed for source/lock mismatch, unpinned git, unverified tarball, and symlinks', async () => {
+  it('fails closed for source/lock mismatch, unpinned git, and unverified tarballs', async () => {
     const badNpm = { ...npmLock('sha512-AA=='), resolved: { version: '2.0.0' } };
     await expect(exactPluginAddSpec(npmDeclaration, badNpm)).rejects.toMatchObject({
       code: 'E_PLUGIN_LOCK_MISMATCH',
@@ -154,34 +158,21 @@ describe('exact dsh plugin add specs', () => {
       }),
     ).rejects.toMatchObject({ code: 'E_PLUGIN_LOCK_MISMATCH' });
 
-    const root = await temporary();
-    const target = join(root, 'target.tgz');
-    const link = join(root, 'link.tgz');
-    await writeFile(target, 'x');
-    try {
-      await symlink(target, link, 'file');
-      const url = 'https://example.test/p.tgz';
-      const tar: PluginDeclaration = {
-        name: 'tar-plugin',
-        source: { kind: 'tarball', url },
-        allowBuilds: false,
-      };
-      await expect(
-        exactPluginAddSpec(
-          tar,
-          {
-            name: tar.name,
-            resolved: { url },
-            integrity: { kind: 'unverified', reason: 'legacy' },
-            packageJsonSha512: 'sha512-AA==',
-            bundlePatch: 'patch.yml',
-          },
-          link,
-        ),
-      ).rejects.toMatchObject({ code: 'E_PLUGIN_TARBALL_UNVERIFIED' });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
-    }
+    const url = 'https://example.test/p.tgz';
+    const tar: PluginDeclaration = {
+      name: 'tar-plugin',
+      source: { kind: 'tarball', url },
+      allowBuilds: false,
+    };
+    await expect(
+      exactPluginAddSpec(tar, {
+        name: tar.name,
+        resolved: { url },
+        integrity: { kind: 'unverified', reason: 'legacy' },
+        packageJsonSha512: 'sha512-AA==',
+        bundlePatch: 'patch.yml',
+      }),
+    ).rejects.toMatchObject({ code: 'E_PLUGIN_TARBALL_UNVERIFIED' });
   });
 
   it('rejects lock name/kind drift and requires an absolute ordinary staged tgz', async () => {
@@ -211,14 +202,24 @@ describe('exact dsh plugin add specs', () => {
     await expect(exactPluginAddSpec(tar, locked)).rejects.toMatchObject({
       code: 'E_PLUGIN_TARBALL_PATH',
     });
-    await expect(exactPluginAddSpec(tar, locked, 'relative.tgz')).rejects.toMatchObject({
+    const relative = {
+      path: 'relative.tgz',
+      integrity: 'sha512-AA==',
+      identity: 'forged',
+    } satisfies StagedPluginTarball;
+    await expect(exactPluginAddSpec(tar, locked, relative)).rejects.toMatchObject({
       code: 'E_PLUGIN_TARBALL_PATH',
     });
     const root = await temporary();
     const directory = join(root, 'directory.tgz');
     await mkdir(directory);
-    await expect(exactPluginAddSpec(tar, locked, directory)).rejects.toMatchObject({
-      code: 'E_PLUGIN_TARBALL_PATH',
+    const forged = {
+      path: directory,
+      integrity: 'sha512-AA==',
+      identity: 'forged',
+    } satisfies StagedPluginTarball;
+    await expect(exactPluginAddSpec(tar, locked, forged)).rejects.toMatchObject({
+      code: 'E_PLUGIN_TARBALL_CHANGED',
     });
     await expect(
       exactPluginAddSpec(tar, { ...locked, resolved: { url: 'https://example.test/other.tgz' } }),
@@ -235,6 +236,7 @@ describe('post-add verification', () => {
       actualIntegrity: locked.integrity,
       actualResolved: locked.resolved,
       bundlePatch: './cordis.patch.yml',
+      name: 'yocto-queue',
       packageJsonSha512: locked.packageJsonSha512,
     });
   });
