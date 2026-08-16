@@ -70,13 +70,13 @@ function importedSpecifiers(source: string): readonly string[] {
 }
 
 const forbiddenEscapeRules = [
-  { rule: 'process.getBuiltinModule', pattern: /\bprocess\.getBuiltinModule\s*\(/gu },
-  { rule: 'process.binding', pattern: /\bprocess\.binding\s*\(/gu },
-  { rule: 'fetch', pattern: /(?<![\w$.])fetch\s*\(/gu },
-  { rule: 'new WebSocket', pattern: /\bnew\s+WebSocket\s*\(/gu },
+  { rule: 'process.getBuiltinModule', pattern: /\bprocess\.getBuiltinModule\s*\(/u },
+  { rule: 'process.binding', pattern: /\bprocess\.binding\s*\(/u },
+  { rule: 'fetch', pattern: /(?<![\w$.])fetch\s*\(/u },
+  { rule: 'new WebSocket', pattern: /\bnew\s+WebSocket\s*\(/u },
   {
     rule: 'dynamic import expression',
-    pattern: /\bimport\s*\(\s*(?!['"](?:\\.|[^'"])*['"]\s*\))/gu,
+    pattern: /\bimport\s*\(\s*(?!['"](?:\\.|[^'"])*['"]\s*\))/u,
   },
 ] as const;
 
@@ -188,6 +188,32 @@ describe('core source zero-side-effect boundary', () => {
 
       await expect(findForbiddenImports(temporarySourceRoot)).resolves.toEqual([
         { file: 'mutant.ts', kind: 'escape', rule },
+      ]);
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('detects the same import-free escape in every source file', async () => {
+    const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'dshpack-core-escape-multi-mutant-'));
+    const temporarySourceRoot = path.join(temporaryRoot, 'src');
+
+    try {
+      await mkdir(temporarySourceRoot);
+      await writeFile(
+        path.join(temporarySourceRoot, 'first.ts'),
+        "fetch('https://first.example.test');\nexport {};\n",
+        'utf8',
+      );
+      await writeFile(
+        path.join(temporarySourceRoot, 'second.ts'),
+        "fetch('https://second.example.test');\nexport {};\n",
+        'utf8',
+      );
+
+      await expect(findForbiddenImports(temporarySourceRoot)).resolves.toEqual([
+        { file: 'first.ts', kind: 'escape', rule: 'fetch' },
+        { file: 'second.ts', kind: 'escape', rule: 'fetch' },
       ]);
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
