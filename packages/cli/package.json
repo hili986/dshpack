@@ -30,11 +30,12 @@
     "test:e2e": "pnpm run build && vitest run test/help.e2e.test.ts"
   },
   "dependencies": {
-    "@dshpack/core": "workspace:*",
     "@clack/prompts": "1.7.0",
+    "@dshpack/core": "workspace:*",
     "commander": "15.0.0",
     "execa": "10.0.1",
     "fast-glob": "3.3.3",
+    "semver": "7.8.5",
     "tar": "7.5.22",
     "undici": "8.10.0",
     "validate-npm-package-name": "8.0.0",
