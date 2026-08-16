@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { PackLock } from '@dshpack/core';
+
 export const SHA256_A = `sha256-${'a'.repeat(43)}`;
 export const SHA256_B = `sha256-${'b'.repeat(43)}`;
 export const SHA512 = `sha512-${'A'.repeat(86)}==`;
@@ -16,7 +18,37 @@ export interface SecurityMarker {
   source: Record<string, unknown>;
   defaults: { agentPreset?: string; permissionPreset: string };
   plugins: unknown[];
+  effectiveLock: PackLock;
   sideEffects: string[];
+}
+
+export interface SecurityPluginFact {
+  name: string;
+  packageJsonSha512: string;
+  bundlePatch: string;
+  actualResolved: PackLock['plugins'][number]['resolved'];
+  actualIntegrity: PackLock['plugins'][number]['integrity'];
+}
+
+export function securityEffectiveLock(
+  plugins: readonly SecurityPluginFact[] = [],
+  manifestSha256 = SHA256_A,
+): PackLock {
+  return {
+    lockVersion: 0,
+    manifestSha256,
+    generatedBy: 'dshpack@0.0.0',
+    generatedAt: '2026-08-16T00:00:00.000Z',
+    dsh: { exportedFrom: '0.1.0-rc.6' },
+    plugins: plugins.map((plugin) => ({
+      name: plugin.name,
+      resolved: plugin.actualResolved,
+      integrity: plugin.actualIntegrity,
+      packageJsonSha512: plugin.packageJsonSha512,
+      bundlePatch: plugin.bundlePatch,
+    })),
+    files: [],
+  };
 }
 
 export async function securityHome(prefix: string): Promise<string> {
@@ -55,6 +87,7 @@ export function securityMarker(home: string, profile = 'demo'): SecurityMarker {
     source: { kind: 'directory', path: home },
     defaults: { agentPreset: 'demo-preset', permissionPreset: 'workspace-write' },
     plugins: [],
+    effectiveLock: securityEffectiveLock(),
     sideEffects: ['profile/cordis.yml'],
   };
 }

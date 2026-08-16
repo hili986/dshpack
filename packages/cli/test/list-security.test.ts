@@ -8,6 +8,7 @@ import { registerListCommand } from '../src/commands/list.js';
 import { inspectMetadata } from '../src/list/contracts.js';
 import {
   SHA512,
+  securityEffectiveLock,
   securityHome,
   securityMarker,
   writeSecurityMarker,
@@ -55,18 +56,22 @@ describe('installed metadata safety', () => {
       packageJsonSha512: SHA512,
       bundlePatch: 'cordis.patch.yml',
       actualResolved: { version: '1.2.3' },
-      actualIntegrity: { kind: 'npm-sri', value: SHA512 },
+      actualIntegrity: { kind: 'npm-sri' as const, value: SHA512 },
     };
-    await writeSecurityMarker(home, { ...securityMarker(home), plugins: [validPlugin] });
-    expect((await inspectMetadata(home, 'demo')).status).toBe('valid');
     await writeSecurityMarker(home, {
       ...securityMarker(home),
-      plugins: [
-        {
-          ...validPlugin,
-          actualIntegrity: { kind: 'unverified', reason: 'registry omitted integrity' },
-        },
-      ],
+      plugins: [validPlugin],
+      effectiveLock: securityEffectiveLock([validPlugin]),
+    });
+    expect((await inspectMetadata(home, 'demo')).status).toBe('valid');
+    const unverifiedPlugin = {
+      ...validPlugin,
+      actualIntegrity: { kind: 'unverified' as const, reason: 'registry omitted integrity' },
+    };
+    await writeSecurityMarker(home, {
+      ...securityMarker(home),
+      plugins: [unverifiedPlugin],
+      effectiveLock: securityEffectiveLock([unverifiedPlugin]),
     });
     expect((await inspectMetadata(home, 'demo')).status).toBe('valid');
 

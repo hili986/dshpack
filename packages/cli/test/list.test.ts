@@ -56,6 +56,15 @@ function marker(name: string) {
     source: { kind: 'directory', path: resolve('fixture') },
     defaults: { agentPreset: 'demo-preset', permissionPreset: 'workspace-write' },
     plugins: [],
+    effectiveLock: {
+      lockVersion: 0,
+      manifestSha256: SHA256_A,
+      generatedBy: 'dshpack@0.0.0',
+      generatedAt: '2026-08-16T00:00:00.000Z',
+      dsh: { exportedFrom: '0.1.0-rc.6' },
+      plugins: [],
+      files: [],
+    },
     sideEffects: ['profile/cordis.yml'],
   };
 }

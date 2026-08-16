@@ -2,7 +2,7 @@ import { isAbsolute, join } from 'node:path';
 
 import { parseCanonicalYaml, validatePackPath } from '@dshpack/core';
 import { valid } from 'semver';
-
+import { type InstalledMetadataV0, validEffectiveLock } from './metadata-contract.js';
 import {
   bindDirectory,
   bindSecureRoot,
@@ -12,6 +12,8 @@ import {
   type SafePathFailureKind,
   type SafePathHooks,
 } from './safe-fs.js';
+
+export type { InstalledMetadataV0, InstalledPluginMetadata } from './metadata-contract.js';
 
 export const PROFILE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const RESERVED_PROFILES = new Set(['web', 'headless', '.', '..']);
@@ -24,31 +26,6 @@ const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
 const GITHUB_REPO = /^[A-Za-z0-9._-]+$/u;
 const TXID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
-
-export interface InstalledPluginMetadata {
-  name: string;
-  packageJsonSha512: string;
-  bundlePatch: string;
-  actualResolved: Readonly<Record<string, unknown>>;
-  actualIntegrity: Readonly<Record<string, unknown>>;
-}
-
-export interface InstalledMetadataV0 {
-  metadataVersion: 0;
-  profile: string;
-  pack: { name: string; version: string; manifestDigest: string };
-  planDigest: string;
-  installedAt: string;
-  txid: string;
-  source: Readonly<Record<string, unknown>>;
-  defaults: {
-    agentPreset?: string;
-    permissionPreset: 'workspace-write' | 'danger-full-access';
-  };
-  plugins: readonly InstalledPluginMetadata[];
-  sideEffects: readonly ['profile/cordis.yml'];
-}
-
 export type ProfileInspection =
   | { status: 'valid'; root: string; binding: DirectoryBinding }
   | { status: 'missing'; reason: string; failureKind: InspectionFailureKind }
@@ -310,6 +287,7 @@ function parseInstalledMetadata(value: unknown, profile: string): MetadataInspec
       'source',
       'defaults',
       'plugins',
+      'effectiveLock',
       'sideEffects',
     ]) ||
     value.metadataVersion !== 0 ||
@@ -337,6 +315,12 @@ function parseInstalledMetadata(value: unknown, profile: string): MetadataInspec
       defaults.permissionPreset !== 'danger-full-access') ||
     !Array.isArray(value.plugins) ||
     !value.plugins.every(validPluginFact) ||
+    !validEffectiveLock(
+      value.effectiveLock,
+      pack.manifestDigest,
+      value.installedAt,
+      value.plugins,
+    ) ||
     !Array.isArray(value.sideEffects) ||
     value.sideEffects.length !== 1 ||
     value.sideEffects[0] !== 'profile/cordis.yml'
