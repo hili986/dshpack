@@ -33,7 +33,7 @@ describe('dshpack --help', () => {
     }
   });
 
-  for (const command of ['install', 'init', 'pack'] as const) {
+  for (const command of ['init', 'pack'] as const) {
     it(`${command} reports the placeholder contract`, () => {
       const result = spawnSync(process.execPath, [binPath, command], {
         encoding: 'utf8',
@@ -45,7 +45,7 @@ describe('dshpack --help', () => {
     });
   }
 
-  it.each(['validate', 'doctor', 'export', 'list', 'switch'])(
+  it.each(['validate', 'doctor', 'export', 'install', 'list', 'switch'])(
     '%s exposes implemented help instead of the W10 placeholder',
     (command) => {
       const result = spawnSync(process.execPath, [binPath, command, '--help'], {

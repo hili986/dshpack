@@ -169,6 +169,13 @@ export async function auditInstalledBuildScripts(
   const stableRoot = await inspectSecureDirectory(profileRoot, hooks);
   if (stableRoot === undefined)
     throw new InstallProfileError('E_PLUGIN_PATH_ALIAS', 'profile 根目录不存在。', profileRoot);
+  if (directPlugins.length === 0)
+    return {
+      approvedDirect: [],
+      transitive: [],
+      unapprovedDirectBuildKeys: [],
+      unexpectedTransitiveBuildKeys: [],
+    };
   if (
     (await inspectConfinedDirectory(
       profileRoot,

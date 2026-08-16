@@ -53,7 +53,7 @@ afterAll(async () => {
 });
 
 describe('built CLI boundary', () => {
-  it.each(['install', 'init', 'pack'] as const)(
+  it.each(['init', 'pack'] as const)(
     '%s emits a structured placeholder for root and child JSON placement',
     (command) => {
       for (const args of [
@@ -70,6 +70,19 @@ describe('built CLI boundary', () => {
       }
     },
   );
+
+  it.each([
+    ['root', ['--json', 'install']],
+    ['child', ['install', '--json']],
+  ] as const)('keeps install usage to one %s JSON object', (_placement, args) => {
+    const result = spawnSync(process.execPath, [binPath, ...args], { encoding: 'utf8' });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'E_USAGE' })],
+    });
+  });
 
   it.each([
     ['root', ['--json', 'export']],

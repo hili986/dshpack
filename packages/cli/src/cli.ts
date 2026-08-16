@@ -3,7 +3,7 @@ import { Command, CommanderError } from 'commander';
 import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
 import { initCommand } from './commands/init.js';
-import { installCommand } from './commands/install.js';
+import { installCommand, registerInstallCommand } from './commands/install.js';
 import { listCommand, registerListCommand } from './commands/list.js';
 import { packCommand } from './commands/pack.js';
 import { diagnostic, writeReport } from './commands/shared.js';
@@ -63,6 +63,7 @@ export function createProgram(): Command {
       name === 'validate' ||
       name === 'doctor' ||
       name === 'export' ||
+      name === 'install' ||
       name === 'list' ||
       name === 'switch'
     )
@@ -80,6 +81,7 @@ export function createProgram(): Command {
   registerValidateCommand(program);
   registerDoctorCommand(program);
   registerExportCommand(program);
+  registerInstallCommand(program);
   registerListCommand(program);
   registerSwitchCommand(program);
 

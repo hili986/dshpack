@@ -100,7 +100,7 @@ describe('doctor checks', () => {
 
     expect(diagnostics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'DSH002', severity: 'warning' }),
+        expect.objectContaining({ code: 'DSH002', severity: 'info' }),
         expect.objectContaining({ code: 'DSH002', severity: 'error' }),
       ]),
     );

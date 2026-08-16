@@ -69,7 +69,7 @@ export async function checkPnpm(input: DoctorInput, diagnostics: Diagnostic[]): 
       diagnostics.push(
         diagnostic(
           'DSH002',
-          'warning',
+          'info',
           'pnpm 11 的 git-spec 行为与旧版可能不同。',
           '导出 git bundle 时保留 40 位 SHA pin。',
         ),

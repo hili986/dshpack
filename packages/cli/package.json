@@ -27,7 +27,7 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm run test:unit && pnpm run test:e2e",
     "test:unit": "vitest run test/exit-codes.test.ts",
-    "test:e2e": "pnpm run build && vitest run test/help.e2e.test.ts"
+    "test:e2e": "pnpm run build && vitest run --root ../.. --config vitest.e2e.config.ts packages/cli/test/help.e2e.test.ts packages/cli/test/install.e2e.test.ts --maxWorkers=1"
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",

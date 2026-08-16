@@ -39,6 +39,18 @@ const direct: PluginDeclaration = {
 };
 
 describe('installed build-script audit', () => {
+  it('accepts an official empty-plugin profile before node_modules exists', async () => {
+    const root = await temporary();
+    await rm(join(root, 'node_modules'), { recursive: true });
+
+    await expect(auditInstalledBuildScripts(root, [], new Set())).resolves.toEqual({
+      approvedDirect: [],
+      transitive: [],
+      unapprovedDirectBuildKeys: [],
+      unexpectedTransitiveBuildKeys: [],
+    });
+  });
+
   it('separates explicitly approved direct builds from unexpected transitive builds', async () => {
     const root = await temporary();
     await pkg(root, direct.name, {
