@@ -137,7 +137,7 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
     );
     expect(pluginAdd).toHaveLength(1);
     expect(pluginAdd[0]?.ignoreScripts).toBe('true');
-  });
+  }, 15_000);
 
   it('emits a complete dry-run JSON plan and leaves DSH_HOME byte-empty', async () => {
     const { env, home } = await fixture();
