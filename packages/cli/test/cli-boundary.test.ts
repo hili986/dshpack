@@ -210,6 +210,16 @@ describe('JSON mode closure', () => {
     },
   );
 
+  it.each(['init', 'pack'] as const)(
+    'reports the %s placeholder to stderr outside JSON mode',
+    async (command) => {
+      const result = await capture([command]);
+
+      expect(result).toMatchObject({ exitCode: 70, stdout: '' });
+      expect(result.stderr).not.toBe('');
+    },
+  );
+
   it.each([
     ['root', ['--json', 'install']],
     ['child', ['install', '--json']],
