@@ -133,11 +133,18 @@ export async function defaultDownload(
   target: ResolvedAddress,
 ): Promise<DownloadResponse> {
   const agent = new Agent({ connect: { lookup: fixedLookup(target) } });
-  const response = await request(url, {
-    dispatcher: agent,
-    headersTimeout: 30_000,
-    bodyTimeout: 30_000,
-  });
+  let response: Awaited<ReturnType<typeof request>>;
+  try {
+    response = await request(url, {
+      dispatcher: agent,
+      maxRedirections: 0,
+      headersTimeout: 30_000,
+      bodyTimeout: 30_000,
+    } as Parameters<typeof request>[1] & { maxRedirections: 0 });
+  } catch (error) {
+    await agent.close();
+    throw error;
+  }
   const location = response.headers.location;
   const body = (async function* () {
     try {

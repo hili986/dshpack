@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, type FileHandle, lstat, mkdtemp, open, rm, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { chmod, type FileHandle, lstat, mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { EXIT_CODES } from '../exit-codes.js';
@@ -17,6 +18,7 @@ const GITHUB_HINT = '请先运行 git clone，再从本地普通目录安装。'
 
 export interface SourceDependencies extends NetworkDependencies {
   makeTempDirectory?: () => Promise<string>;
+  readLocalArchive?: (path: string) => AsyncIterable<Uint8Array>;
   removeTempDirectory?: (path: string) => Promise<void>;
   writeChunk?: (handle: FileHandle, chunk: Uint8Array, offset: number) => Promise<number>;
 }
@@ -198,10 +200,12 @@ async function downloadToPrivateFile(
   const hash = createHash('sha512');
   let total = 0;
   let current = initialUrl;
+  const failForSource = (code: string, message: string): SourceError =>
+    sourceFailure(code, message, hint);
   try {
     for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
       assertAllowedUrl(current);
-      const target = await resolvePublicTarget(current, dependencies, sourceFailure);
+      const target = await resolvePublicTarget(current, dependencies, failForSource);
       let response: DownloadResponse;
       try {
         response = await (dependencies.download ?? defaultDownload)(current, target);
@@ -253,6 +257,28 @@ async function downloadToPrivateFile(
   }
 }
 
+async function copyLocalArchive(
+  sourcePath: string,
+  filename: string,
+  dependencies: SourceDependencies,
+): Promise<void> {
+  const handle = await open(filename, 'wx', 0o600);
+  let total = 0;
+  try {
+    const chunks = dependencies.readLocalArchive?.(sourcePath) ?? createReadStream(sourcePath);
+    for await (const chunk of chunks) {
+      total += chunk.byteLength;
+      if (total > MAX_DOWNLOAD_BYTES) {
+        throw sourceFailure('SOURCE_TOO_LARGE', '本地 source 归档超过 50 MiB 限制。');
+      }
+      await writeAll(handle, chunk, dependencies.writeChunk);
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 function cleanupOnce(
   path: string,
   removeDirectory: (path: string) => Promise<void>,
@@ -284,12 +310,7 @@ async function materializeArchive(
     await chmod(workspace, 0o700);
     const archivePath = join(workspace, 'source.dshpack.tgz');
     if (source.localPath !== undefined) {
-      if ((await stat(source.localPath)).size > MAX_DOWNLOAD_BYTES) {
-        throw sourceFailure('SOURCE_TOO_LARGE', '本地 source 归档超过 50 MiB 限制。');
-      }
-      await open(archivePath, 'wx', 0o600).then((handle) => handle.close());
-      await copyFile(source.localPath, archivePath);
-      await chmod(archivePath, 0o600);
+      await copyLocalArchive(source.localPath, archivePath, dependencies);
     } else if (source.url !== undefined) {
       await downloadToPrivateFile(
         source.url,
@@ -317,6 +338,7 @@ export async function materializeSource(
   reference: string,
   dependencies: SourceDependencies = {},
 ): Promise<MaterializedSource> {
+  if (reference === '') throw sourceFailure('SOURCE_INVALID', 'source 引用不能为空。');
   if (reference.startsWith('github:')) {
     const parsed = githubSource(reference);
     const provenance: SourceProvenance = {
