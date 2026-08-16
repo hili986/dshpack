@@ -1,5 +1,15 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, join, relative, sep } from 'node:path';
 
 import { type Diagnostic, type PluginSource, parseCanonicalYaml, scanSecrets } from '@dshpack/core';

@@ -157,7 +157,9 @@ describe('doctor', () => {
     expect(gitRed.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'DSH007', severity: 'error', path: 'demo-bundle' }),
     );
-    await expect(readFile(join(gitProfile, 'pnpm-workspace.yaml'), 'utf8')).resolves.toBe(gitWorkspace);
+    await expect(readFile(join(gitProfile, 'pnpm-workspace.yaml'), 'utf8')).resolves.toBe(
+      gitWorkspace,
+    );
 
     await writeFile(
       join(gitProfile, 'pnpm-workspace.yaml'),
@@ -240,7 +242,11 @@ describe('doctor', () => {
     await mkdir(join(skills, 'legacy-key'), { recursive: true });
     await mkdir(join(skills, 'camel-key'), { recursive: true });
     await mkdir(join(skills, 'bad-name'), { recursive: true });
-    await writeFile(join(skills, 'missing-name', 'SKILL.md'), '---\ndescription: demo\n---\n', 'utf8');
+    await writeFile(
+      join(skills, 'missing-name', 'SKILL.md'),
+      '---\ndescription: demo\n---\n',
+      'utf8',
+    );
     await writeFile(
       join(skills, 'legacy-key', 'SKILL.md'),
       '---\nname: legacy-key\ndescription: demo\nwhen_to_use: legacy\n---\n',

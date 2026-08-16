@@ -37,11 +37,13 @@ function manifest(extra: readonly string[] = []): string {
   ].join('\n');
 }
 
-async function pack(options: {
-  files?: Readonly<Record<string, string>>;
-  lock?: Record<string, unknown>;
-  manifest?: string;
-} = {}): Promise<string> {
+async function pack(
+  options: {
+    files?: Readonly<Record<string, string>>;
+    lock?: Record<string, unknown>;
+    manifest?: string;
+  } = {},
+): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dshpack-validate-coverage-'));
   temporaryRoots.push(root);
   const packText = options.manifest ?? manifest();
@@ -77,12 +79,16 @@ describe('validate coverage scenarios', () => {
     temporaryRoots.push(root);
     const missing = await validateLocalPack(join(root, 'missing'));
     expect(missing.exitCode).toBe(30);
-    expect(missing.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SOURCE_DIRECTORY' }));
+    expect(missing.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_SOURCE_DIRECTORY' }),
+    );
     const sourceFile = join(root, 'source.txt');
     await writeFile(sourceFile, 'not a pack', 'utf8');
     const file = await validateLocalPack(sourceFile);
     expect(file.exitCode).toBe(30);
-    expect(file.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SOURCE_DIRECTORY' }));
+    expect(file.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_SOURCE_DIRECTORY' }),
+    );
     const unknown = await pack({ files: { 'unknown.txt': 'unsupported\n' } });
     await expect(validateLocalPack(unknown)).resolves.toMatchObject({
       exitCode: 30,
@@ -95,7 +101,8 @@ describe('validate coverage scenarios', () => {
       files: {
         'overrides/patch.yml': '[]\n',
         'presets/standard/agent.cordis.yml': 'agents: []\n',
-        'skills/demo-skill/SKILL.md': '---\nname: demo-skill\ndescription: demo\nwhen_to_use: old\n---\nbody\n',
+        'skills/demo-skill/SKILL.md':
+          '---\nname: demo-skill\ndescription: demo\nwhen_to_use: old\n---\nbody\n',
         'patch/cordis.patch.yml': 'not-an-array: true\n',
       },
     });
@@ -123,43 +130,57 @@ describe('validate coverage scenarios', () => {
       diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'E_SCHEMA_REQUIRED' })]),
     });
 
-    const mcpManifest = manifest().replace('mcp: []', [
-      'mcp:',
-      '  - serverName: private',
-      '    transport: streamable-http',
-      '    url: https://mcp.example.test/mcp?token=plain',
-    ].join('\n'));
+    const mcpManifest = manifest().replace(
+      'mcp: []',
+      [
+        'mcp:',
+        '  - serverName: private',
+        '    transport: streamable-http',
+        '    url: https://mcp.example.test/mcp?token=plain',
+      ].join('\n'),
+    );
     const mcp = await validateLocalPack(await pack({ manifest: mcpManifest }));
     expect(mcp.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_MCP_CREDENTIAL' }));
 
     const malformedMcp = await validateLocalPack(
       await pack({
-        manifest: manifest().replace('mcp: []', [
-          'mcp:',
-          '  - serverName: malformed',
-          '    transport: streamable-http',
-          '    url: "https://"',
-        ].join('\n')),
+        manifest: manifest().replace(
+          'mcp: []',
+          [
+            'mcp:',
+            '  - serverName: malformed',
+            '    transport: streamable-http',
+            '    url: "https://"',
+          ].join('\n'),
+        ),
       }),
     );
-    expect(malformedMcp.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SCHEMA_PATTERN' }));
+    expect(malformedMcp.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_SCHEMA_PATTERN' }),
+    );
 
     const nonHttpMcp = await validateLocalPack(
       await pack({
-        manifest: manifest().replace('mcp: []', [
-          'mcp:',
-          '  - serverName: local',
-          '    transport: stdio',
-          '    url: https://mcp.example.test/mcp',
-        ].join('\n')),
+        manifest: manifest().replace(
+          'mcp: []',
+          [
+            'mcp:',
+            '  - serverName: local',
+            '    transport: stdio',
+            '    url: https://mcp.example.test/mcp',
+          ].join('\n'),
+        ),
       }),
     );
-    expect(nonHttpMcp.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SCHEMA_ENUM' }));
+    expect(nonHttpMcp.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_SCHEMA_ENUM' }),
+    );
 
     const skills = await validateLocalPack(
       await pack({
         files: {
-          'skills/demo-skill/SKILL.md': '---\nname: demo-skill\ndescription: demo\ndisableModelInvocation: true\n---\n',
+          'skills/demo-skill/SKILL.md':
+            '---\nname: demo-skill\ndescription: demo\ndisableModelInvocation: true\n---\n',
           'skills/bad-name/SKILL.md': '---\nname: Bad_Name\ndescription: demo\n---\n',
         },
       }),
@@ -176,7 +197,9 @@ describe('validate coverage scenarios', () => {
     const root = await pack();
     await writeFile(join(root, 'patch', 'cordis.patch.yml'), '[]\n# changed\n', 'utf8');
     const changed = await validateLocalPack(root);
-    expect(changed.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_LOCK_PAYLOAD_DIGEST' }));
+    expect(changed.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_LOCK_PAYLOAD_DIGEST' }),
+    );
 
     const manifestChanged = await pack();
     await writeFile(
@@ -185,16 +208,23 @@ describe('validate coverage scenarios', () => {
       'utf8',
     );
     const digest = await validateLocalPack(manifestChanged);
-    expect(digest.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_LOCK_MANIFEST_DIGEST' }));
+    expect(digest.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_LOCK_MANIFEST_DIGEST' }),
+    );
 
-    const pluginManifest = manifest().replace('plugins: []', [
-      'plugins:',
-      '  - name: demo-plugin',
-      '    source: { kind: npm, range: 1.0.0 }',
-      '    allowBuilds: false',
-    ].join('\n'));
+    const pluginManifest = manifest().replace(
+      'plugins: []',
+      [
+        'plugins:',
+        '  - name: demo-plugin',
+        '    source: { kind: npm, range: 1.0.0 }',
+        '    allowBuilds: false',
+      ].join('\n'),
+    );
     const pluginMismatch = await validateLocalPack(await pack({ manifest: pluginManifest }));
-    expect(pluginMismatch.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_LOCK_PLUGIN_MISMATCH' }));
+    expect(pluginMismatch.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_LOCK_PLUGIN_MISMATCH' }),
+    );
 
     const phantomLock = {
       lockVersion: 0,
@@ -209,7 +239,9 @@ describe('validate coverage scenarios', () => {
       ],
     };
     const phantom = await validateLocalPack(await pack({ lock: phantomLock }));
-    expect(phantom.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_LOCK_PAYLOAD_MISSING' }));
+    expect(phantom.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_LOCK_PAYLOAD_MISSING' }),
+    );
   });
 
   it('allows every documented payload location without treating it as unknown layout', async () => {
@@ -219,7 +251,8 @@ describe('validate coverage scenarios', () => {
         'settings/agent-presets.yml': 'selected: demo\n',
         'presets/demo/agent.cordis.yml': 'agents: []\n',
         'presets/demo/preset.yml': 'name: demo\n',
-        'presets/demo/skills/preset-skill/SKILL.md': '---\nname: preset-skill\ndescription: demo\n---\n',
+        'presets/demo/skills/preset-skill/SKILL.md':
+          '---\nname: preset-skill\ndescription: demo\n---\n',
         'skills/flat-skill.md': '---\nname: flat-skill\ndescription: demo\n---\n',
         'export-report.json': '{}\n',
       },
@@ -232,7 +265,9 @@ describe('validate coverage scenarios', () => {
     );
     const result = await validateLocalPack(root);
     expect(result.diagnostics.some(({ code }) => code === 'E_LAYOUT_UNKNOWN')).toBe(false);
-    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_PATH_SPECIAL_FILE' }));
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_PATH_SPECIAL_FILE' }),
+    );
   });
 
   it('covers absent manifest and lock paths, explicit overrides, safe MCP URLs, and junction sources', async () => {
@@ -247,22 +282,31 @@ describe('validate coverage scenarios', () => {
       ]),
     );
 
-    const overrideFile = await validateLocalPack(await pack({ files: { overrides: 'reserved\n' } }));
-    expect(overrideFile.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_OVERRIDES_RESERVED' }));
+    const overrideFile = await validateLocalPack(
+      await pack({ files: { overrides: 'reserved\n' } }),
+    );
+    expect(overrideFile.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_OVERRIDES_RESERVED' }),
+    );
 
     const invalidLockRoot = await pack();
     await writeFile(join(invalidLockRoot, 'pack.lock.yml'), '[', 'utf8');
     const invalidLock = await validateLocalPack(invalidLockRoot);
-    expect(invalidLock.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_YAML_PARSE' }));
+    expect(invalidLock.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_YAML_PARSE' }),
+    );
 
     const safeMcp = await validateLocalPack(
       await pack({
-        manifest: manifest().replace('mcp: []', [
-          'mcp:',
-          '  - serverName: safe',
-          '    transport: streamable-http',
-          '    url: https://mcp.example.test/mcp',
-        ].join('\n')),
+        manifest: manifest().replace(
+          'mcp: []',
+          [
+            'mcp:',
+            '  - serverName: safe',
+            '    transport: streamable-http',
+            '    url: https://mcp.example.test/mcp',
+          ].join('\n'),
+        ),
       }),
     );
     expect(safeMcp.exitCode).toBe(0);
@@ -273,7 +317,9 @@ describe('validate coverage scenarios', () => {
     const junction = join(parent, 'pack-junction');
     await symlink(target, junction, process.platform === 'win32' ? 'junction' : 'dir');
     await expect(validateLocalPack(junction)).resolves.toMatchObject({
-      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'E_SOURCE_DIRECTORY' })]),
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_SOURCE_DIRECTORY' }),
+      ]),
     });
 
     expect(

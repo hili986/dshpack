@@ -71,7 +71,10 @@ describe('doctor support', () => {
 
     await writeFile(
       join(profile, 'package.json'),
-      JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: ['duplicate', 'duplicate'] } } }),
+      JSON.stringify({
+        dependencies: {},
+        dsh: { profile: { bundles: ['duplicate', 'duplicate'] } },
+      }),
       'utf8',
     );
     await expect(readProfile(root, 'demo')).resolves.toMatchObject({
@@ -119,7 +122,11 @@ describe('doctor support', () => {
     await expect(profileSecretDiagnostics(join(root, 'missing'))).resolves.toEqual([]);
     await mkdir(join(root, 'node_modules', '.credentials.yaml'), { recursive: true });
     await writeFile(join(root, 'pnpm-lock.yaml'), 'sk-TESTONLY-01234567890123456789\n', 'utf8');
-    await writeFile(join(root, '.credentials.yaml'), 'token: sk-TESTONLY-01234567890123456789\n', 'utf8');
+    await writeFile(
+      join(root, '.credentials.yaml'),
+      'token: sk-TESTONLY-01234567890123456789\n',
+      'utf8',
+    );
 
     await expect(profileSecretDiagnostics(root)).resolves.toEqual(
       expect.arrayContaining([expect.objectContaining({ code: 'E_SECRET_FILENAME' })]),

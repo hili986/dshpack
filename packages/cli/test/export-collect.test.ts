@@ -23,7 +23,11 @@ async function temporaryRoot(): Promise<string> {
 async function packageJson(root: string, name: string, value: unknown): Promise<void> {
   const directory = join(root, 'node_modules', ...name.split('/'));
   await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, 'package.json'), typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
+  await writeFile(
+    join(directory, 'package.json'),
+    typeof value === 'string' ? value : JSON.stringify(value),
+    'utf8',
+  );
 }
 
 afterEach(async () => {
@@ -47,8 +51,14 @@ describe('export collection', () => {
     const root = await temporaryRoot();
     await packageJson(root, 'bad-json', '{');
     await packageJson(root, 'without-patch', { name: 'without-patch' });
-    await packageJson(root, 'verified', { name: 'verified', dsh: { bundle: { patch: './patch.yml' } } });
-    await packageJson(root, 'opaque', { name: 'opaque', dsh: { bundle: { patch: './patch.yml' } } });
+    await packageJson(root, 'verified', {
+      name: 'verified',
+      dsh: { bundle: { patch: './patch.yml' } },
+    });
+    await packageJson(root, 'opaque', {
+      name: 'opaque',
+      dsh: { bundle: { patch: './patch.yml' } },
+    });
     const dependencies = {
       'bad-git': 'github:owner/repo#main',
       'missing-package': '1.0.0',
@@ -57,7 +67,16 @@ describe('export collection', () => {
       verified: '1.0.0',
       opaque: '1.0.0',
     };
-    const bundles = ['@deepseek-ai/dsh-base', 'missing-dependency', 'bad-git', 'missing-package', 'bad-json', 'without-patch', 'verified', 'opaque'];
+    const bundles = [
+      '@deepseek-ai/dsh-base',
+      'missing-dependency',
+      'bad-git',
+      'missing-package',
+      'bad-json',
+      'without-patch',
+      'verified',
+      'opaque',
+    ];
     const lock = [
       "lockfileVersion: '9.0'",
       'importers:',
@@ -74,22 +93,36 @@ describe('export collection', () => {
       expect.arrayContaining([
         expect.objectContaining({ code: 'E_EXPORT_BUNDLE_DEPENDENCY', path: 'missing-dependency' }),
         expect.objectContaining({ code: 'E_EXPORT_GIT_PIN', path: 'bad-git' }),
-        expect.objectContaining({ code: 'E_EXPORT_BUNDLE_PACKAGE', path: expect.stringContaining('missing-package') }),
-        expect.objectContaining({ code: 'E_EXPORT_BUNDLE_PACKAGE', path: expect.stringContaining('bad-json') }),
-        expect.objectContaining({ code: 'E_EXPORT_BUNDLE_PATCH', path: expect.stringContaining('without-patch') }),
+        expect.objectContaining({
+          code: 'E_EXPORT_BUNDLE_PACKAGE',
+          path: expect.stringContaining('missing-package'),
+        }),
+        expect.objectContaining({
+          code: 'E_EXPORT_BUNDLE_PACKAGE',
+          path: expect.stringContaining('bad-json'),
+        }),
+        expect.objectContaining({
+          code: 'E_EXPORT_BUNDLE_PATCH',
+          path: expect.stringContaining('without-patch'),
+        }),
         expect.objectContaining({ code: 'E_LOCK_IMPORTER_MISSING' }),
       ]),
     );
     expect(closed.plugins).toContainEqual(expect.objectContaining({ name: 'verified' }));
     expect(closed.locked).toContainEqual(
-      expect.objectContaining({ name: 'verified', integrity: { kind: 'npm-sri', value: 'sha512-AQID' } }),
+      expect.objectContaining({
+        name: 'verified',
+        integrity: { kind: 'npm-sri', value: 'sha512-AQID' },
+      }),
     );
 
     const opaque = await buildPluginFacts(root, { opaque: '1.0.0' }, ['opaque'], undefined, true);
     expect(opaque).toMatchObject({
       diagnostics: [],
       unverified: true,
-      locked: [expect.objectContaining({ integrity: expect.objectContaining({ kind: 'unverified' }) })],
+      locked: [
+        expect.objectContaining({ integrity: expect.objectContaining({ kind: 'unverified' }) }),
+      ],
     });
   });
 
@@ -98,10 +131,18 @@ describe('export collection', () => {
     await mkdir(join(home, 'skills', 'demo-skill'), { recursive: true });
     await writeFile(join(home, 'skills', 'demo-skill', 'SKILL.md'), '# skill\n', 'utf8');
     await mkdir(join(home, '.agent-presets', 'demo-preset'), { recursive: true });
-    await writeFile(join(home, '.agent-presets', 'demo-preset', 'agent.cordis.yml'), 'agents: []\n', 'utf8');
+    await writeFile(
+      join(home, '.agent-presets', 'demo-preset', 'agent.cordis.yml'),
+      'agents: []\n',
+      'utf8',
+    );
     const input = { dshHome: home, output: join(home, 'output') };
 
-    const optional = await collectOptionalAssets({ ...input, includeSkills: true, includePresets: ['demo-preset', 'standard', 'Bad_ID'] });
+    const optional = await collectOptionalAssets({
+      ...input,
+      includeSkills: true,
+      includePresets: ['demo-preset', 'standard', 'Bad_ID'],
+    });
     expect(optional.materials).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: 'skills/demo-skill/SKILL.md' }),
@@ -115,11 +156,17 @@ describe('export collection', () => {
       ]),
     );
 
-    await expect(collectOptionalAssets({ ...input, includeSettings: true })).resolves.toMatchObject({ diagnostics: [], materials: [] });
+    await expect(collectOptionalAssets({ ...input, includeSettings: true })).resolves.toMatchObject(
+      { diagnostics: [], materials: [] },
+    );
     await writeFile(join(home, 'settings.yaml'), '- list\n', 'utf8');
-    await expect(collectOptionalAssets({ ...input, includeSettings: true })).resolves.toMatchObject({ diagnostics: [expect.objectContaining({ code: 'E_EXPORT_SETTINGS' })] });
+    await expect(collectOptionalAssets({ ...input, includeSettings: true })).resolves.toMatchObject(
+      { diagnostics: [expect.objectContaining({ code: 'E_EXPORT_SETTINGS' })] },
+    );
     await writeFile(join(home, 'settings.yaml'), 'ui-theme: { mode: dark }\n', 'utf8');
-    await expect(collectOptionalAssets({ ...input, includeSettings: true })).resolves.toMatchObject({ diagnostics: [], materials: [] });
+    await expect(collectOptionalAssets({ ...input, includeSettings: true })).resolves.toMatchObject(
+      { diagnostics: [], materials: [] },
+    );
   });
 
   it('fails closed on settings secrets unless redact is requested and rescans material content', async () => {
@@ -134,9 +181,11 @@ describe('export collection', () => {
 
     const redacted = await collectOptionalAssets({ ...input, redact: true });
     expect(redacted).toMatchObject({ diagnostics: [], redactions: ['settings/agent-presets.yml'] });
-    expect(Buffer.from(redacted.materials[0]?.bytes ?? []).toString('utf8')).toContain('<REDACTED>');
-    expect(scanMaterials([{ path: 'skills/demo.md', bytes: Buffer.from(`token: ${token}\n`) }])).toContainEqual(
-      expect.objectContaining({ code: 'E_SECRET_KEY' }),
+    expect(Buffer.from(redacted.materials[0]?.bytes ?? []).toString('utf8')).toContain(
+      '<REDACTED>',
     );
+    expect(
+      scanMaterials([{ path: 'skills/demo.md', bytes: Buffer.from(`token: ${token}\n`) }]),
+    ).toContainEqual(expect.objectContaining({ code: 'E_SECRET_KEY' }));
   });
 });

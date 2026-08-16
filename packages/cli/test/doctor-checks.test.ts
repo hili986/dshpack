@@ -143,7 +143,9 @@ describe('doctor checks', () => {
 
     state.dshError = true;
     await checkBundles(facts, input(facts.root), diagnostics);
-    expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'DSH006', path: 'dsh.log' }));
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'DSH006', path: 'dsh.log' }),
+    );
 
     const baseOnly = await profile();
     await checkBundles(baseOnly, input(baseOnly.root), diagnostics);
@@ -159,7 +161,10 @@ describe('doctor checks', () => {
       await mkdir(join(facts.root, 'node_modules', name), { recursive: true });
       await writeFile(
         join(facts.root, 'node_modules', name, 'package.json'),
-        JSON.stringify({ name, scripts: name === 'git-build' ? { install: 'node build.mjs' } : {} }),
+        JSON.stringify({
+          name,
+          scripts: name === 'git-build' ? { install: 'node build.mjs' } : {},
+        }),
         'utf8',
       );
     }
@@ -193,7 +198,9 @@ describe('doctor checks', () => {
     await writeFile(settings, '[', 'utf8');
     const malformed: Diagnostic[] = [];
     await checkSettings(root.root, malformed);
-    expect(malformed).toContainEqual(expect.objectContaining({ code: 'DSH018', severity: 'error' }));
+    expect(malformed).toContainEqual(
+      expect.objectContaining({ code: 'DSH018', severity: 'error' }),
+    );
 
     await writeFile(settings, 'agent-presets: [invalid]\n', 'utf8');
     await writeFile(`${settings}.lock`, 'pid', 'utf8');
@@ -206,7 +213,11 @@ describe('doctor checks', () => {
       ]),
     );
 
-    await writeFile(settings, 'agent-presets:\n  apiKey: sk-TESTONLY-01234567890123456789\n', 'utf8');
+    await writeFile(
+      settings,
+      'agent-presets:\n  apiKey: sk-TESTONLY-01234567890123456789\n',
+      'utf8',
+    );
     const secret: Diagnostic[] = [];
     await checkSettings(root.root, secret);
     expect(secret).toContainEqual(expect.objectContaining({ code: 'DSH018', severity: 'error' }));

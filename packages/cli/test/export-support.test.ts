@@ -41,7 +41,9 @@ describe('export support', () => {
       source: { kind: 'tarball', url: 'https://example.test/pkg.tgz' },
       diagnostics: [],
     });
-    expect(sourceFromSpecifier('pkg', 'github:owner/repo#0123456789012345678901234567890123456789')).toEqual({
+    expect(
+      sourceFromSpecifier('pkg', 'github:owner/repo#0123456789012345678901234567890123456789'),
+    ).toEqual({
       source: {
         kind: 'github',
         owner: 'owner',
@@ -165,9 +167,9 @@ describe('export support', () => {
     await writeMaterials(prepared.temporary as string, [
       { path: 'nested/payload.txt', bytes: Buffer.from('payload') },
     ]);
-    await expect(readFile(join(prepared.temporary as string, 'nested', 'payload.txt'), 'utf8')).resolves.toBe(
-      'payload',
-    );
+    await expect(
+      readFile(join(prepared.temporary as string, 'nested', 'payload.txt'), 'utf8'),
+    ).resolves.toBe('payload');
     await publishTemporary(prepared.temporary as string, output);
     await expect(readFile(join(output, 'nested', 'payload.txt'), 'utf8')).resolves.toBe('payload');
     expect(fileName(output)).toBe('pack');
