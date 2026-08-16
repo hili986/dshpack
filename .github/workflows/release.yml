@@ -1,0 +1,76 @@
+name: Release
+
+# Publishing is deliberately manual. There is no publish-on-tag trigger: a tag is
+# cheap to create by accident, and npm publishes cannot be taken back.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every gate and pack the tarballs, but do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+
+jobs:
+  release:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: release
+    permissions:
+      contents: read
+      # Required for npm provenance. Without it `npm publish --provenance` cannot
+      # mint an OIDC token and fails rather than publishing unattested.
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Activate pnpm through Corepack
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@11.7.0 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # release:check is the gate, not a formality: it runs typecheck, lint, the full
+      # suite, the e2e suite, the pack schema drift guard, then unpacks the actual
+      # tarballs and asserts both directions — the published schemas match the TypeBox
+      # truth source, and no .env / fixture / test file rode along. It also rejects a
+      # placeholder repository.url, which would make the provenance step fail with a
+      # 422 after the publish had already started.
+      - name: Run release gate
+        run: pnpm release:check
+
+      - name: Report what would be published
+        run: |
+          pnpm --filter @dshpack/core pack --dry-run
+          pnpm --filter dshpack pack --dry-run
+
+      - name: Publish
+        if: ${{ inputs.dry_run == false }}
+        run: pnpm publish --recursive --access public --no-git-checks --provenance
+        env:
+          # npm prefers the OIDC identity when a trusted publisher is configured for the
+          # package and falls back to this token otherwise. The first publish of a new
+          # package name has to use the token: npm cannot register a trusted publisher
+          # for a package that does not exist yet.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

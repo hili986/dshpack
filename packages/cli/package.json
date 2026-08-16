@@ -1,9 +1,12 @@
 {
   "name": "dshpack",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": false,
   "description": "CLI for packaging and managing DSH distributions.",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0 <25"
+  },
   "author": "dsh-packs",
   "repository": {
     "type": "git",

@@ -48,6 +48,11 @@ function requireMetadata(manifest, packageDirectory) {
     ['homepage', manifest.homepage],
     ['bugs', manifest.bugs],
     ['keywords', manifest.keywords],
+    // Only the workspace root declared a Node range, so the published packages carried
+    // none: a user on an unsupported Node got a stray syntax error instead of npm's
+    // "unsupported engine" warning, while the compatibility matrix in the README claimed
+    // a range the package never stated.
+    ['engines', manifest.engines?.node],
   ]
     .filter(([, value]) => value === undefined || value === '' || value === null)
     .map(([field]) => field);
