@@ -29,7 +29,7 @@ describe('dshpack --help', () => {
     }
   });
 
-  for (const command of ['install', 'list', 'switch', 'init', 'pack'] as const) {
+  for (const command of ['install', 'init', 'pack'] as const) {
     it(`${command} reports the placeholder contract`, () => {
       const result = spawnSync(process.execPath, [binPath, command], {
         encoding: 'utf8',
@@ -41,7 +41,7 @@ describe('dshpack --help', () => {
     });
   }
 
-  it.each(['validate', 'doctor', 'export'])(
+  it.each(['validate', 'doctor', 'export', 'list', 'switch'])(
     '%s exposes implemented help instead of the W10 placeholder',
     (command) => {
       const result = spawnSync(process.execPath, [binPath, command, '--help'], {
@@ -51,6 +51,20 @@ describe('dshpack --help', () => {
       expect(result.status).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).not.toContain('未实现（W10+）');
+    },
+  );
+
+  it.each([['list'], ['switch', 'demo']])(
+    '%s executes its implemented environment gate',
+    (...args) => {
+      const result = spawnSync(process.execPath, [binPath, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, DSH_HOME: '' },
+      });
+
+      expect(result.status).toBe(10);
+      expect(result.stderr).toContain('DSH_HOME');
+      expect(result.stderr).not.toContain('未实现');
     },
   );
 

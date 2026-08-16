@@ -4,9 +4,9 @@ import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
 import { initCommand } from './commands/init.js';
 import { installCommand } from './commands/install.js';
-import { listCommand } from './commands/list.js';
+import { listCommand, registerListCommand } from './commands/list.js';
 import { packCommand } from './commands/pack.js';
-import { switchCommand } from './commands/switch.js';
+import { registerSwitchCommand, switchCommand } from './commands/switch.js';
 import { registerValidateCommand, validateCommand } from './commands/validate.js';
 import { EXIT_CODES } from './exit-codes.js';
 
@@ -40,12 +40,21 @@ export function createProgram(): Command {
     .option('--json', '使用 JSON 输出');
 
   for (const { description, name } of commandDefinitions) {
-    if (name === 'validate' || name === 'doctor' || name === 'export') continue;
+    if (
+      name === 'validate' ||
+      name === 'doctor' ||
+      name === 'export' ||
+      name === 'list' ||
+      name === 'switch'
+    )
+      continue;
     program.command(name).description(description).action(reportNotImplemented);
   }
   registerValidateCommand(program);
   registerDoctorCommand(program);
   registerExportCommand(program);
+  registerListCommand(program);
+  registerSwitchCommand(program);
 
   return program;
 }
