@@ -168,7 +168,11 @@ describe('transaction mutation path scope', () => {
           await transaction.create('preset', preset, async () => {
             await writeFile(join(preset, 'preset.yml'), 'name: inside\n', 'utf8');
           });
-          await transaction.writeSettings(settings, 'agent-presets:\n  default: inside\n');
+          await transaction.writeSettings(
+            settings,
+            undefined,
+            'agent-presets:\n  default: inside\n',
+          );
         },
       );
 
@@ -204,7 +208,8 @@ describe('transaction mutation path scope', () => {
       await writeFile(outside, 'owner: external\n', 'utf8');
       const result = await runTransaction(
         { adapter: nodeTransactionAdapter, dshHome, txid: 'outside-settings' },
-        async (transaction) => transaction.writeSettings(outside, 'owner: transaction\n'),
+        async (transaction) =>
+          transaction.writeSettings(outside, 'owner: external\n', 'owner: transaction\n'),
       );
 
       expectScopeFailure(result, 'E_TRANSACTION_SETTINGS_PATH_SCOPE', outside);
@@ -222,7 +227,8 @@ describe('transaction mutation path scope', () => {
       await symlink(outside, settings, process.platform === 'win32' ? 'junction' : 'dir');
       const result = await runTransaction(
         { adapter: nodeTransactionAdapter, dshHome, txid: 'junction-settings' },
-        async (transaction) => transaction.writeSettings(settings, 'owner: transaction\n'),
+        async (transaction) =>
+          transaction.writeSettings(settings, undefined, 'owner: transaction\n'),
       );
 
       expectScopeFailure(result, 'E_TRANSACTION_SETTINGS_PATH_SCOPE', settings);
@@ -238,7 +244,8 @@ describe('transaction mutation path scope', () => {
       await symlink(missingTarget, settings, process.platform === 'win32' ? 'junction' : 'dir');
       const result = await runTransaction(
         { adapter: nodeTransactionAdapter, dshHome, txid: 'dangling-settings' },
-        async (transaction) => transaction.writeSettings(settings, 'owner: transaction\n'),
+        async (transaction) =>
+          transaction.writeSettings(settings, undefined, 'owner: transaction\n'),
       );
 
       expectScopeFailure(result, 'E_TRANSACTION_SETTINGS_PATH_SCOPE', settings);

@@ -130,7 +130,11 @@ export interface TransactionContext {
   replaceArtifact(kind: TransactionArtifactKind, path: string): Promise<void>;
   replaceProfile(path: string): Promise<void>;
   writeManagedDocument(path: string, newDocument: string): Promise<void>;
-  writeSettings(path: string, newDocument: string): Promise<void>;
+  writeSettings(
+    path: string,
+    expectedDocument: string | undefined,
+    newDocument: string,
+  ): Promise<void>;
 }
 
 export interface TransactionResult<T> {

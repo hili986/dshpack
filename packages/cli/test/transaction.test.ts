@@ -226,7 +226,7 @@ describe('runTransaction', () => {
     const result = await runTransaction(
       { adapter, dshHome, txid: 'tx-settings' },
       async (transaction) => {
-        await transaction.writeSettings(settingsPath, changed);
+        await transaction.writeSettings(settingsPath, original, changed);
         throw new TransactionFailure(30, [failureDiagnostic]);
       },
     );

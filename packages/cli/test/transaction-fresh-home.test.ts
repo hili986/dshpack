@@ -39,7 +39,7 @@ describe('transaction fresh-home and identity safety', () => {
       const result = await runTransaction(
         { adapter: nodeTransactionAdapter, dshHome, txid: 'fresh-settings-rollback' },
         async (transaction) => {
-          await transaction.writeSettings(settingsPath, replacement);
+          await transaction.writeSettings(settingsPath, undefined, replacement);
           throw new TransactionFailure(23, [failureDiagnostic]);
         },
       );
@@ -83,7 +83,7 @@ describe('transaction fresh-home and identity safety', () => {
 
       const result = await runTransaction(
         { adapter, dshHome, txid: 'fresh-settings-same-content' },
-        async (transaction) => transaction.writeSettings(settingsPath, replacement),
+        async (transaction) => transaction.writeSettings(settingsPath, undefined, replacement),
       );
 
       expect(result).toMatchObject({ ok: false, status: 'rolled-back', exitCode: 30 });
@@ -104,7 +104,7 @@ describe('transaction fresh-home and identity safety', () => {
       const result = await runTransaction(
         { adapter: nodeTransactionAdapter, dshHome, txid: 'fresh-settings-conflict' },
         async (transaction) => {
-          await transaction.writeSettings(settingsPath, 'agent-presets: {}\n');
+          await transaction.writeSettings(settingsPath, undefined, 'agent-presets: {}\n');
           await writeFile(settingsPath, 'external: true\n', 'utf8');
           throw new TransactionFailure(23, [failureDiagnostic]);
         },

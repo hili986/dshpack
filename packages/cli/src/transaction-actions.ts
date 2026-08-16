@@ -111,10 +111,21 @@ export async function writeDocument(
   documentKind: Extract<TransactionMutationKind, 'settings' | 'managed-document'>,
   path: string,
   newDocument: string,
+  callerExpected?: string,
 ): Promise<void> {
   const { adapter, backupDirectory, journal, lock, persist } = options;
   await adapter.validateMutationPath(lock, documentKind, path);
   const originalDocument = await adapter.readTextIfExists(path);
+  if (documentKind === 'settings' && originalDocument !== callerExpected) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_SETTINGS_CHANGED',
+        `${path} 在 settings 候选文档生成后被其他写入者修改。`,
+        '重新读取最新 settings 文档、重新生成候选内容后再试。',
+        path,
+      ),
+    ]);
+  }
   const id = actionId(journal.actions.length + 1);
   const label = documentKind === 'settings' ? 'settings' : 'managed';
   const documentPath = join(backupDirectory, 'documents', `${id}-${label}-original`);
@@ -140,7 +151,8 @@ export async function writeDocument(
   journal.actions.push(action);
   // Persist old/new document locations and the pending state before the CAS write.
   await persist();
-  if (!(await adapter.compareAndSwapText(path, originalDocument, newDocument))) {
+  const expectedDocument = documentKind === 'settings' ? callerExpected : originalDocument;
+  if (!(await adapter.compareAndSwapText(path, expectedDocument, newDocument))) {
     action.writeState = 'not-written';
     await persist();
     throw new TransactionFailure(EXIT_CODES.CONTRACT, [

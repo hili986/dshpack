@@ -130,13 +130,14 @@ export async function runTransaction<T>(
         ),
       );
     },
-    async writeSettings(path, newDocument) {
+    async writeSettings(path, expectedDocument, newDocument) {
       return serializeAction(() =>
         writeDocument(
           { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
           'settings',
           path,
           newDocument,
+          expectedDocument,
         ),
       );
     },

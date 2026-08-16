@@ -173,7 +173,6 @@ describe('transaction ownership and serialization', () => {
         throw new TransactionFailure(23, [failureDiagnostic]);
       },
     );
-
     expect(result).toMatchObject({ ok: false, status: 'rolled-back', exitCode: 23 });
     expect(result.journal.actions.map(({ id }) => id)).toEqual(['action-0001', 'action-0002']);
     const rollbackPaths = result.journal.actions.flatMap((action) =>
@@ -193,7 +192,11 @@ describe('transaction ownership and serialization', () => {
     const result = await runTransaction(
       { adapter, dshHome, txid: 'tx-settings-race' },
       async (transaction) => {
-        await transaction.writeSettings(settingsPath, 'preset: transaction\n');
+        await transaction.writeSettings(
+          settingsPath,
+          'preset: original\n',
+          'preset: transaction\n',
+        );
         adapter.seed(settingsPath, 'preset: external\n');
         throw new TransactionFailure(30, [failureDiagnostic]);
       },
@@ -358,7 +361,6 @@ describe('transaction ownership and serialization', () => {
         await Promise.all([first, queued, sibling]);
       },
     );
-
     expect(result).toMatchObject({ ok: false, status: 'rolled-back', exitCode: 23 });
     expect(result.diagnostics.map(({ code }) => code)).toEqual(['E_TEST_STEP', 'E_ACTION_STEP']);
     expect(result.journal.actions).toHaveLength(1);

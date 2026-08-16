@@ -112,7 +112,7 @@ describe('transaction crash windows', () => {
 
       const result = await runTransaction(
         { adapter, dshHome, txid: 'settings-release-failure' },
-        async (transaction) => transaction.writeSettings(settingsPath, replacement),
+        async (transaction) => transaction.writeSettings(settingsPath, original, replacement),
       );
 
       expect(result).toMatchObject({
@@ -162,7 +162,11 @@ describe('transaction crash windows', () => {
       const result = await runTransaction(
         { adapter, dshHome, txid: 'settings-unconfirmed-write' },
         async (transaction) =>
-          transaction.writeSettings(settingsPath, 'agent-presets:\n  default: research\n'),
+          transaction.writeSettings(
+            settingsPath,
+            original,
+            'agent-presets:\n  default: research\n',
+          ),
       );
 
       expect(result).toMatchObject({
@@ -251,7 +255,11 @@ describe('transaction crash windows', () => {
       const result = await runTransaction(
         { adapter, dshHome, txid: 'rollback-settings-lock' },
         async (transaction) => {
-          await transaction.writeSettings(settingsPath, 'agent-presets:\n  default: research\n');
+          await transaction.writeSettings(
+            settingsPath,
+            'agent-presets: {}\n',
+            'agent-presets:\n  default: research\n',
+          );
           throw new Error('later step failed');
         },
       );

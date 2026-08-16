@@ -32,7 +32,11 @@ describe('node transaction adapter', () => {
           await transaction.create('profile', profilePath, async () => {
             await writeFile(join(profilePath, 'package.json'), '{"private":true}\n', 'utf8');
           });
-          await transaction.writeSettings(settingsPath, 'agent-presets:\n  default: research\n');
+          await transaction.writeSettings(
+            settingsPath,
+            '# original\nagent-presets: {}\n',
+            'agent-presets:\n  default: research\n',
+          );
           throw new TransactionFailure(23, [injectedFailure]);
         },
       );
