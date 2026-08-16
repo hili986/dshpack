@@ -1,35 +1,31 @@
 # Starter Pack Certification — W15b
 
-Certification date: 2026-08-17.  All `dsh` invocations used an explicitly supplied, isolated `DSH_HOME`; no user DSH home was read or written.
+认证日期：2026-08-17。全部 `dsh` 调用都显式设置到隔离的临时 `DSH_HOME`；未读取、写入或列举用户的真实 DSH_HOME。
 
-Raw Windows stdout, stderr, and exit-code files are retained in [`docs/adr/stage8-raw/windows`](adr/stage8-raw/windows).  The native Linux originals remain under `/tmp/dshpack-stage8-linux-34718c5a/raw` as part of the retained smoke root described below.
+原始 stdout、stderr 与每条退出码已提交至 [`docs/adr/stage8-raw/`](adr/stage8-raw)。`--dump-config` 均为安装后的全新真实 `dsh` 进程调用。
 
-| OS | Starter pack | `dsh` | Commands and exit codes | Key assertions |
+| OS | Starter pack | `dsh` | 命令与 exit code | 关键断言 |
 | --- | --- | --- | --- | --- |
-| Windows | `web-dev` | `0.1.0-rc.6` | `install --yes -- <web-dev>` → 0; `dsh --profile web-dev --dump-config` → 0; `doctor --profile web-dev --strict --yes` → 0 | Dump contains `id: mcp-context7`, `@deepseek-ai/dsh-mcp-client`, `serverName: context7`, `transport: streamable-http`, and `https://mcp.context7.com/mcp`; four web skills exist. |
-| Windows | `research-writing` | `0.1.0-rc.6` | `install --yes -- <research-writing>` → 0; `dsh --profile research-writing --dump-config` → 0; `dsh --profile research-writing --dump-default-config` → 0; `doctor --profile research-writing --strict --yes` → 0 | The two dump byte streams are equal; Context7 identifiers are absent; five research skills exist. |
-| WSL2 Ubuntu 24.04 (native `/tmp` filesystem) | `web-dev` | `0.1.0-rc.6` | `install --yes -- /tmp/.../packs/web-dev` → 0; `dsh --profile web-dev --dump-config` → 0; `doctor --profile web-dev --strict --yes` → 0 | Same five Context7 dump lines as Windows; four web skills exist. |
-| WSL2 Ubuntu 24.04 (native `/tmp` filesystem) | `research-writing` | `0.1.0-rc.6` | `install --yes -- /tmp/.../packs/research-writing` → 0; both profile dumps → 0; `doctor --profile research-writing --strict --yes` → 0 | Profile and default dump are byte-equal; Context7 is absent; five research skills exist. |
+| Windows（原生） | `web-dev` | `0.1.0-rc.6` | `install --as web-dev --yes` → 0；`dsh --profile web-dev --dump-config` → 0；`doctor --profile web-dev --strict --json` → 0 | dump 包含 `mcp-context7`、`@deepseek-ai/dsh-mcp-client`、`serverName: context7` 和 `https://mcp.context7.com/mcp`；安装四个 web skill。 |
+| Windows（原生） | `research-writing` | `0.1.0-rc.6` | `install --as research-writing --yes` → 0；`dsh --profile research-writing --dump-config` → 0；`doctor --profile research-writing --strict --json` → 0 | dump 中四个 Context7 标识均为 0 次；安装五个 research skill。 |
+| WSL2 Ubuntu 24.04（原生 ext4） | `web-dev` | `0.1.0-rc.6` | `install --as web-dev --yes` → 0；`dsh --profile web-dev --dump-config` → 0；`doctor --profile web-dev --strict --json` → 0 | 同样命中四个 Context7 配置断言；安装四个 web skill。 |
+| WSL2 Ubuntu 24.04（原生 ext4） | `research-writing` | `0.1.0-rc.6` | `install --as research-writing --yes` → 0；`dsh --profile research-writing --dump-config` → 0；`doctor --profile research-writing --strict --json` → 0 | 四个 Context7 标识均为 0 次；安装五个 research skill。 |
 
-Both starter repositories contain a committed deterministic `pack.lock.yml`:
+Windows capture 根为 `C:\Users\24020\Desktop\111\dshpack\.stage8-windows-smoke-20260817\captured-dsh-home-2`；Linux capture 根为 `/home/hili986/dshpack-smoke-stage8-20260817/captured-dsh-home-2`。两个 Linux pack、构建目录和运行目录均在 `/home/hili986/dshpack-smoke-stage8-20260817`，不在 `/mnt/c`。
+
+两个 starter 仓均含已提交的确定性 lock，且本次在 Windows 上重复 `dshpack lock` 后 SHA-256 未变，随后 `dshpack validate --strict` 均为 exit 0：
 
 - `web-dev`: `3414f1a chore: add deterministic pack lock`
 - `research-writing`: `9ee2853 chore: add deterministic pack lock`
 
-Each was generated twice with byte-identical SHA-512 output and then passed `dshpack validate --strict` with exit 0.
+## Linux 用户态工具
 
-## Linux user-space tools
+WSL 使用官方 `node-v24.13.1-linux-x64` tarball，安装在 `/home/hili986/.local/node-v24.13.1-linux-x64`；实际验证的版本为 `v24.13.1`。为隔离 smoke，Corepack 缓存放在 `/home/hili986/dshpack-smoke-stage8-20260817/.stage8-corepack`，其 `pnpm@11.7.0` shim 放在 `.stage8-bin`；真实 `@deepseek-ai/dsh@0.1.0-rc.6` 安装在同一 smoke 根的 `dsh-runtime`。
 
-The WSL smoke root is `/tmp/dshpack-stage8-linux-34718c5a` (a native Linux filesystem, never `/mnt/c`).  It contains the official `node-v22.19.0-linux-x64` tarball installation, `@deepseek-ai/dsh@0.1.0-rc.6` under `tools`, and `pnpm@11.7.0` under `pnpm-tools`.  The Node tarball SHA-256 check reported `node-v22.19.0-linux-x64.tar.xz: OK` and `node --version` reported `v22.19.0`.
-
-To remove every Linux smoke artifact and user-space tool, run:
+未执行卸载，以保留证据。如要移除本批 Linux 用户态工具与 smoke 文件，运行：
 
 ```bash
-rm -rf /tmp/dshpack-stage8-linux-34718c5a
+rm -rf /home/hili986/.local/node-v24.13.1-linux-x64 /home/hili986/dshpack-smoke-stage8-20260817
 ```
 
-This removal command is intentionally documented but was not run, so the captured smoke evidence remains available.
-
-## Certification caveat
-
-During every successful `dsh` subprocess invocation, the current implementation writes command logs below the isolated home at `.dshpack/logs`.  This is relevant because the authoritative plan has conflicting statements about whether `doctor` may write dshpack-owned files; see the delivery report for the exact conflict.
+未推送 starter 仓或本仓的任何提交。
