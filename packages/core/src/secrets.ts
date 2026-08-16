@@ -13,6 +13,7 @@ const tokenPattern =
 const authorizationPattern = /\b(?:Bearer|Basic)\s+[^\s]+/giu;
 const urlUserinfoPattern = /https?:\/\/[^/\s:@]+:[^@/\s]+@/giu;
 const highEntropyCandidate = /[A-Za-z0-9+/_=-]{24,}/gu;
+const redaction = '[REDACTED]';
 const envReference = '$' + '{ENV_VAR}';
 
 function at(path: string, line: number, column: number): string {
@@ -59,6 +60,35 @@ function shannonEntropy(value: string): number {
     entropy -= probability * Math.log2(probability);
   }
   return entropy;
+}
+
+/**
+ * Redact credential-shaped text before it crosses a logging boundary.
+ * Detection diagnostics intentionally contain only locations; this companion
+ * transform is for untrusted child-process output that must still be persisted.
+ */
+export function redactSecrets(content: string): string {
+  let output = content.replace(
+    /-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z]+)* PRIVATE KEY-----/gu,
+    redaction,
+  );
+  output = output.replace(tokenPattern, redaction);
+  output = output.replace(authorizationPattern, (match) => {
+    const scheme = match.slice(0, match.indexOf(' '));
+    return `${scheme} ${redaction}`;
+  });
+  output = output.replace(urlUserinfoPattern, (match) => {
+    const schemeEnd = match.indexOf('://') + 3;
+    return `${match.slice(0, schemeEnd)}${redaction}@`;
+  });
+  output = output.replace(
+    /(^|\n)(\s*(?:api[-_]?key|token|secret|password|authorization|cookie|private[-_]?key|client[-_]?secret)\s*[:=]\s*)[^\r\n]*/giu,
+    (_match, boundary: string, prefix: string) => `${boundary}${prefix}${redaction}`,
+  );
+  output = output.replace(highEntropyCandidate, (candidate) =>
+    shannonEntropy(candidate) >= 3.5 ? redaction : candidate,
+  );
+  return output;
 }
 
 function appendValueMatches(

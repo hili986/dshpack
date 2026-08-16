@@ -1,7 +1,26 @@
 export type { DshAdapter } from './adapters/dsh.js';
-export type { FileSystemAdapter } from './adapters/fs.js';
-export type { ProcessAdapter } from './adapters/process.js';
-export type { SettingsAdapter } from './adapters/settings.js';
+export type { AtomicWriteOptions, FileSystemAdapter } from './adapters/fs.js';
+export { nodeFileSystemAdapter, writeFileAtomic } from './adapters/fs.js';
+export type {
+  DshInterruptionReason,
+  DshLauncher,
+  DshProcessResult,
+  ProcessAdapter,
+  RunDshOptions,
+} from './adapters/process.js';
+export { DshProcessError, runDsh } from './adapters/process.js';
+export type {
+  SettingsAdapter,
+  SettingsClock,
+  YamlSettingsAdapterOptions,
+} from './adapters/settings.js';
+export {
+  compareAndMoveText,
+  compareAndSwapText,
+  withSettingsFileLock,
+  YamlSettingsAdapter,
+} from './adapters/settings.js';
 export type { SourceAdapter } from './adapters/source.js';
 export { COMMAND_NAMES, createProgram, runCli } from './cli.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
+export * from './transaction.js';

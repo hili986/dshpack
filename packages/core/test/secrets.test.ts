@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { scanSecrets, validateMcpEnvValues } from '../src/index.js';
+import { redactSecrets, scanSecrets, validateMcpEnvValues } from '../src/index.js';
 
 const syntheticToken = 'sk-TESTONLY-00000000000000000000000000000000';
 const envReference = '$' + '{ENV_VAR}';
@@ -100,6 +100,40 @@ describe('secret diagnostic non-disclosure guard', () => {
     for (let start = 0; start <= syntheticToken.length - 8; start += 1) {
       const fragment = syntheticToken.slice(start, start + 8);
       expect(serialized).not.toContain(fragment);
+    }
+  });
+});
+
+describe('secret log redaction', () => {
+  it('removes secrets while retaining non-sensitive context', () => {
+    const githubToken = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+    const entropySecret = 'zQ9vLm2aBx7Rt4YpNc8Kd1WsFe6Hu3Gi';
+    const input = [
+      'child started',
+      `Authorization: Bearer ${syntheticToken}`,
+      `endpoint=https://synthetic-user:synthetic-pass@example.test/mcp`,
+      `api_key: ${githubToken}`,
+      `opaque=${entropySecret}`,
+      '-----BEGIN PRIVATE KEY-----',
+      'synthetic-private-material',
+      '-----END PRIVATE KEY-----',
+      'child finished',
+    ].join('\n');
+
+    const redacted = redactSecrets(input);
+
+    expect(redacted).toContain('child started');
+    expect(redacted).toContain('child finished');
+    expect(redacted).toContain('[REDACTED]');
+    for (const secret of [
+      syntheticToken,
+      githubToken,
+      entropySecret,
+      'synthetic-user',
+      'synthetic-pass',
+      'synthetic-private-material',
+    ]) {
+      expect(redacted).not.toContain(secret);
     }
   });
 });

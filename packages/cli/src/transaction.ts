@@ -1,1 +1,375 @@
-// TODO(W10+): Add transactional CLI helpers.
+import { dirname, join, resolve } from 'node:path';
+import { EXIT_CODES } from './exit-codes.js';
+import {
+  actionId,
+  diagnostic,
+  errorMessage,
+  invalidTxidDiagnostic,
+  serializeJournal,
+} from './transaction-journal.js';
+import { rollbackTransaction } from './transaction-rollback.js';
+import {
+  type CreateJournalAction,
+  type ReplaceJournalAction,
+  type RunTransactionOptions,
+  type SettingsJournalAction,
+  type TransactionArtifactLock,
+  type TransactionContext,
+  TransactionFailure,
+  type TransactionJournal,
+  type TransactionResult,
+} from './transaction-types.js';
+
+export {
+  createNodeTransactionAdapter,
+  nodeTransactionAdapter,
+} from './transaction-node-adapter.js';
+export * from './transaction-types.js';
+
+export async function runTransaction<T>(
+  options: RunTransactionOptions,
+  operation: (transaction: TransactionContext) => Promise<T>,
+): Promise<TransactionResult<T>> {
+  const { adapter, dshHome, txid } = options;
+  const invalidTxid = invalidTxidDiagnostic(txid);
+  const backupDirectory = join(
+    dshHome,
+    '.dshpack',
+    'backups',
+    invalidTxid === undefined ? txid : '_invalid',
+  );
+  const journalPath = join(backupDirectory, 'journal.json');
+  const journal: TransactionJournal = {
+    version: 0,
+    txid,
+    dshHome,
+    backupDirectory,
+    state: invalidTxid === undefined ? 'active' : 'not-started',
+    actions: [],
+  };
+  const resultBase = { journal, journalPath, backupDirectory };
+  if (invalidTxid !== undefined) {
+    return {
+      ...resultBase,
+      ok: false,
+      diagnostics: [invalidTxid],
+      status: 'not-started',
+      exitCode: EXIT_CODES.SECURITY,
+      manualRecovery: [],
+    };
+  }
+  const persist = async (): Promise<void> => {
+    await adapter.atomicWriteText(journalPath, serializeJournal(journal));
+  };
+  let actionQueue = Promise.resolve();
+  let actionFailed = false;
+  let actionFailure: unknown;
+  const serializeAction = async <R>(action: () => Promise<R>): Promise<R> => {
+    const predecessor = actionQueue;
+    let release = (): void => {};
+    actionQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await predecessor;
+    if (actionFailed) {
+      release();
+      throw actionFailure;
+    }
+    try {
+      return await action();
+    } catch (error) {
+      actionFailed = true;
+      actionFailure = error;
+      throw error;
+    } finally {
+      release();
+    }
+  };
+  let artifactLock: TransactionArtifactLock | undefined;
+  const requireArtifactLock = (): TransactionArtifactLock => {
+    if (artifactLock === undefined) throw new Error('artifact lock is unavailable');
+    return artifactLock;
+  };
+
+  const transaction: TransactionContext = {
+    txid,
+    backupDirectory,
+    journalPath,
+    async create(kind, path, apply) {
+      return serializeAction(async () => {
+        const lock = requireArtifactLock();
+        await adapter.validateMutationPath(lock, kind, path);
+        await adapter.ensureDirectory(dirname(path));
+        const id = actionId(journal.actions.length + 1);
+        const rollbackPath = join(backupDirectory, 'new', id);
+        const action: CreateJournalAction = {
+          id,
+          kind: 'create',
+          artifact: kind,
+          ownership: 'pending',
+          phase: 'planned',
+          old: { path, exists: false },
+          new: { path, exists: true, rollbackPath },
+        };
+        journal.actions.push(action);
+        await adapter.ensureDirectory(dirname(rollbackPath));
+        await persist();
+        if (!(await adapter.createDirectoryExclusive(path))) {
+          action.ownership = 'not-owned';
+          await persist();
+          throw new TransactionFailure(EXIT_CODES.PROFILE_CONFLICT_OR_LOCK, [
+            diagnostic(
+              'E_TRANSACTION_CREATE_CONFLICT',
+              '事务不能把既有路径记作本事务新建项。',
+              '跳过同名 skill/preset，或先使用明确的 replace 流程。',
+              path,
+            ),
+          ]);
+        }
+        const identity = await adapter.pathIdentity(path);
+        if (identity === undefined) throw new Error(`reserved artifact is missing: ${path}`);
+        action.new.identity = identity;
+        action.ownership = 'owned';
+        await persist();
+        await apply();
+        action.phase = 'applied';
+        await persist();
+      });
+    },
+    async replaceProfile(path) {
+      return serializeAction(async () => {
+        const lock = requireArtifactLock();
+        await adapter.validateMutationPath(lock, 'profile', path);
+        if (!(await adapter.pathExists(path))) {
+          throw new TransactionFailure(EXIT_CODES.PROFILE_CONFLICT_OR_LOCK, [
+            diagnostic(
+              'E_TRANSACTION_REPLACE_MISSING',
+              'replace 目标 profile 不存在。',
+              '移除 --replace，或确认目标 profile 路径。',
+              path,
+            ),
+          ]);
+        }
+        const id = actionId(journal.actions.length + 1);
+        const preservedAt = join(backupDirectory, 'old', id);
+        await adapter.ensureDirectory(dirname(preservedAt));
+        const action: ReplaceJournalAction = {
+          id,
+          kind: 'replace',
+          artifact: 'profile',
+          phase: 'planned',
+          old: { path, exists: true },
+          new: { path, exists: false, preservedAt },
+        };
+        journal.actions.push(action);
+        await persist();
+        await adapter.moveArtifactPath(lock, 'profile', path, preservedAt, 'to-backup');
+        action.phase = 'applied';
+        await persist();
+      });
+    },
+    async writeSettings(path, newDocument) {
+      return serializeAction(async () => {
+        await adapter.validateMutationPath(requireArtifactLock(), 'settings', path);
+        const originalDocument = await adapter.readTextIfExists(path);
+        const id = actionId(journal.actions.length + 1);
+        const documentPath = join(backupDirectory, 'documents', `${id}-settings-original.yaml`);
+        const newDocumentPath = join(backupDirectory, 'documents', `${id}-settings-new.yaml`);
+        const rollbackPath = join(backupDirectory, 'new', `${id}-settings.yaml`);
+        await adapter.ensureDirectory(dirname(documentPath));
+        if (originalDocument !== undefined) {
+          await adapter.atomicWriteText(documentPath, originalDocument);
+        }
+        await adapter.atomicWriteText(newDocumentPath, newDocument);
+        const action: SettingsJournalAction = {
+          id,
+          kind: 'settings-write',
+          writeState: 'pending',
+          phase: 'planned',
+          old:
+            originalDocument === undefined
+              ? { path, exists: false }
+              : { path, exists: true, documentPath },
+          new: {
+            path,
+            exists: true,
+            documentPath: newDocumentPath,
+            rollbackPath,
+          },
+        };
+        journal.actions.push(action);
+        await persist();
+        if (!(await adapter.compareAndSwapText(path, originalDocument, newDocument))) {
+          action.writeState = 'not-written';
+          await persist();
+          throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+            diagnostic(
+              'E_TRANSACTION_SETTINGS_CHANGED',
+              'settings.yaml 在事务读取后被其他写入者修改。',
+              '重新读取最新 settings 后重试安装。',
+              path,
+            ),
+          ]);
+        }
+        action.writeState = 'written';
+        await persist();
+        action.phase = 'applied';
+        await persist();
+      });
+    },
+  };
+
+  try {
+    artifactLock = await adapter.acquireArtifactLock(dshHome);
+    if (resolve(artifactLock.dshHome) !== resolve(dshHome)) {
+      throw new TransactionFailure(EXIT_CODES.SECURITY, [
+        diagnostic(
+          'E_TRANSACTION_ARTIFACT_LOCK_SCOPE',
+          'artifact lock 不属于当前 DSH_HOME。',
+          '拒绝跨 DSH_HOME 复用 lock token。',
+          artifactLock.lockPath,
+        ),
+      ]);
+    }
+    await adapter.ensureDirectory(dirname(backupDirectory));
+    if (!(await adapter.createDirectoryExclusive(backupDirectory))) {
+      journal.state = 'not-started';
+      await artifactLock.release();
+      artifactLock = undefined;
+      return {
+        ...resultBase,
+        ok: false,
+        diagnostics: [
+          diagnostic(
+            'E_TRANSACTION_BACKUP_EXISTS',
+            'transaction backup 目录已存在，拒绝覆盖旧 journal。',
+            '生成新的 txid，或先人工审计既有 backup。',
+            backupDirectory,
+          ),
+        ],
+        status: 'not-started',
+        exitCode: EXIT_CODES.PROFILE_CONFLICT_OR_LOCK,
+        manualRecovery: [],
+      };
+    }
+    await adapter.ensureDirectory(backupDirectory);
+    await persist();
+  } catch (error) {
+    const lock = artifactLock;
+    artifactLock = undefined;
+    let releaseError: unknown;
+    if (lock !== undefined) {
+      try {
+        await lock.release();
+      } catch (caught) {
+        releaseError = caught;
+      }
+    }
+    journal.state = 'not-started';
+    const setupDiagnostics =
+      error instanceof TransactionFailure
+        ? [...error.diagnostics]
+        : [
+            diagnostic(
+              'E_TRANSACTION_SETUP_FAILED',
+              `transaction journal 初始化失败：${errorMessage(error)}`,
+              `检查备份目录与 journal 路径：${backupDirectory}、${journalPath}。`,
+              journalPath,
+            ),
+          ];
+    if (releaseError !== undefined && lock !== undefined) {
+      setupDiagnostics.push(
+        diagnostic(
+          'E_TRANSACTION_ARTIFACT_LOCK_RELEASE_FAILED',
+          `transaction 初始化失败后 artifact lock 释放失败：${errorMessage(releaseError)}`,
+          `人工检查锁文件；绝不自动删除未知 owner：${lock.lockPath}。`,
+          lock.lockPath,
+        ),
+      );
+    }
+    return {
+      ...resultBase,
+      ok: false,
+      diagnostics: setupDiagnostics,
+      status: 'not-started',
+      exitCode:
+        releaseError === undefined
+          ? error instanceof TransactionFailure
+            ? error.exitCode
+            : EXIT_CODES.INTERNAL
+          : EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+      manualRecovery:
+        releaseError === undefined || lock === undefined
+          ? []
+          : [
+              {
+                actionId: 'artifact-lock',
+                operation: 'inspect-lock',
+                sourcePath: lock.lockPath,
+                destinationPath: lock.lockPath,
+                reason: errorMessage(releaseError),
+              },
+            ],
+    };
+  }
+
+  try {
+    const value = await operation(transaction);
+    await actionQueue;
+    if (actionFailed) throw actionFailure;
+    journal.state = 'committed';
+    await persist();
+    if (artifactLock !== undefined) {
+      const lock = artifactLock;
+      try {
+        await lock.release();
+      } catch (error) {
+        return {
+          ...resultBase,
+          ok: false,
+          diagnostics: [
+            diagnostic(
+              'E_TRANSACTION_ARTIFACT_LOCK_RELEASE_FAILED',
+              `事务已 commit，但 artifact lock 释放失败：${errorMessage(error)}`,
+              `人工检查锁文件，绝不自动删除未知 owner：${lock.lockPath}。`,
+              lock.lockPath,
+            ),
+          ],
+          status: 'committed',
+          exitCode: EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+          manualRecovery: [
+            {
+              actionId: 'artifact-lock',
+              operation: 'inspect-lock',
+              sourcePath: lock.lockPath,
+              destinationPath: lock.lockPath,
+              reason: errorMessage(error),
+            },
+          ],
+        };
+      }
+    }
+    artifactLock = undefined;
+    return {
+      ...resultBase,
+      ok: true,
+      value,
+      diagnostics: [],
+      status: 'committed',
+      exitCode: EXIT_CODES.SUCCESS,
+      manualRecovery: [],
+    };
+  } catch (error) {
+    await actionQueue;
+    const failures = [error];
+    if (actionFailed && actionFailure !== error) failures.push(actionFailure);
+    return rollbackTransaction({
+      adapter,
+      artifactLock,
+      backupDirectory,
+      failures,
+      journal,
+      journalPath,
+    });
+  }
+}
