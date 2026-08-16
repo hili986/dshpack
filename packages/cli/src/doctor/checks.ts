@@ -159,6 +159,83 @@ export async function checkBundles(
   }
 }
 
+const buildLifecycleScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+
+function needsBuildAuthorization(specifier: string): boolean {
+  return /^(?:github:|git\+|file:|link:|workspace:)/u.test(specifier);
+}
+
+function buildAuthorizationKey(name: string, specifier: string): string {
+  const github = /^github:([^/\s]+)\/([^#\s]+)#/u.exec(specifier);
+  if (github?.[1] !== undefined && github[2] !== undefined)
+    return `${name}@git+https://github.com/${github[1]}/${github[2]}.git`;
+  if (specifier.startsWith('git+')) return `${name}@${specifier}`;
+  return name;
+}
+
+async function allowedBuilds(
+  workspacePath: string,
+  diagnostics: Diagnostic[],
+): Promise<ReadonlySet<string>> {
+  const source = await text(workspacePath);
+  if (source === undefined) return new Set();
+  const document = parseDocument(source, { version: '1.2', uniqueKeys: true });
+  if (document.errors.length > 0) {
+    diagnostics.push(
+      profileDiagnostic(
+        'DSH007',
+        'pnpm-workspace.yaml 无法解析，不能安全审计 allowBuilds。',
+        '修复 pnpm-workspace.yaml 后重试；dshpack 不会自动授权 build script。',
+        workspacePath,
+      ),
+    );
+    return new Set();
+  }
+  const values = document.toJS();
+  if (typeof values !== 'object' || values === null || Array.isArray(values)) return new Set();
+  const allowBuilds = (values as Record<string, unknown>).allowBuilds;
+  if (typeof allowBuilds !== 'object' || allowBuilds === null || Array.isArray(allowBuilds))
+    return new Set();
+  return new Set(
+    Object.entries(allowBuilds as Record<string, unknown>)
+      .filter(([, value]) => value === true)
+      .map(([name]) => name),
+  );
+}
+
+export async function checkBuildAuthorization(
+  facts: ProfileFacts,
+  diagnostics: Diagnostic[],
+): Promise<void> {
+  const workspacePath = join(facts.root, 'pnpm-workspace.yaml');
+  const allowBuilds = await allowedBuilds(workspacePath, diagnostics);
+  for (const [name, specifier] of Object.entries(facts.dependencies)) {
+    if (!needsBuildAuthorization(specifier)) continue;
+    const packagePath = join(facts.root, 'node_modules', ...name.split('/'), 'package.json');
+    const installed = await text(packagePath);
+    if (installed === undefined) continue;
+    try {
+      const packageJson = JSON.parse(installed) as { scripts?: Record<string, unknown> };
+      const scripts = packageJson.scripts;
+      const hasBuildScript = buildLifecycleScripts.some(
+        (script) => typeof scripts?.[script] === 'string' && scripts[script].trim().length > 0,
+      );
+      const authorization = buildAuthorizationKey(name, specifier);
+      if (hasBuildScript && !allowBuilds.has(authorization))
+        diagnostics.push(
+          profileDiagnostic(
+            'DSH007',
+            'git 或本地 dependency 含 build script，但未获 allowBuilds 显式授权。',
+            `在 pnpm-workspace.yaml 的 allowBuilds 添加 ${JSON.stringify(authorization)}: true；dshpack 不会自动授权。`,
+            name,
+          ),
+        );
+    } catch {
+      // DSH005 already reports malformed installed package.json during the bundle audit.
+    }
+  }
+}
+
 export async function checkSettings(dshHome: string, diagnostics: Diagnostic[]): Promise<void> {
   const path = join(dshHome, 'settings.yaml');
   const source = await text(path);

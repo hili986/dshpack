@@ -12,7 +12,13 @@ import {
 import { runDsh } from '../adapters/process.js';
 import { type CommandReport, diagnostic, strictDiagnostics } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
-import { checkBundles, checkPnpm, checkSettings, dshVersion } from './checks.js';
+import {
+  checkBuildAuthorization,
+  checkBundles,
+  checkPnpm,
+  checkSettings,
+  dshVersion,
+} from './checks.js';
 import {
   type DoctorInput,
   type DoctorMetadata,
@@ -132,6 +138,7 @@ export async function runDoctor(input: DoctorInput): Promise<CommandReport<Docto
         );
       await fixEmptyPatch(profile.facts, input, diagnostics);
       await checkBundles(profile.facts, input, diagnostics);
+      await checkBuildAuthorization(profile.facts, diagnostics);
       const dump = await runDsh(['--profile', input.profile, '--dump-default-config'], {
         cwd: profile.facts.root,
         dshHome: input.dshHome,

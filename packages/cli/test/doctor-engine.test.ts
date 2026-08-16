@@ -28,6 +28,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/doctor/checks.js', () => ({
+  checkBuildAuthorization: async () => undefined,
   checkBundles: async () => undefined,
   checkPnpm: async () => undefined,
   checkSettings: async () => undefined,

@@ -122,6 +122,94 @@ describe('doctor', () => {
     );
   });
 
+  it('reports unapproved build scripts in git and local dependencies without changing allowBuilds', async () => {
+    const gitHome = await makeDshHome();
+    const gitProfile = join(gitHome, 'profiles', 'demo');
+    const gitWorkspace = ["packages: ['.']", 'allowBuilds: {}', ''].join('\n');
+    await writeFile(
+      join(gitProfile, 'package.json'),
+      JSON.stringify({
+        name: 'dsh-profile-demo',
+        private: true,
+        dependencies: {
+          'demo-bundle': 'github:example/demo-bundle#0123456789012345678901234567890123456789',
+        },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'demo-bundle'] } },
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(gitProfile, 'node_modules', 'demo-bundle', 'package.json'),
+      JSON.stringify({
+        name: 'demo-bundle',
+        scripts: { postinstall: 'node build.mjs' },
+        dsh: { bundle: { patch: './cordis.patch.yml' } },
+      }),
+      'utf8',
+    );
+    await writeFile(join(gitProfile, 'pnpm-workspace.yaml'), gitWorkspace, 'utf8');
+    const gitRed = await runDoctor({
+      dshHome: gitHome,
+      profile: 'demo',
+      yes: true,
+      env: doctorEnvironment(gitHome),
+    });
+    expect(gitRed.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'DSH007', severity: 'error', path: 'demo-bundle' }),
+    );
+    await expect(readFile(join(gitProfile, 'pnpm-workspace.yaml'), 'utf8')).resolves.toBe(gitWorkspace);
+
+    await writeFile(
+      join(gitProfile, 'pnpm-workspace.yaml'),
+      [
+        "packages: ['.']",
+        'allowBuilds:',
+        "  'demo-bundle@git+https://github.com/example/demo-bundle.git': true",
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const gitGreen = await runDoctor({
+      dshHome: gitHome,
+      profile: 'demo',
+      yes: true,
+      env: doctorEnvironment(gitHome),
+    });
+    expect(gitGreen.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'DSH007' }));
+
+    const localHome = await makeDshHome();
+    const localProfile = join(localHome, 'profiles', 'demo');
+    await writeFile(
+      join(localProfile, 'package.json'),
+      JSON.stringify({
+        name: 'dsh-profile-demo',
+        private: true,
+        dependencies: { 'demo-bundle': 'file:../demo-bundle' },
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'demo-bundle'] } },
+      }),
+      'utf8',
+    );
+    await writeFile(
+      join(localProfile, 'node_modules', 'demo-bundle', 'package.json'),
+      JSON.stringify({
+        name: 'demo-bundle',
+        scripts: { prepare: 'node build.mjs' },
+        dsh: { bundle: { patch: './cordis.patch.yml' } },
+      }),
+      'utf8',
+    );
+    await writeFile(join(localProfile, 'pnpm-workspace.yaml'), gitWorkspace, 'utf8');
+    const localRed = await runDoctor({
+      dshHome: localHome,
+      profile: 'demo',
+      yes: true,
+      env: doctorEnvironment(localHome),
+    });
+    expect(localRed.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'DSH007', severity: 'error', path: 'demo-bundle' }),
+    );
+  });
+
   it('covers no-profile, absent-profile, deferred fix, and DSH010 repair branches', async () => {
     const home = await makeDshHome('');
     const env = doctorEnvironment(home);

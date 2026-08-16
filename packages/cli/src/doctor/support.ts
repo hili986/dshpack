@@ -39,7 +39,12 @@ export function versionAtLeast(value: string, minimum: readonly number[]): boole
   const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(value);
   if (!match) return false;
   const parts = match.slice(1).map(Number);
-  return parts.some((part, index) => part !== minimum[index] && part > (minimum[index] ?? 0));
+  for (const [index, part] of parts.entries()) {
+    const minimumPart = minimum[index] ?? 0;
+    if (part > minimumPart) return true;
+    if (part < minimumPart) return false;
+  }
+  return true;
 }
 
 export function profileDiagnostic(
