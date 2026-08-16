@@ -37,7 +37,11 @@ export async function securityProfile(home: string, name = 'demo'): Promise<void
     'utf8',
   );
   await writeFile(join(root, 'cordis.patch.yml'), '[]\n', 'utf8');
-  await writeFile(join(root, 'pnpm-workspace.yaml'), "packages: ['.']\n", 'utf8');
+  await writeFile(
+    join(root, 'pnpm-workspace.yaml'),
+    "packages: ['.']\nnodeLinker: hoisted\nautoInstallPeers: false\n",
+    'utf8',
+  );
 }
 
 export function securityMarker(home: string, profile = 'demo'): SecurityMarker {

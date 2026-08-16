@@ -74,6 +74,7 @@ describe('installed metadata safety', () => {
       { pack: { ...securityMarker(home).pack, manifestDigest: 'sha256-weak' } },
       { planDigest: 'sha256-weak' },
       { pack: { ...securityMarker(home).pack, version: '01.0.0' } },
+      { pack: { ...securityMarker(home).pack, version: '1.0.0-01' } },
       { source: { kind: 'github', owner: 'o', repo: 'r', commit: 'main', url: 'https://x' } },
       {
         source: {
@@ -110,7 +111,7 @@ describe('installed metadata safety', () => {
 });
 
 describe('human list terminal safety', () => {
-  it('escapes C0, C1, newline, and ESC from untrusted basenames', async () => {
+  it('escapes control and Unicode format characters from untrusted basenames', async () => {
     const stdout: string[] = [];
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
       stdout.push(String(chunk));
@@ -121,7 +122,11 @@ describe('human list terminal safety', () => {
       exitCode: 0 as const,
       metadata: {
         profiles: [
-          { profile: 'bad\n\u001b[31m\u0085name', status: 'broken' as const, reason: 'unsafe' },
+          {
+            profile: 'bad\n\u001b[31m\u0085\u202ename\u2066\u200d',
+            status: 'broken' as const,
+            reason: 'unsafe',
+          },
         ],
       },
     }));
@@ -131,6 +136,8 @@ describe('human list terminal safety', () => {
     const rendered = stdout.join('');
     expect(rendered).not.toContain('\u001b');
     expect(rendered).not.toContain('bad\n');
-    expect(rendered).toContain('bad\\u000a\\u001b[31m\\u0085name');
+    expect(rendered).not.toContain('\u202e');
+    expect(rendered).not.toContain('\u2066');
+    expect(rendered).toContain('bad\\u000a\\u001b[31m\\u0085\\u202ename\\u2066\\u200d');
   });
 });

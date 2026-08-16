@@ -1,8 +1,7 @@
-import { lstat, mkdir, readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { type Diagnostic, type Result, scanSecrets } from '@dshpack/core';
-import { Document, isNode, parseDocument, visit } from 'yaml';
+import { Document, isMap, isNode, parseDocument, visit } from 'yaml';
 
 import { writeFileAtomic } from '../adapters/fs.js';
 import {
@@ -10,6 +9,13 @@ import {
   withSettingsFileLock,
   type YamlSettingsAdapterOptions,
 } from '../adapters/settings-lock.js';
+import {
+  bindSecureRoot,
+  type DirectoryBinding,
+  readText,
+  revalidateDirectory,
+  type SafePathHooks,
+} from '../list/safe-fs.js';
 
 function success<T>(value: T): Result<T> {
   return { ok: true, value, diagnostics: [] };
@@ -41,27 +47,31 @@ function hasAliasOrAnchor(value: unknown): boolean {
   return found;
 }
 
-async function ordinarySource(path: string): Promise<Result<string>> {
-  let metadata: Awaited<ReturnType<typeof lstat>>;
-  try {
-    metadata = await lstat(path);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? success('')
+interface SettingsSource {
+  text: string;
+  root: DirectoryBinding;
+}
+
+async function ordinarySource(
+  path: string,
+  hooks: SafePathHooks = {},
+): Promise<Result<SettingsSource>> {
+  const root = await bindSecureRoot(dirname(path), hooks);
+  if (!root.ok)
+    return root.kind === 'security'
+      ? failure('E_PATH_SETTINGS', root.reason, '移除 symlink、junction 或非目录祖先后重试。', path)
       : settingsIoFailure(path);
-  }
-  if (!metadata.isFile() || metadata.isSymbolicLink())
+  const source = await readText(root.value, [basename(path)], hooks);
+  if (!source.ok && source.kind === 'missing') return success({ text: '', root: root.value });
+  if (!source.ok && source.kind === 'security')
     return failure(
       'E_PATH_SETTINGS',
-      'settings.yaml 不是普通文件，已拒绝读取或覆盖。',
+      source.reason,
       '移除 symlink、junction 或同名目录后重试。',
       path,
     );
-  try {
-    return success(await readFile(path, 'utf8'));
-  } catch {
-    return settingsIoFailure(path);
-  }
+  if (!source.ok) return settingsIoFailure(path);
+  return success({ text: source.value.text, root: root.value });
 }
 
 interface ParsedAgentPresets {
@@ -70,7 +80,17 @@ interface ParsedAgentPresets {
 }
 
 function parseAgentPresets(current: string, path: string): Result<ParsedAgentPresets> {
-  const document = parseDocument(current.trim() === '' ? '{}\n' : current, { prettyErrors: true });
+  let document: Document;
+  try {
+    document = parseDocument(current.trim() === '' ? '{}\n' : current, { prettyErrors: true });
+  } catch {
+    return failure(
+      'E_SETTINGS_INVALID_YAML',
+      'settings.yaml 解析异常，已拒绝覆盖。',
+      '先修复 YAML 语法或资源耗尽结构后重试。',
+      path,
+    );
+  }
   if (document.errors.length > 0)
     return failure(
       'E_SETTINGS_INVALID_YAML',
@@ -78,30 +98,43 @@ function parseAgentPresets(current: string, path: string): Result<ParsedAgentPre
       '先修复 YAML 语法再重试。',
       path,
     );
-  if (hasAliasOrAnchor(document.getIn(['agent-presets'], true)))
-    return failure(
-      'E_SETTINGS_ALIAS',
-      'agent-presets 含 YAML alias 或 anchor，已拒绝覆盖。',
-      '先展开该 namespace 的 alias/anchor，避免修改联动到其他 namespace。',
-      path,
-    );
-  const root: unknown = document.toJS() ?? {};
-  if (!isRecord(root))
+  if (document.contents !== null && !isMap(document.contents))
     return failure(
       'E_SETTINGS_ROOT',
       'settings.yaml 顶层必须是 namespace map，已拒绝覆盖。',
       '将顶层改为 YAML map 后重试。',
       path,
     );
-  const rawSection = root['agent-presets'];
-  if (rawSection !== undefined && !isRecord(rawSection))
+  const rawSection = document.getIn(['agent-presets'], true);
+  if (hasAliasOrAnchor(rawSection))
+    return failure(
+      'E_SETTINGS_ALIAS',
+      'agent-presets 含 YAML alias 或 anchor，已拒绝覆盖。',
+      '先展开该 namespace 的 alias/anchor，避免修改联动到其他 namespace。',
+      path,
+    );
+  if (rawSection !== undefined && !isMap(rawSection))
     return failure(
       'E_SWITCH_SETTINGS',
       'settings.yaml 的 agent-presets namespace 必须是 mapping。',
       '修复 settings.yaml 后重试。',
       path,
     );
-  const section = rawSection ?? {};
+  let section: Record<string, unknown> = {};
+  if (rawSection !== undefined) {
+    try {
+      const value: unknown = rawSection.toJSON();
+      if (!isRecord(value)) throw new TypeError('agent-presets is not a mapping');
+      section = value;
+    } catch {
+      return failure(
+        'E_SWITCH_SETTINGS',
+        'agent-presets 不能安全转换，已拒绝覆盖。',
+        '移除异常 YAML 节点后重试。',
+        path,
+      );
+    }
+  }
   const currentCandidate = new Document({ 'agent-presets': section }).toString();
   const currentSecrets = scanSecrets({
     path: `${path}#agent-presets`,
@@ -114,21 +147,26 @@ function parseAgentPresets(current: string, path: string): Result<ParsedAgentPre
 
 export async function inspectCurrentAgentPresets(
   path: string,
+  hooks: SafePathHooks = {},
 ): Promise<Result<{ selected: unknown }>> {
-  const current = await ordinarySource(path);
+  const current = await ordinarySource(path, hooks);
   if (!current.ok || current.value === undefined)
     return { ok: false, diagnostics: current.diagnostics };
-  const parsed = parseAgentPresets(current.value, path);
+  const parsed = parseAgentPresets(current.value.text, path);
   if (!parsed.ok || parsed.value === undefined)
     return { ok: false, diagnostics: parsed.diagnostics };
   return success({ selected: parsed.value.section.selected });
 }
 
-async function updateUnderLock(path: string, preset: string): Promise<Result<void>> {
-  const current = await ordinarySource(path);
+async function updateUnderLock(
+  path: string,
+  preset: string,
+  hooks: SafePathHooks,
+): Promise<Result<void>> {
+  const current = await ordinarySource(path, hooks);
   if (!current.ok || current.value === undefined)
     return { ok: false, diagnostics: current.diagnostics };
-  const parsed = parseAgentPresets(current.value, path);
+  const parsed = parseAgentPresets(current.value.text, path);
   if (!parsed.ok || parsed.value === undefined)
     return { ok: false, diagnostics: parsed.diagnostics };
   const { document, section } = parsed.value;
@@ -144,6 +182,14 @@ async function updateUnderLock(path: string, preset: string): Promise<Result<voi
     settingsNamespace: 'agent-presets',
   });
   if (secretDiagnostics.length > 0) return { ok: false, diagnostics: secretDiagnostics };
+  const stable = await revalidateDirectory(current.value.root, hooks);
+  if (!stable.ok)
+    return failure(
+      'E_PATH_SETTINGS',
+      stable.reason,
+      '确认 DSH_HOME 未被替换且不含 symlink 后重试。',
+      path,
+    );
   await writeFileAtomic(path, document.toString(), { mode: 0o600, dirMode: 0o700 });
   return success(undefined);
 }
@@ -153,13 +199,13 @@ export async function updateSelectedPreset(
   path: string,
   preset: string,
   options: YamlSettingsAdapterOptions = {},
+  hooks: SafePathHooks = {},
 ): Promise<Result<void>> {
-  try {
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  } catch {
-    return settingsIoFailure(path);
-  }
-  const locked = await withSettingsFileLock(path, () => updateUnderLock(path, preset), options);
+  const locked = await withSettingsFileLock(
+    path,
+    () => updateUnderLock(path, preset, hooks),
+    options,
+  );
   if (!locked.ok) return { ok: false, diagnostics: locked.diagnostics };
   return locked.value as Result<void>;
 }

@@ -1,10 +1,10 @@
 import type { Dirent } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 import { type CommandReport, diagnostic } from '../commands/shared.js';
 import { EXIT_CODES } from '../exit-codes.js';
 import { inspectMetadata, inspectProfile } from './contracts.js';
+import { bindSecureRoot, readDirectory, type SafePathResult } from './safe-fs.js';
 
 export type ProfileStatus = 'tracked' | 'untracked' | 'broken';
 
@@ -26,21 +26,21 @@ export interface ListInput {
   dshHome: string;
 }
 
-function environmentFailure(code: string, message: string): CommandReport<ListMetadata> {
+function commandFailure(
+  code: string,
+  message: string,
+  exitCode: 10 | 31,
+): CommandReport<ListMetadata> {
   return {
     diagnostics: [diagnostic(code, 'error', message, '设置有效的 --dsh-home 或 DSH_HOME 后重试。')],
-    exitCode: EXIT_CODES.ENVIRONMENT,
+    exitCode,
     metadata: { profiles: [] },
   };
 }
 
-async function entries(path: string): Promise<Dirent<string>[] | undefined> {
-  try {
-    return await readdir(path, { encoding: 'utf8', withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    return undefined;
-  }
+function entries(result: SafePathResult<Dirent<string>[]>): Dirent<string>[] | undefined {
+  if (result.ok) return result.value;
+  return result.kind === 'missing' || result.kind === 'security' ? [] : undefined;
 }
 
 function sortNames(names: Iterable<string>): string[] {
@@ -49,18 +49,55 @@ function sortNames(names: Iterable<string>): string[] {
 
 export async function listProfiles(input: ListInput): Promise<CommandReport<ListMetadata>> {
   if (input.dshHome.trim() === '')
-    return environmentFailure('E_DSH_HOME_REQUIRED', 'DSH_HOME 为空，已拒绝从当前目录推断。');
+    return commandFailure(
+      'E_DSH_HOME_REQUIRED',
+      'DSH_HOME 为空，已拒绝从当前目录推断。',
+      EXIT_CODES.ENVIRONMENT,
+    );
+  if (!isAbsolute(input.dshHome))
+    return commandFailure(
+      'E_PATH_DSH_HOME',
+      'DSH_HOME 必须是绝对路径，已拒绝相对路径。',
+      EXIT_CODES.SECURITY,
+    );
   const dshHome = resolve(input.dshHome);
-  const profileEntries = await entries(join(dshHome, 'profiles'));
+  const home = await bindSecureRoot(dshHome);
+  if (!home.ok)
+    return commandFailure(
+      home.kind === 'security' ? 'E_PATH_DSH_HOME' : 'E_LIST_DSH_HOME',
+      home.reason,
+      home.kind === 'security' ? EXIT_CODES.SECURITY : EXIT_CODES.ENVIRONMENT,
+    );
+  const profileResult = await readDirectory(home.value, ['profiles']);
+  const profileEntries = entries(profileResult);
   if (profileEntries === undefined)
-    return environmentFailure('E_LIST_PROFILES', '无法读取 DSH_HOME/profiles。');
-  const markerEntries = await entries(join(dshHome, '.dshpack', 'installed'));
+    return commandFailure(
+      'E_LIST_PROFILES',
+      '无法读取 DSH_HOME/profiles。',
+      EXIT_CODES.ENVIRONMENT,
+    );
+  const markerResult = await readDirectory(home.value, ['.dshpack', 'installed']);
+  const markerEntries = entries(markerResult);
   if (markerEntries === undefined)
-    return environmentFailure('E_LIST_METADATA', '无法读取 dshpack installed metadata。');
+    return commandFailure(
+      'E_LIST_METADATA',
+      '无法读取 dshpack installed metadata。',
+      EXIT_CODES.ENVIRONMENT,
+    );
 
   const names = new Set(profileEntries.map(({ name }) => name));
   for (const marker of markerEntries)
     if (marker.name.endsWith('.json')) names.add(marker.name.slice(0, -'.json'.length));
+  if (
+    names.size === 0 &&
+    ((!profileResult.ok && profileResult.kind === 'security') ||
+      (!markerResult.ok && markerResult.kind === 'security'))
+  )
+    return commandFailure(
+      'E_PATH_LIST_ROOT',
+      'profiles 或 installed metadata 路径不安全。',
+      EXIT_CODES.SECURITY,
+    );
 
   const profiles: ListedProfile[] = [];
   for (const profile of sortNames(names)) {

@@ -15,9 +15,11 @@ function escapeTerminalText(value: string): string {
   return [...value]
     .map((character) => {
       const code = character.codePointAt(0) ?? 0;
-      return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
+      const unsafe = code <= 0x1f || (code >= 0x7f && code <= 0x9f) || /\p{Cf}/u.test(character);
+      if (!unsafe) return character;
+      return code <= 0xffff
         ? `\\u${code.toString(16).padStart(4, '0')}`
-        : character;
+        : `\\u{${code.toString(16)}}`;
     })
     .join('');
 }

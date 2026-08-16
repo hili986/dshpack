@@ -26,7 +26,11 @@ async function fixture(tracked = true): Promise<string> {
     'utf8',
   );
   await writeFile(join(profile, 'cordis.patch.yml'), '[]\n', 'utf8');
-  await writeFile(join(profile, 'pnpm-workspace.yaml'), "packages: ['.']\n", 'utf8');
+  await writeFile(
+    join(profile, 'pnpm-workspace.yaml'),
+    "packages: ['.']\nnodeLinker: hoisted\nautoInstallPeers: false\n",
+    'utf8',
+  );
   await mkdir(join(home, '.agent-presets', 'demo-preset'), { recursive: true });
   await writeFile(join(home, '.agent-presets', 'demo-preset', 'agent.cordis.yml'), '[]\n');
   if (tracked) {

@@ -145,16 +145,16 @@ describe('listProfiles', () => {
     const root = await home();
     await writeFile(join(root, 'profiles'), 'not a directory', 'utf8');
     await expect(listProfiles({ dshHome: root })).resolves.toMatchObject({
-      exitCode: 10,
-      diagnostics: [expect.objectContaining({ code: 'E_LIST_PROFILES' })],
+      exitCode: 31,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_LIST_ROOT' })],
     });
 
     const markerRoot = await home();
     await mkdir(join(markerRoot, '.dshpack'), { recursive: true });
     await writeFile(join(markerRoot, '.dshpack', 'installed'), 'not a directory', 'utf8');
     await expect(listProfiles({ dshHome: markerRoot })).resolves.toMatchObject({
-      exitCode: 10,
-      diagnostics: [expect.objectContaining({ code: 'E_LIST_METADATA' })],
+      exitCode: 31,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_LIST_ROOT' })],
     });
   });
 
@@ -210,7 +210,7 @@ describe('profile and metadata contracts', () => {
     await writeFile(join(root, 'profiles', 'file-profile'), 'file', 'utf8');
     await expect(inspectProfile(root, 'file-profile')).resolves.toMatchObject({
       status: 'broken',
-      reason: 'profile 路径不是普通目录。',
+      failureKind: 'security',
     });
 
     const target = join(root, 'target-profile');
@@ -218,7 +218,7 @@ describe('profile and metadata contracts', () => {
     await symlink(target, join(root, 'profiles', 'linked-profile'), 'junction');
     await expect(inspectProfile(root, 'linked-profile')).resolves.toMatchObject({
       status: 'broken',
-      reason: 'profile 路径不是普通目录。',
+      failureKind: 'security',
     });
 
     await mkdir(join(root, 'profiles', 'missing-base'));
@@ -273,7 +273,7 @@ describe('profile and metadata contracts', () => {
     for (const value of ['[unterminated', '- item\n']) {
       await writeFile(workspace, value, 'utf8');
       await expect(inspectProfile(root, 'contract')).resolves.toMatchObject({
-        reason: 'profile pnpm-workspace.yaml 顶层必须是 object。',
+        reason: 'profile pnpm-workspace.yaml 不符合官方初始化基座。',
       });
     }
   });

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +21,7 @@ afterEach(async () => {
 describe('updateSelectedPreset', () => {
   it('creates a missing document and updates only the selected leaf', async () => {
     const root = await temporary();
-    const path = join(root, 'nested', 'settings.yaml');
+    const path = join(root, 'settings.yaml');
     await expect(updateSelectedPreset(path, 'alpha')).resolves.toMatchObject({ ok: true });
     expect(await readFile(path, 'utf8')).toContain('selected: alpha');
 
@@ -112,6 +112,35 @@ describe('updateSelectedPreset', () => {
       diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],
     });
     await expect(updateSelectedPreset(path, 'alpha')).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],
+    });
+  });
+
+  it('reads only agent-presets and never expands aliases in unrelated namespaces', async () => {
+    const root = await temporary();
+    const path = join(root, 'settings.yaml');
+    const aliases = Array.from({ length: 101 }, () => '*base').join(', ');
+    await writeFile(
+      path,
+      `base: &base [one]\nbomb: [${aliases}]\nagent-presets:\n  selected: old\n`,
+      'utf8',
+    );
+    await expect(inspectCurrentAgentPresets(path)).resolves.toMatchObject({
+      ok: true,
+      value: { selected: 'old' },
+    });
+    await expect(updateSelectedPreset(path, 'new')).resolves.toMatchObject({ ok: true });
+    expect(await readFile(path, 'utf8')).toContain('selected: new');
+  });
+
+  it('rejects a settings path whose parent resolves through a junction', async () => {
+    const root = await temporary();
+    const target = join(root, 'target');
+    const linked = join(root, 'linked');
+    await mkdir(target);
+    await symlink(target, linked, 'junction');
+    await expect(inspectCurrentAgentPresets(join(linked, 'settings.yaml'))).resolves.toMatchObject({
       ok: false,
       diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],
     });

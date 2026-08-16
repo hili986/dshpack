@@ -30,7 +30,10 @@ async function dshHome(): Promise<{ home: string; log: string; shim: string }> {
     'utf8',
   );
   await writeFile(join(profile, 'cordis.patch.yml'), '[]\n');
-  await writeFile(join(profile, 'pnpm-workspace.yaml'), "packages: ['.']\n");
+  await writeFile(
+    join(profile, 'pnpm-workspace.yaml'),
+    "packages: ['.']\nnodeLinker: hoisted\nautoInstallPeers: false\n",
+  );
   await copyFile(join(fixtureDirectory, 'process-shim.mjs'), join(shim, 'process-shim.mjs'));
   if (process.platform === 'win32')
     await copyFile(join(fixtureDirectory, 'dsh.cmd'), join(shim, 'dsh.cmd'));

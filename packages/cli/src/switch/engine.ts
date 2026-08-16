@@ -1,4 +1,4 @@
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import { confirm, isCancel } from '@clack/prompts';
 import { execa } from 'execa';
@@ -6,11 +6,13 @@ import { execa } from 'execa';
 import { type CommandReport, diagnostic, exitCodeFor } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import {
+  type InspectionFailureKind,
   inspectMetadata,
+  inspectPreset,
   inspectProfile,
   isSafeProfileName,
-  presetExists,
 } from '../list/contracts.js';
+import { revalidateDirectory } from '../list/safe-fs.js';
 import { inspectCurrentAgentPresets, updateSelectedPreset } from './settings.js';
 
 export interface SwitchInput {
@@ -125,6 +127,11 @@ function isUnsafeProfileInput(profile: string): boolean {
   );
 }
 
+function exitForFailure(kind: InspectionFailureKind): ExitCode {
+  if (kind === 'security') return EXIT_CODES.SECURITY;
+  return kind === 'environment' ? EXIT_CODES.ENVIRONMENT : EXIT_CODES.CONTRACT;
+}
+
 async function setDefaultPreset(
   input: SwitchInput,
   dshHome: string,
@@ -145,7 +152,7 @@ async function setDefaultPreset(
       'E_SWITCH_METADATA',
       metadataState.reason,
       '修复 installed metadata 或重新安装该 pack。',
-      EXIT_CODES.CONTRACT,
+      exitForFailure(metadataState.failureKind),
     );
   const preset = metadataState.metadata.defaults.agentPreset;
   if (preset === undefined)
@@ -156,13 +163,18 @@ async function setDefaultPreset(
       '不要使用 --set-default-preset，或安装声明默认 preset 的 pack。',
       EXIT_CODES.CONTRACT,
     );
-  if (!(await presetExists(dshHome, preset)))
+  const presetState = await inspectPreset(dshHome, preset);
+  if (presetState.status !== 'valid')
     return report(
       input,
-      'E_SWITCH_PRESET_MISSING',
-      'installed metadata 指定的默认 preset 不存在。',
+      presetState.status === 'broken' ? 'E_SWITCH_PRESET_PATH' : 'E_SWITCH_PRESET_MISSING',
+      presetState.status === 'broken'
+        ? presetState.reason
+        : 'installed metadata 指定的默认 preset 不存在。',
       `恢复 .agent-presets/${preset}/agent.cordis.yml 后重试。`,
-      EXIT_CODES.CONTRACT,
+      presetState.status === 'broken'
+        ? exitForFailure(presetState.failureKind)
+        : EXIT_CODES.CONTRACT,
     );
 
   const current = await inspectCurrentAgentPresets(join(dshHome, 'settings.yaml'));
@@ -177,7 +189,17 @@ async function setDefaultPreset(
         settingsChanged: false,
       },
     };
-  runtime.showDiff(settingsDiff(current.value.selected, preset));
+  try {
+    runtime.showDiff(settingsDiff(current.value.selected, preset));
+  } catch {
+    return report(
+      input,
+      'E_SWITCH_DIFF_OUTPUT',
+      '无法安全显示 settings diff。',
+      '修复 stderr 输出环境后重试。',
+      EXIT_CODES.ENVIRONMENT,
+    );
+  }
   if (input.yes !== true) {
     if (input.json === true || !runtime.isTTY)
       return report(
@@ -187,10 +209,21 @@ async function setDefaultPreset(
         `非交互执行：${nonInteractiveCommand(input, dshHome)}`,
         EXIT_CODES.USER_DECLINED,
       );
-    const accepted = await runtime.confirm({
-      message: '确认将默认 agent preset 写入 settings.yaml？[新会话生效]',
-      initialValue: false,
-    });
+    let accepted = false;
+    try {
+      accepted = await runtime.confirm({
+        message: '确认将默认 agent preset 写入 settings.yaml？[新会话生效]',
+        initialValue: false,
+      });
+    } catch {
+      return report(
+        input,
+        'E_SWITCH_CONFIRM_IO',
+        '交互确认失败，未写入 settings。',
+        '修复终端输入后重试。',
+        EXIT_CODES.ENVIRONMENT,
+      );
+    }
     if (!accepted)
       return report(
         input,
@@ -235,6 +268,14 @@ export async function switchProfile(
       '设置 --dsh-home 或 DSH_HOME 后重试。',
       EXIT_CODES.ENVIRONMENT,
     );
+  if (!isAbsolute(input.dshHome))
+    return report(
+      input,
+      'E_PATH_DSH_HOME',
+      'DSH_HOME 必须是绝对路径，已拒绝相对路径。',
+      '使用 --dsh-home <absolute-path> 后重试。',
+      EXIT_CODES.SECURITY,
+    );
   if (!isSafeProfileName(input.profile)) {
     const unsafe = isUnsafeProfileInput(input.profile);
     return report(
@@ -253,7 +294,7 @@ export async function switchProfile(
       'E_SWITCH_PROFILE',
       profileState.reason,
       '修复或初始化该 profile 后重试。',
-      EXIT_CODES.CONTRACT,
+      exitForFailure(profileState.failureKind),
     );
   let settingsChanged = false;
   if (input.setDefaultPreset === true) {
@@ -268,10 +309,20 @@ export async function switchProfile(
         'E_SWITCH_METADATA',
         metadataState.reason,
         '修复 installed metadata 或重新安装该 pack。',
-        EXIT_CODES.CONTRACT,
+        exitForFailure(metadataState.failureKind),
       );
   }
   if (input.run === true) {
+    const stableProfile = await revalidateDirectory(profileState.binding);
+    if (!stableProfile.ok)
+      return report(
+        input,
+        'E_PATH_PROFILE_CHANGED',
+        stableProfile.reason,
+        '确认 profile 路径未被替换且不含 symlink 后重试。',
+        EXIT_CODES.SECURITY,
+        { ran: false, settingsChanged },
+      );
     let childExit: number;
     try {
       childExit = await runtime.spawnDsh(input.profile, dshHome);

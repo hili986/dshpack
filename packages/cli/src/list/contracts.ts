@@ -1,14 +1,22 @@
-import { lstat, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
 import { parseCanonicalYaml, validatePackPath } from '@dshpack/core';
+import { valid } from 'semver';
+
+import {
+  bindDirectory,
+  bindSecureRoot,
+  type DirectoryBinding,
+  readText,
+  revalidateDirectory,
+  type SafePathFailureKind,
+  type SafePathHooks,
+} from './safe-fs.js';
 
 export const PROFILE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const RESERVED_PROFILES = new Set(['web', 'headless', '.', '..']);
 const PRESET_NAME = /^[a-z0-9][a-z0-9-]*$/u;
 const RESERVED_PRESETS = new Set(['standard', 'code', 'minimal', 'cordis']);
-const SEMVER =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const SHA256 = /^sha256-[A-Za-z0-9_-]{43}$/u;
 const SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -42,14 +50,21 @@ export interface InstalledMetadataV0 {
 }
 
 export type ProfileInspection =
-  | { status: 'valid'; root: string }
-  | { status: 'missing'; reason: string }
-  | { status: 'broken'; reason: string };
+  | { status: 'valid'; root: string; binding: DirectoryBinding }
+  | { status: 'missing'; reason: string; failureKind: 'contract' }
+  | { status: 'broken'; reason: string; failureKind: InspectionFailureKind };
 
 export type MetadataInspection =
   | { status: 'valid'; metadata: InstalledMetadataV0 }
   | { status: 'missing' }
-  | { status: 'broken'; reason: string };
+  | { status: 'broken'; reason: string; failureKind: InspectionFailureKind };
+
+export type PresetInspection =
+  | { status: 'valid' }
+  | { status: 'missing' }
+  | { status: 'broken'; reason: string; failureKind: InspectionFailureKind };
+
+export type InspectionFailureKind = 'contract' | 'security' | 'environment';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -73,65 +88,53 @@ function isSafePresetName(name: string): boolean {
   return PRESET_NAME.test(name) && !RESERVED_PRESETS.has(name);
 }
 
-type RegularText =
-  | { kind: 'text'; value: string }
-  | { kind: 'missing' }
-  | { kind: 'unsafe' }
-  | { kind: 'unreadable' };
-
-async function regularText(path: string): Promise<RegularText> {
-  try {
-    const metadata = await lstat(path);
-    if (!metadata.isFile() || metadata.isSymbolicLink()) return { kind: 'unsafe' };
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { kind: 'missing' }
-      : { kind: 'unreadable' };
-  }
-  try {
-    return { kind: 'text', value: await readFile(path, 'utf8') };
-  } catch {
-    return { kind: 'unreadable' };
-  }
+function failureKind(kind: SafePathFailureKind): InspectionFailureKind {
+  return kind === 'security' ? 'security' : 'environment';
 }
 
-export async function inspectProfile(dshHome: string, profile: string): Promise<ProfileInspection> {
-  if (!isSafeProfileName(profile))
-    return { status: 'broken', reason: 'profile 名称不符合安全规则。' };
-  const root = join(dshHome, 'profiles', profile);
-  try {
-    const metadata = await lstat(root);
-    if (!metadata.isDirectory() || metadata.isSymbolicLink())
-      return { status: 'broken', reason: 'profile 路径不是普通目录。' };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-      return { status: 'missing', reason: 'profile 不存在。' };
-    return { status: 'broken', reason: 'profile 路径不可读取。' };
-  }
+function broken(reason: string, kind: InspectionFailureKind = 'contract'): ProfileInspection {
+  return { status: 'broken', reason, failureKind: kind };
+}
 
-  const packageText = await regularText(join(root, 'package.json'));
-  const patchText = await regularText(join(root, 'cordis.patch.yml'));
-  const workspaceText = await regularText(join(root, 'pnpm-workspace.yaml'));
-  const baseFiles = [packageText, patchText, workspaceText];
-  if (baseFiles.some(({ kind }) => kind === 'unsafe'))
-    return { status: 'broken', reason: 'profile 基座文件不是普通文件。' };
-  if (baseFiles.some(({ kind }) => kind === 'unreadable'))
-    return { status: 'broken', reason: 'profile 基座文件不可读取。' };
-  if (baseFiles.some(({ kind }) => kind === 'missing'))
-    return { status: 'broken', reason: 'profile 缺少官方初始化基座文件。' };
-  if (packageText.kind !== 'text' || patchText.kind !== 'text' || workspaceText.kind !== 'text')
-    return { status: 'broken', reason: 'profile 基座文件状态不一致。' };
+export async function inspectProfile(
+  dshHome: string,
+  profile: string,
+  hooks: SafePathHooks = {},
+): Promise<ProfileInspection> {
+  if (!isSafeProfileName(profile)) return broken('profile 名称不符合安全规则。');
+  const root = join(dshHome, 'profiles', profile);
+  const home = await bindSecureRoot(dshHome, hooks);
+  if (!home.ok)
+    return home.kind === 'missing'
+      ? { status: 'missing', reason: 'DSH_HOME 不存在。', failureKind: 'contract' }
+      : broken(home.reason, failureKind(home.kind));
+  const profileDirectory = await bindDirectory(home.value, ['profiles', profile], hooks);
+  if (!profileDirectory.ok)
+    return profileDirectory.kind === 'missing'
+      ? { status: 'missing', reason: 'profile 不存在。', failureKind: 'contract' }
+      : broken(profileDirectory.reason, failureKind(profileDirectory.kind));
+
+  const paths = ['package.json', 'cordis.patch.yml', 'pnpm-workspace.yaml'] as const;
+  const files = [];
+  for (const name of paths) {
+    const file = await readText(home.value, ['profiles', profile, name], hooks);
+    if (!file.ok)
+      return file.kind === 'missing'
+        ? broken('profile 缺少官方初始化基座文件。')
+        : broken(file.reason, failureKind(file.kind));
+    files.push(file.value.text);
+  }
+  const [packageText, patchText, workspaceText] = files as [string, string, string];
 
   let manifest: unknown;
   try {
-    manifest = JSON.parse(packageText.value);
+    manifest = JSON.parse(packageText);
   } catch {
-    return { status: 'broken', reason: 'profile package.json 不能解析。' };
+    return broken('profile package.json 不能解析。');
   }
-  if (!isRecord(manifest))
-    return { status: 'broken', reason: 'profile package.json 顶层必须是 object。' };
+  if (!isRecord(manifest)) return broken('profile package.json 顶层必须是 object。');
   if (manifest.name !== `dsh-profile-${profile}`)
-    return { status: 'broken', reason: 'profile package.json.name 与最终目录名不一致。' };
+    return broken('profile package.json.name 与最终目录名不一致。');
   const dsh = manifest.dsh;
   const profileConfig = isRecord(dsh) ? dsh.profile : undefined;
   const bundles = isRecord(profileConfig) ? profileConfig.bundles : undefined;
@@ -141,21 +144,36 @@ export async function inspectProfile(dshHome: string, profile: string): Promise<
     !isStringArray(bundles) ||
     new Set(bundles).size !== bundles.length
   )
-    return { status: 'broken', reason: 'profile package.json 契约不合法。' };
+    return broken('profile package.json 契约不合法。');
 
-  const patch = parseCanonicalYaml(patchText.value, { allowJsTag: true });
+  const patch = parseCanonicalYaml(patchText, { allowJsTag: true });
   if (!patch.ok || !Array.isArray(patch.value?.value))
-    return { status: 'broken', reason: 'profile cordis.patch.yml 顶层必须是 array。' };
-  const workspace = parseCanonicalYaml(workspaceText.value);
-  if (!workspace.ok || !isRecord(workspace.value?.value))
-    return { status: 'broken', reason: 'profile pnpm-workspace.yaml 顶层必须是 object。' };
-  return { status: 'valid', root };
+    return broken('profile cordis.patch.yml 顶层必须是 array。');
+  const workspace = parseCanonicalYaml(workspaceText);
+  const workspaceValue = workspace.value?.value;
+  if (
+    !workspace.ok ||
+    !isRecord(workspaceValue) ||
+    !Array.isArray(workspaceValue.packages) ||
+    workspaceValue.packages.length !== 1 ||
+    workspaceValue.packages[0] !== '.' ||
+    workspaceValue.nodeLinker !== 'hoisted' ||
+    workspaceValue.autoInstallPeers !== false
+  )
+    return broken('profile pnpm-workspace.yaml 不符合官方初始化基座。');
+  const stable = await revalidateDirectory(profileDirectory.value, hooks);
+  if (!stable.ok) return broken(stable.reason, 'security');
+  return { status: 'valid', root, binding: profileDirectory.value };
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validSemver(value: unknown): value is string {
+  return typeof value === 'string' && valid(value) === value;
 }
 
 function validHttps(value: unknown): value is string {
@@ -208,8 +226,7 @@ function validSource(value: unknown): value is Record<string, unknown> {
 
 function validResolved(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
-  if (exactKeys(value, ['version']))
-    return typeof value.version === 'string' && SEMVER.test(value.version);
+  if (exactKeys(value, ['version'])) return validSemver(value.version);
   if (exactKeys(value, ['commit']))
     return typeof value.commit === 'string' && COMMIT.test(value.commit);
   return exactKeys(value, ['url']) && validHttps(value.url);
@@ -267,9 +284,18 @@ function validInstalledAt(value: unknown): value is string {
 }
 
 function parseInstalledMetadata(value: unknown, profile: string): MetadataInspection {
-  if (!isRecord(value)) return { status: 'broken', reason: 'installed metadata 格式不合法。' };
+  if (!isRecord(value))
+    return {
+      status: 'broken',
+      reason: 'installed metadata 格式不合法。',
+      failureKind: 'contract',
+    };
   if (value.profile !== profile)
-    return { status: 'broken', reason: 'installed metadata 的 profile 与文件名不一致。' };
+    return {
+      status: 'broken',
+      reason: 'installed metadata 的 profile 与文件名不一致。',
+      failureKind: 'contract',
+    };
   const pack = value.pack;
   const defaults = value.defaults;
   const agentPreset = isRecord(defaults) ? defaults.agentPreset : undefined;
@@ -291,8 +317,7 @@ function parseInstalledMetadata(value: unknown, profile: string): MetadataInspec
     !exactKeys(pack, ['name', 'version', 'manifestDigest']) ||
     typeof pack.name !== 'string' ||
     !isSafeProfileName(pack.name) ||
-    typeof pack.version !== 'string' ||
-    !SEMVER.test(pack.version) ||
+    !validSemver(pack.version) ||
     typeof pack.manifestDigest !== 'string' ||
     !SHA256.test(pack.manifestDigest) ||
     typeof value.planDigest !== 'string' ||
@@ -316,30 +341,58 @@ function parseInstalledMetadata(value: unknown, profile: string): MetadataInspec
     value.sideEffects.length !== 1 ||
     value.sideEffects[0] !== 'profile/cordis.yml'
   )
-    return { status: 'broken', reason: 'installed metadata 格式不合法。' };
+    return {
+      status: 'broken',
+      reason: 'installed metadata 格式不合法。',
+      failureKind: 'contract',
+    };
   return { status: 'valid', metadata: value as unknown as InstalledMetadataV0 };
 }
 
 export async function inspectMetadata(
   dshHome: string,
   profile: string,
+  hooks: SafePathHooks = {},
 ): Promise<MetadataInspection> {
-  const path = join(dshHome, '.dshpack', 'installed', `${profile}.json`);
-  const source = await regularText(path);
-  if (source.kind === 'missing') return { status: 'missing' };
-  if (source.kind === 'unsafe')
-    return { status: 'broken', reason: 'installed metadata 不是普通文件。' };
-  if (source.kind === 'unreadable')
-    return { status: 'broken', reason: 'installed metadata 不可读取。' };
+  const home = await bindSecureRoot(dshHome, hooks);
+  if (!home.ok) {
+    if (home.kind === 'missing') return { status: 'missing' };
+    return { status: 'broken', reason: home.reason, failureKind: failureKind(home.kind) };
+  }
+  const source = await readText(home.value, ['.dshpack', 'installed', `${profile}.json`], hooks);
+  if (!source.ok) {
+    if (source.kind === 'missing') return { status: 'missing' };
+    return { status: 'broken', reason: source.reason, failureKind: failureKind(source.kind) };
+  }
   try {
-    return parseInstalledMetadata(JSON.parse(source.value), profile);
+    return parseInstalledMetadata(JSON.parse(source.value.text), profile);
   } catch {
-    return { status: 'broken', reason: 'installed metadata 不是有效 JSON。' };
+    return {
+      status: 'broken',
+      reason: 'installed metadata 不是有效 JSON。',
+      failureKind: 'contract',
+    };
   }
 }
 
+export async function inspectPreset(
+  dshHome: string,
+  preset: string,
+  hooks: SafePathHooks = {},
+): Promise<PresetInspection> {
+  if (!isSafePresetName(preset))
+    return { status: 'broken', reason: 'preset 名称不符合安全规则。', failureKind: 'contract' };
+  const home = await bindSecureRoot(dshHome, hooks);
+  if (!home.ok) {
+    if (home.kind === 'missing') return { status: 'missing' };
+    return { status: 'broken', reason: home.reason, failureKind: failureKind(home.kind) };
+  }
+  const file = await readText(home.value, ['.agent-presets', preset, 'agent.cordis.yml'], hooks);
+  if (file.ok) return { status: 'valid' };
+  if (file.kind === 'missing') return { status: 'missing' };
+  return { status: 'broken', reason: file.reason, failureKind: failureKind(file.kind) };
+}
+
 export async function presetExists(dshHome: string, preset: string): Promise<boolean> {
-  if (!isSafePresetName(preset)) return false;
-  const path = join(dshHome, '.agent-presets', preset, 'agent.cordis.yml');
-  return (await regularText(path)).kind === 'text';
+  return (await inspectPreset(dshHome, preset)).status === 'valid';
 }
