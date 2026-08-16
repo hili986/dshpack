@@ -149,11 +149,15 @@ export function createPathProcessRuntime(
   };
   return {
     async probe(dshHome) {
+      // A first-use DSH_HOME intentionally does not exist yet. It belongs in the child
+      // environment, but cannot be the process cwd because spawn rejects a missing cwd before
+      // either dsh.cmd or pnpm.cmd gets a chance to initialize it.
+      const probeCwd = process.cwd();
       const dsh = await run(
         'dsh',
         ['--version'],
         dshHome,
-        dshHome,
+        probeCwd,
         5_000,
         'deny',
         'inherited-safe',
@@ -162,7 +166,7 @@ export function createPathProcessRuntime(
         'pnpm',
         ['--version'],
         dshHome,
-        dshHome,
+        probeCwd,
         5_000,
         'deny',
         'inherited-safe',

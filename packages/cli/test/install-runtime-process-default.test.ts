@@ -30,6 +30,20 @@ describe('install default PATH subprocess', () => {
     );
   });
 
+  it('probes a fresh isolated DSH_HOME from an existing process cwd', async () => {
+    vi.mocked(execa)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: '0.1.0-rc.6\n', stderr: '' } as never)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: '10.0.0\n', stderr: '' } as never);
+    const process = createPathProcessRuntime();
+    const freshHome = 'C:/isolated-dsh-home-that-does-not-exist';
+
+    await process.probe(freshHome);
+
+    const firstOptions = vi.mocked(execa).mock.calls[0]?.[2];
+    expect(firstOptions?.cwd).toBe(globalThis.process.cwd());
+    expect(firstOptions?.env.DSH_HOME).toBe(freshHome);
+  });
+
   it('uses execa directly with no shell, no rejection, and no descendant killing', async () => {
     vi.mocked(execa)
       .mockResolvedValueOnce({ exitCode: 0, stdout: '0.1.0-rc.6\n', stderr: '' } as never)
