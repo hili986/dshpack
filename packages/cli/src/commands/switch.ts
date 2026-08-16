@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { type SwitchInput, type SwitchMetadata, switchProfile } from '../switch/engine.js';
 import type { CommandReport } from './shared.js';
-import { writeReport } from './shared.js';
+import { resolveDshHome, writeReport } from './shared.js';
 
 export const switchCommand = {
   name: 'switch',
@@ -28,8 +28,13 @@ export function registerSwitchCommand(
       ) => {
         const root = program.opts<{ dshHome?: string; json?: boolean }>();
         const json = options.json === true || root.json === true;
+        const home = resolveDshHome(program);
+        if (!home.ok) {
+          writeReport(home.report, json);
+          return;
+        }
         const report = await runSwitch({
-          dshHome: root.dshHome ?? process.env.DSH_HOME ?? '',
+          dshHome: home.value,
           profile,
           json,
           run: options.run === true,

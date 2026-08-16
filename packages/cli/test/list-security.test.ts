@@ -132,7 +132,7 @@ describe('human list terminal safety', () => {
     }));
     const program = new Command().option('--dsh-home <path>').option('--json');
     registerListCommand(program, run);
-    await program.parseAsync(['node', 'dshpack', 'list']);
+    await program.parseAsync(['node', 'dshpack', '--dsh-home', process.cwd(), 'list']);
     const rendered = stdout.join('');
     expect(rendered).not.toContain('\u001b');
     expect(rendered).not.toContain('bad\n');

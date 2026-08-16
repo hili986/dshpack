@@ -2,7 +2,7 @@ import type { Command } from 'commander';
 
 import { type ListedProfile, type ListMetadata, listProfiles } from '../list/engine.js';
 import type { CommandReport } from './shared.js';
-import { writeReport } from './shared.js';
+import { resolveDshHome, writeReport } from './shared.js';
 
 export const listCommand = {
   name: 'list',
@@ -47,8 +47,13 @@ export function registerListCommand(program: Command, run: ListRunner = listProf
     .option('--json', 'stdout 仅输出一个 JSON object')
     .action(async (options: { json?: boolean }) => {
       const root = program.opts<{ dshHome?: string; json?: boolean }>();
-      const report = await run({ dshHome: root.dshHome ?? process.env.DSH_HOME ?? '' });
       const json = options.json === true || root.json === true;
+      const home = resolveDshHome(program);
+      if (!home.ok) {
+        writeReport(home.report, json);
+        return;
+      }
+      const report = await run({ dshHome: home.value });
       writeReport(report, json);
       if (report.exitCode === 0 && !json) showProfiles(report.metadata.profiles);
     });

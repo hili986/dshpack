@@ -47,9 +47,7 @@ function dshHomeRequiredFailure(): DshHomeResolution {
 }
 
 /** Resolve an explicit safe home before command engines can perform I/O. */
-export function resolveDshHome(program: Command): DshHomeResolution {
-  const rootValue = program.opts<{ dshHome?: string }>().dshHome;
-  const configured = rootValue ?? process.env.DSH_HOME;
+export function resolveDshHomeValue(configured: string | undefined): DshHomeResolution {
   if (configured === undefined) return dshHomeRequiredFailure();
   const value = configured.trim();
   if (value.length === 0) return dshHomeRequiredFailure();
@@ -61,8 +59,20 @@ export function resolveDshHome(program: Command): DshHomeResolution {
       EXIT_CODES.SECURITY,
     );
   }
-  if (!isAbsolute(value)) return dshHomeRequiredFailure();
+  if (!isAbsolute(value))
+    return dshHomeFailure(
+      'E_PATH_DSH_HOME',
+      'DSH_HOME 必须是绝对路径，已拒绝相对路径。',
+      '请通过 --dsh-home 或 DSH_HOME 设置绝对路径。',
+      EXIT_CODES.SECURITY,
+    );
   return { ok: true, value: resolve(value) };
+}
+
+/** Resolve the root command option or environment without exposing rejected input. */
+export function resolveDshHome(program: Command): DshHomeResolution {
+  const rootValue = program.opts<{ dshHome?: string }>().dshHome;
+  return resolveDshHomeValue(rootValue ?? process.env.DSH_HOME);
 }
 
 export function diagnostic(

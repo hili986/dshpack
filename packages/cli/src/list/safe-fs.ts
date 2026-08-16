@@ -147,9 +147,16 @@ async function appendDirectories(
   for (const expected of root.entries) {
     const current = await inspectDirectory(expected.path, hooks);
     if (!current.ok) return changed(expected.path);
-    if (current.value.identity !== expected.identity) return changed(expected.path);
+    if (
+      current.value.identity !== expected.identity ||
+      current.value.canonical !== expected.canonical
+    )
+      return changed(expected.path);
     entries.push(current.value);
   }
+  const currentRoot = entries[0] as DirectoryIdentity;
+  if (relative(resolve(root.rootPath), resolve(currentRoot.canonical)) !== '')
+    return changed(root.rootPath);
   let cursor = (entries.at(-1) as DirectoryIdentity).path;
   for (const segment of segments) {
     cursor = join(cursor, segment);

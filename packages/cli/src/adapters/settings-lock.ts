@@ -7,6 +7,7 @@ export interface SettingsClock {
 }
 
 export interface YamlSettingsAdapterOptions {
+  beforeLockAcquire?: () => Promise<Result<void>>;
   clock?: SettingsClock;
   removeLock?: (path: string) => Promise<void>;
   writeLockContents?: (handle: FileHandle, owner: string) => Promise<void>;
@@ -142,6 +143,15 @@ export async function withSettingsFileLock<T>(
   let identity: LockIdentity;
 
   for (;;) {
+    if (options.beforeLockAcquire !== undefined) {
+      let guarded: Result<void>;
+      try {
+        guarded = await options.beforeLockAcquire();
+      } catch {
+        return settingsIoFailure(lockPath);
+      }
+      if (!guarded.ok) return fail(guarded.diagnostics);
+    }
     const attempt = await tryAcquireLock(
       lockPath,
       owner,

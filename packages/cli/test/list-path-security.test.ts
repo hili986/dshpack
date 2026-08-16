@@ -59,6 +59,14 @@ describe('profile path confinement', () => {
       exitCode: 31,
     });
   });
+
+  it('rejects and redacts control characters in an absolute DSH_HOME', async () => {
+    const base = await securityHome('list-control-home');
+    roots.push(base);
+    const report = await listProfiles({ dshHome: `${join(base, 'missing')}\u0001secret` });
+    expect(report.exitCode).toBe(31);
+    expect(JSON.stringify(report.diagnostics)).not.toContain('secret');
+  });
 });
 
 describe('atomic metadata reads', () => {

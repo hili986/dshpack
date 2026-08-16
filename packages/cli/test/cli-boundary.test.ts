@@ -11,7 +11,7 @@ vi.mock('../src/doctor/engine.js', () => ({ runDoctor: runners.doctor }));
 vi.mock('../src/export/engine.js', () => ({ exportProfile: runners.exportProfile }));
 
 import { runCli } from '../src/cli.js';
-import { diagnostic, exitCodeFor } from '../src/commands/shared.js';
+import { diagnostic, exitCodeFor, resolveDshHomeValue } from '../src/commands/shared.js';
 
 interface CapturedRun {
   exitCode: number | undefined;
@@ -51,43 +51,44 @@ afterEach(() => {
 });
 
 describe('global DSH_HOME boundary', () => {
-  it.each([undefined, '', 'relative/dsh-home'])(
-    'rejects doctor DSH_HOME %j before the engine',
-    async (home) => {
-      if (home === undefined) delete process.env.DSH_HOME;
-      else process.env.DSH_HOME = home;
+  it.each([
+    [undefined, 10, 'E_DSH_HOME_REQUIRED'],
+    ['', 10, 'E_DSH_HOME_REQUIRED'],
+    ['relative/dsh-home', 31, 'E_PATH_DSH_HOME'],
+  ] as const)('rejects doctor DSH_HOME %j before the engine', async (home, exitCode, code) => {
+    if (home === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = home;
 
-      const result = await capture(['--json', 'doctor']);
+    const result = await capture(['--json', 'doctor']);
 
-      expect(result).toMatchObject({ exitCode: 10, stderr: '' });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        diagnostics: [expect.objectContaining({ code: 'E_DSH_HOME_REQUIRED' })],
-      });
-      expect(runners.doctor).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toMatchObject({ exitCode, stderr: '' });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      diagnostics: [expect.objectContaining({ code })],
+    });
+    expect(runners.doctor).not.toHaveBeenCalled();
+  });
 
-  it.each(['', 'relative/dsh-home'])(
-    'rejects export DSH_HOME %j before the engine',
-    async (home) => {
-      process.env.DSH_HOME = home;
+  it.each([
+    ['', 10, 'E_DSH_HOME_REQUIRED'],
+    ['relative/dsh-home', 31, 'E_PATH_DSH_HOME'],
+  ] as const)('rejects export DSH_HOME %j before the engine', async (home, exitCode, code) => {
+    process.env.DSH_HOME = home;
 
-      const result = await capture([
-        'export',
-        '--json',
-        '--profile',
-        'demo',
-        '--output',
-        'unused-output',
-      ]);
+    const result = await capture([
+      'export',
+      '--json',
+      '--profile',
+      'demo',
+      '--output',
+      'unused-output',
+    ]);
 
-      expect(result).toMatchObject({ exitCode: 10, stderr: '' });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        diagnostics: [expect.objectContaining({ code: 'E_DSH_HOME_REQUIRED' })],
-      });
-      expect(runners.exportProfile).not.toHaveBeenCalled();
-    },
-  );
+    expect(result).toMatchObject({ exitCode, stderr: '' });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      diagnostics: [expect.objectContaining({ code })],
+    });
+    expect(runners.exportProfile).not.toHaveBeenCalled();
+  });
 
   it('forwards a normalized absolute DSH_HOME', async () => {
     const home = process.cwd();
@@ -109,9 +110,9 @@ describe('global DSH_HOME boundary', () => {
 
     const result = await capture(['--dsh-home', 'relative/home', 'doctor', '--json']);
 
-    expect(result).toMatchObject({ exitCode: 10, stderr: '' });
+    expect(result).toMatchObject({ exitCode: 31, stderr: '' });
     expect(JSON.parse(result.stdout)).toMatchObject({
-      diagnostics: [expect.objectContaining({ code: 'E_DSH_HOME_REQUIRED' })],
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_DSH_HOME' })],
     });
     expect(runners.doctor).not.toHaveBeenCalled();
   });
@@ -222,6 +223,28 @@ describe('JSON mode closure', () => {
 });
 
 describe('stable exit classification', () => {
+  it('classifies shared empty, relative, control, and absolute DSH_HOME values without echoing input', () => {
+    expect(resolveDshHomeValue('')).toMatchObject({
+      ok: false,
+      report: {
+        exitCode: 10,
+        diagnostics: [expect.objectContaining({ code: 'E_DSH_HOME_REQUIRED' })],
+      },
+    });
+    expect(resolveDshHomeValue('relative')).toMatchObject({
+      ok: false,
+      report: { exitCode: 31, diagnostics: [expect.objectContaining({ code: 'E_PATH_DSH_HOME' })] },
+    });
+    const unsafe = `${process.cwd()}\u0001secret`;
+    const rejected = resolveDshHomeValue(unsafe);
+    expect(rejected).toMatchObject({
+      ok: false,
+      report: { exitCode: 31, diagnostics: [expect.objectContaining({ code: 'E_PATH_DSH_HOME' })] },
+    });
+    expect(JSON.stringify(rejected)).not.toContain('secret');
+    expect(resolveDshHomeValue(process.cwd())).toMatchObject({ ok: true, value: process.cwd() });
+  });
+
   it('classifies MCP credentials as security failures', () => {
     expect(
       exitCodeFor([

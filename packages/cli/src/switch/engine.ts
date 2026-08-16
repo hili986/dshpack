@@ -1,9 +1,14 @@
-import { isAbsolute, join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import { confirm, isCancel } from '@clack/prompts';
 import { execa } from 'execa';
 
-import { type CommandReport, diagnostic, exitCodeFor } from '../commands/shared.js';
+import {
+  type CommandReport,
+  diagnostic,
+  exitCodeFor,
+  resolveDshHomeValue,
+} from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import {
   type InspectionFailureKind,
@@ -136,7 +141,7 @@ async function setDefaultPreset(
   input: SwitchInput,
   dshHome: string,
   runtime: SwitchRuntime,
-): Promise<CommandReport<SwitchMetadata> | undefined> {
+): Promise<CommandReport<SwitchMetadata> | boolean> {
   const metadataState = await inspectMetadata(dshHome, input.profile);
   if (metadataState.status === 'missing')
     return report(
@@ -233,7 +238,12 @@ async function setDefaultPreset(
         EXIT_CODES.USER_DECLINED,
       );
   }
-  const updated = await updateSelectedPreset(join(dshHome, 'settings.yaml'), preset);
+  const updated = await updateSelectedPreset(
+    join(dshHome, 'settings.yaml'),
+    preset,
+    {},
+    current.value.root,
+  );
   if (!updated.ok)
     return {
       diagnostics: updated.diagnostics,
@@ -245,7 +255,7 @@ async function setDefaultPreset(
         settingsChanged: false,
       },
     };
-  return undefined;
+  return updated.value ?? false;
 }
 
 export async function switchProfile(
@@ -260,22 +270,17 @@ export async function switchProfile(
       '移除 --run 获取 JSON 校验结果，或移除 --json 前台运行 dsh。',
       EXIT_CODES.USAGE,
     );
-  if (input.dshHome.trim() === '')
+  const resolution = resolveDshHomeValue(input.dshHome);
+  if (!resolution.ok) {
+    const item = resolution.report.diagnostics[0];
     return report(
       input,
-      'E_DSH_HOME_REQUIRED',
-      'DSH_HOME 为空，已拒绝从当前目录推断。',
-      '设置 --dsh-home 或 DSH_HOME 后重试。',
-      EXIT_CODES.ENVIRONMENT,
+      item?.code ?? 'E_DSH_HOME_REQUIRED',
+      item?.message ?? 'DSH_HOME 无效。',
+      item?.hint ?? '设置有效的绝对 DSH_HOME 后重试。',
+      resolution.report.exitCode,
     );
-  if (!isAbsolute(input.dshHome))
-    return report(
-      input,
-      'E_PATH_DSH_HOME',
-      'DSH_HOME 必须是绝对路径，已拒绝相对路径。',
-      '使用 --dsh-home <absolute-path> 后重试。',
-      EXIT_CODES.SECURITY,
-    );
+  }
   if (!isSafeProfileName(input.profile)) {
     const unsafe = isUnsafeProfileInput(input.profile);
     return report(
@@ -286,7 +291,7 @@ export async function switchProfile(
       unsafe ? EXIT_CODES.SECURITY : EXIT_CODES.CONTRACT,
     );
   }
-  const dshHome = resolve(input.dshHome);
+  const dshHome = resolution.value;
   const profileState = await inspectProfile(dshHome, input.profile);
   if (profileState.status !== 'valid')
     return report(
@@ -298,9 +303,9 @@ export async function switchProfile(
     );
   let settingsChanged = false;
   if (input.setDefaultPreset === true) {
-    const failure = await setDefaultPreset(input, dshHome, runtime);
-    if (failure !== undefined) return failure;
-    settingsChanged = true;
+    const result = await setDefaultPreset(input, dshHome, runtime);
+    if (typeof result !== 'boolean') return result;
+    settingsChanged = result;
   } else {
     const metadataState = await inspectMetadata(dshHome, input.profile);
     if (metadataState.status === 'broken')

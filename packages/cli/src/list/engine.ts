@@ -1,8 +1,6 @@
 import type { Dirent } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
-
-import { type CommandReport, diagnostic } from '../commands/shared.js';
-import { EXIT_CODES } from '../exit-codes.js';
+import { type CommandReport, diagnostic, resolveDshHomeValue } from '../commands/shared.js';
+import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import { inspectMetadata, inspectProfile } from './contracts.js';
 import { bindSecureRoot, readDirectory, type SafePathResult } from './safe-fs.js';
 
@@ -29,7 +27,7 @@ export interface ListInput {
 function commandFailure(
   code: string,
   message: string,
-  exitCode: 10 | 31,
+  exitCode: ExitCode,
 ): CommandReport<ListMetadata> {
   return {
     diagnostics: [diagnostic(code, 'error', message, '设置有效的 --dsh-home 或 DSH_HOME 后重试。')],
@@ -48,19 +46,14 @@ function sortNames(names: Iterable<string>): string[] {
 }
 
 export async function listProfiles(input: ListInput): Promise<CommandReport<ListMetadata>> {
-  if (input.dshHome.trim() === '')
-    return commandFailure(
-      'E_DSH_HOME_REQUIRED',
-      'DSH_HOME 为空，已拒绝从当前目录推断。',
-      EXIT_CODES.ENVIRONMENT,
-    );
-  if (!isAbsolute(input.dshHome))
-    return commandFailure(
-      'E_PATH_DSH_HOME',
-      'DSH_HOME 必须是绝对路径，已拒绝相对路径。',
-      EXIT_CODES.SECURITY,
-    );
-  const dshHome = resolve(input.dshHome);
+  const resolution = resolveDshHomeValue(input.dshHome);
+  if (!resolution.ok) {
+    const item = resolution.report.diagnostics[0] as NonNullable<
+      (typeof resolution.report.diagnostics)[number]
+    >;
+    return commandFailure(item.code, item.message, resolution.report.exitCode);
+  }
+  const dshHome = resolution.value;
   const home = await bindSecureRoot(dshHome);
   if (!home.ok)
     return commandFailure(

@@ -1,4 +1,4 @@
-import { rename, rm, symlink } from 'node:fs/promises';
+import { mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -68,6 +68,48 @@ describe('switch path security', () => {
     await expect(
       switchProfile({ dshHome: 'relative-home', profile: 'demo' }, runtime()),
     ).resolves.toMatchObject({ exitCode: 31 });
+  });
+
+  it('classifies an absent absolute DSH_HOME as environment', async () => {
+    const base = await securityHome('switch-missing-home');
+    roots.push(base);
+    await expect(
+      switchProfile({ dshHome: join(base, 'missing'), profile: 'demo' }, runtime()),
+    ).resolves.toMatchObject({ exitCode: 10 });
+  });
+
+  it('rejects and redacts control input in an absolute DSH_HOME', async () => {
+    const base = await securityHome('switch-control-home');
+    roots.push(base);
+    const unsafe = `${join(base, 'missing')}\u0001secret`;
+    const report = await switchProfile({ dshHome: unsafe, profile: 'demo' }, runtime());
+    expect(report.exitCode).toBe(31);
+    expect(JSON.stringify(report.diagnostics)).not.toContain('secret');
+  });
+
+  it('rejects a post-confirm ancestor junction before creating the settings lock', async () => {
+    const original = await fixture();
+    const outer = await securityHome('switch-confirm-swap');
+    roots.push(outer);
+    const container = join(outer, 'container');
+    const home = join(container, 'home');
+    await mkdir(container);
+    await rename(original, home);
+    const deps = runtime({
+      confirm: vi.fn(async () => {
+        const moved = join(outer, 'container-moved');
+        await rename(container, moved);
+        await symlink(moved, container, 'junction');
+        return true;
+      }),
+    });
+
+    const report = await switchProfile(
+      { dshHome: home, profile: 'demo', setDefaultPreset: true },
+      deps,
+    );
+    expect(report.exitCode).toBe(31);
+    expect(deps.spawnDsh).not.toHaveBeenCalled();
   });
 
   it('revalidates the profile directory identity immediately before spawn', async () => {

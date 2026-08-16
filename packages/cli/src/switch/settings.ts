@@ -52,6 +52,10 @@ interface SettingsSource {
   root: DirectoryBinding;
 }
 
+export interface SelectedPresetUpdateHooks extends SafePathHooks {
+  afterPreLockRevalidate?(path: string): Promise<void>;
+}
+
 async function ordinarySource(
   path: string,
   hooks: SafePathHooks = {},
@@ -148,21 +152,21 @@ function parseAgentPresets(current: string, path: string): Result<ParsedAgentPre
 export async function inspectCurrentAgentPresets(
   path: string,
   hooks: SafePathHooks = {},
-): Promise<Result<{ selected: unknown }>> {
+): Promise<Result<{ selected: unknown; root: DirectoryBinding }>> {
   const current = await ordinarySource(path, hooks);
   if (!current.ok || current.value === undefined)
     return { ok: false, diagnostics: current.diagnostics };
   const parsed = parseAgentPresets(current.value.text, path);
   if (!parsed.ok || parsed.value === undefined)
     return { ok: false, diagnostics: parsed.diagnostics };
-  return success({ selected: parsed.value.section.selected });
+  return success({ selected: parsed.value.section.selected, root: current.value.root });
 }
 
 async function updateUnderLock(
   path: string,
   preset: string,
   hooks: SafePathHooks,
-): Promise<Result<void>> {
+): Promise<Result<boolean>> {
   const current = await ordinarySource(path, hooks);
   if (!current.ok || current.value === undefined)
     return { ok: false, diagnostics: current.diagnostics };
@@ -170,6 +174,7 @@ async function updateUnderLock(
   if (!parsed.ok || parsed.value === undefined)
     return { ok: false, diagnostics: parsed.diagnostics };
   const { document, section } = parsed.value;
+  if (section.selected === preset) return success(false);
   document.setIn(['agent-presets', 'selected'], preset);
   const candidate = new Document({
     'agent-presets': Object.assign(Object.create(null) as Record<string, unknown>, section, {
@@ -191,7 +196,7 @@ async function updateUnderLock(
       path,
     );
   await writeFileAtomic(path, document.toString(), { mode: 0o600, dirMode: 0o700 });
-  return success(undefined);
+  return success(true);
 }
 
 /** Lock-scoped leaf RMW: a concurrent writer can never be erased by a stale pre-confirm snapshot. */
@@ -199,13 +204,48 @@ export async function updateSelectedPreset(
   path: string,
   preset: string,
   options: YamlSettingsAdapterOptions = {},
-  hooks: SafePathHooks = {},
-): Promise<Result<void>> {
+  expectedRoot?: DirectoryBinding,
+  hooks: SelectedPresetUpdateHooks = {},
+): Promise<Result<boolean>> {
+  if (expectedRoot !== undefined) {
+    const stable = await revalidateDirectory(expectedRoot, hooks);
+    if (!stable.ok)
+      return failure(
+        'E_PATH_SETTINGS',
+        stable.reason,
+        '确认 DSH_HOME 未被替换且不含 symlink 后重试。',
+        path,
+      );
+  }
+  try {
+    await hooks.afterPreLockRevalidate?.(path);
+  } catch {
+    return settingsIoFailure(path);
+  }
+  const lockOptions: YamlSettingsAdapterOptions =
+    expectedRoot === undefined
+      ? options
+      : {
+          ...options,
+          beforeLockAcquire: async () => {
+            const callerGuard = await options.beforeLockAcquire?.();
+            if (callerGuard !== undefined && !callerGuard.ok) return callerGuard;
+            const stable = await revalidateDirectory(expectedRoot, hooks);
+            return stable.ok
+              ? success(undefined)
+              : failure(
+                  'E_PATH_SETTINGS',
+                  stable.reason,
+                  '确认 DSH_HOME 未被替换且不含 symlink 后重试。',
+                  path,
+                );
+          },
+        };
   const locked = await withSettingsFileLock(
     path,
     () => updateUnderLock(path, preset, hooks),
-    options,
+    lockOptions,
   );
   if (!locked.ok) return { ok: false, diagnostics: locked.diagnostics };
-  return locked.value as Result<void>;
+  return locked.value as Result<boolean>;
 }

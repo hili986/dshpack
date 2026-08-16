@@ -1,9 +1,21 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { bindSecureRoot } from '../src/list/safe-fs.js';
 import { inspectCurrentAgentPresets, updateSelectedPreset } from '../src/switch/settings.js';
 
 const roots: string[] = [];
@@ -19,6 +31,55 @@ afterEach(async () => {
 });
 
 describe('updateSelectedPreset', () => {
+  it('returns false and preserves the file identity when the locked value is already selected', async () => {
+    const root = await temporary();
+    const path = join(root, 'settings.yaml');
+    const contents = '# keep\nagent-presets:\n  selected: alpha\n';
+    await writeFile(path, contents, 'utf8');
+    const oldTime = new Date('2001-02-03T04:05:06.000Z');
+    await utimes(path, oldTime, oldTime);
+    const before = await stat(path);
+
+    await expect(updateSelectedPreset(path, 'alpha')).resolves.toMatchObject({
+      ok: true,
+      value: false,
+    });
+    expect(await readFile(path, 'utf8')).toBe(contents);
+    expect((await stat(path)).mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it('revalidates the confirmed root before creating a lock through a swapped ancestor', async () => {
+    const outer = await temporary();
+    const container = join(outer, 'container');
+    const home = join(container, 'home');
+    const path = join(home, 'settings.yaml');
+    await mkdir(home, { recursive: true });
+    await writeFile(path, 'agent-presets:\n  selected: old\n', 'utf8');
+    const root = await bindSecureRoot(home);
+    if (!root.ok) throw new Error('fixture root failed');
+    const moved = join(outer, 'container-moved');
+    const writeLockContents = vi.fn(async () => undefined);
+    let swapped = false;
+
+    await expect(
+      updateSelectedPreset(path, 'new', { writeLockContents }, root.value, {
+        afterPreLockRevalidate: async () => {
+          await rename(container, moved);
+          await symlink(moved, container, 'junction');
+          swapped = true;
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],
+    });
+    expect(swapped).toBe(true);
+    expect(writeLockContents).not.toHaveBeenCalled();
+    await expect(lstat(join(moved, 'home', 'settings.yaml.lock'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('creates a missing document and updates only the selected leaf', async () => {
     const root = await temporary();
     const path = join(root, 'settings.yaml');

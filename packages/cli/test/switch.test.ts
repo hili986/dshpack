@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -219,6 +219,40 @@ describe('switchProfile', () => {
     expect(changed).toContain('selected: demo-preset');
     expect(changed).toContain('concurrent-leaf: keep');
     expect(changed).toContain('other: after');
+  });
+
+  it('reports a confirmed concurrent no-op without rewriting settings or claiming an effect', async () => {
+    const home = await fixture();
+    const path = join(home, 'settings.yaml');
+    await writeFile(path, 'agent-presets:\n  selected: old\n', 'utf8');
+    const concurrent = '# concurrent\nagent-presets:\n  selected: demo-preset\n  keep: true\n';
+    let lockedMtime = 0;
+    const deps = runtime({
+      isTTY: true,
+      confirm: vi.fn(async () => {
+        await writeFile(path, concurrent, 'utf8');
+        const oldTime = new Date('2001-02-03T04:05:06.000Z');
+        await utimes(path, oldTime, oldTime);
+        lockedMtime = (await stat(path)).mtimeMs;
+        return true;
+      }),
+    });
+
+    const report = await switchProfile(
+      { dshHome: home, profile: 'demo', setDefaultPreset: true },
+      deps,
+    );
+
+    expect(deps.showDiff).toHaveBeenCalledOnce();
+    expect(deps.confirm).toHaveBeenCalledOnce();
+    expect(report.metadata).toEqual({
+      profile: 'demo',
+      command: 'dsh --profile demo',
+      ran: false,
+      settingsChanged: false,
+    });
+    expect(await readFile(path, 'utf8')).toBe(concurrent);
+    expect((await stat(path)).mtimeMs).toBe(lockedMtime);
   });
 
   it('rejects missing, broken, untracked-default, and absent preset contracts minimally', async () => {

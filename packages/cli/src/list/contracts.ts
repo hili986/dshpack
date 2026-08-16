@@ -51,7 +51,7 @@ export interface InstalledMetadataV0 {
 
 export type ProfileInspection =
   | { status: 'valid'; root: string; binding: DirectoryBinding }
-  | { status: 'missing'; reason: string; failureKind: 'contract' }
+  | { status: 'missing'; reason: string; failureKind: InspectionFailureKind }
   | { status: 'broken'; reason: string; failureKind: InspectionFailureKind };
 
 export type MetadataInspection =
@@ -106,7 +106,7 @@ export async function inspectProfile(
   const home = await bindSecureRoot(dshHome, hooks);
   if (!home.ok)
     return home.kind === 'missing'
-      ? { status: 'missing', reason: 'DSH_HOME 不存在。', failureKind: 'contract' }
+      ? { status: 'missing', reason: 'DSH_HOME 不存在。', failureKind: 'environment' }
       : broken(home.reason, failureKind(home.kind));
   const profileDirectory = await bindDirectory(home.value, ['profiles', profile], hooks);
   if (!profileDirectory.ok)

@@ -113,7 +113,10 @@ describe('built CLI boundary', () => {
   it('rejects empty or relative DSH_HOME before doctor/export I/O or subprocesses', async () => {
     const fixture = await boundaryFixture();
     const output = join(fixture.cwd, 'export-output');
-    for (const home of ['', 'relative-home']) {
+    for (const [home, exitCode, code] of [
+      ['', 10, 'E_DSH_HOME_REQUIRED'],
+      ['relative-home', 31, 'E_PATH_DSH_HOME'],
+    ] as const) {
       for (const args of [
         ['--json', 'doctor', '--profile', 'demo', '--yes'],
         ['doctor', '--json', '--profile', 'demo', '--yes'],
@@ -125,16 +128,16 @@ describe('built CLI boundary', () => {
           encoding: 'utf8',
           env: { ...fixture.env, DSH_HOME: home },
         });
-        expect(result.status).toBe(10);
+        expect(result.status).toBe(exitCode);
         expect(result.stderr).toBe('');
         expect(JSON.parse(result.stdout)).toEqual({
-          diagnostics: [expect.objectContaining({ code: 'E_DSH_HOME_REQUIRED' })],
+          diagnostics: [expect.objectContaining({ code })],
         });
       }
     }
     await expect(access(fixture.log)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(output)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 15_000);
 
   it('redacts an unknown exception as JSON exit 70 without a stack', async () => {
     const fixture = await boundaryFixture();

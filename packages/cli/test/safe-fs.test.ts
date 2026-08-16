@@ -26,6 +26,47 @@ afterEach(async () => {
 });
 
 describe('secure directory bindings', () => {
+  it('rejects an ancestor renamed behind a junction even when the bound inode is unchanged', async () => {
+    const outer = await temporary('safe-ancestor-swap');
+    const container = join(outer, 'container');
+    const home = join(container, 'home');
+    await mkdir(home, { recursive: true });
+    const binding = await bindSecureRoot(home);
+    if (!binding.ok) throw new Error('fixture root failed');
+    const moved = join(outer, 'container-moved');
+    await rename(container, moved);
+    await symlink(moved, container, 'junction');
+
+    await expect(revalidateDirectory(binding.value)).resolves.toMatchObject({
+      ok: false,
+      kind: 'security',
+    });
+  });
+
+  it('detects an ancestor junction introduced after a child lstat but before its realpath', async () => {
+    const home = await temporary('safe-child-ancestor-swap');
+    const profiles = join(home, 'profiles');
+    const profile = join(profiles, 'demo');
+    await mkdir(profile, { recursive: true });
+    const root = await bindSecureRoot(home);
+    if (!root.ok) throw new Error('fixture root failed');
+    const binding = await bindDirectory(root.value, ['profiles', 'demo']);
+    if (!binding.ok) throw new Error('fixture binding failed');
+    const moved = join(home, 'profiles-moved');
+    let swapped = false;
+
+    const result = await revalidateDirectory(binding.value, {
+      afterDirectoryLstat: async (path) => {
+        if (path !== profile || swapped) return;
+        await rename(profiles, moved);
+        await symlink(moved, profiles, 'junction');
+        swapped = true;
+      },
+    });
+    expect(swapped).toBe(true);
+    expect(result).toMatchObject({ ok: false, kind: 'security' });
+  });
+
   it('classifies relative, missing, file-shaped, and ancestor-linked roots', async () => {
     await expect(bindSecureRoot('relative')).resolves.toMatchObject({
       ok: false,
