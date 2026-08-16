@@ -311,7 +311,7 @@
   name: '@deepseek-ai/dsh-fs-sandbox'
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek'
-# == C:\Users\24020\Desktop\111\dshpack\.stage8-windows-smoke-20260817\captured-dsh-home-2\profiles\web-dev\cordis.patch.yml
+# == <REPO>\.stage8-windows-smoke-20260817\captured-dsh-home-2\profiles\web-dev\cordis.patch.yml
 - id: mcp-context7
   name: '@deepseek-ai/dsh-mcp-client'
   config:

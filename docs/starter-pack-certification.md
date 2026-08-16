@@ -11,7 +11,7 @@
 | WSL2 Ubuntu 24.04（原生 ext4） | `web-dev` | `0.1.0-rc.6` | `install --as web-dev --yes` → 0；`dsh --profile web-dev --dump-config` → 0；`doctor --profile web-dev --strict --json` → 0 | 同样命中四个 Context7 配置断言；安装四个 web skill。 |
 | WSL2 Ubuntu 24.04（原生 ext4） | `research-writing` | `0.1.0-rc.6` | `install --as research-writing --yes` → 0；`dsh --profile research-writing --dump-config` → 0；`doctor --profile research-writing --strict --json` → 0 | 四个 Context7 标识均为 0 次；安装五个 research skill。 |
 
-Windows capture 根为 `C:\Users\24020\Desktop\111\dshpack\.stage8-windows-smoke-20260817\captured-dsh-home-2`；Linux capture 根为 `/home/hili986/dshpack-smoke-stage8-20260817/captured-dsh-home-2`。两个 Linux pack、构建目录和运行目录均在 `/home/hili986/dshpack-smoke-stage8-20260817`，不在 `/mnt/c`。
+Windows capture 根为 `<REPO>\.stage8-windows-smoke-20260817\captured-dsh-home-2`；Linux capture 根为 `/home/hili986/dshpack-smoke-stage8-20260817/captured-dsh-home-2`。两个 Linux pack、构建目录和运行目录均在 `/home/hili986/dshpack-smoke-stage8-20260817`，不在 `/mnt/c`。
 
 两个 starter 仓均含已提交的确定性 lock，且本次在 Windows 上重复 `dshpack lock` 后 SHA-256 未变，随后 `dshpack validate --strict` 均为 exit 0：
 

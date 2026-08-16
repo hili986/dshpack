@@ -1,5 +1,5 @@
 启动：dsh --profile web-dev
 生效提醒：请 restart dsh；技能热生效，preset/settings 在 new session 生效。
-审计：dshpack --dsh-home 'C:\Users\24020\Desktop\111\dshpack\.stage8-windows-smoke-20260817\captured-dsh-home-2' doctor --profile web-dev --strict
+审计：dshpack --dsh-home '<REPO>\.stage8-windows-smoke-20260817\captured-dsh-home-2' doctor --profile web-dev --strict
 配置对账：dsh --profile web-dev --dump-config（会写 profiles/web-dev/cordis.yml）
 插件审计：dsh plugin --profile web-dev list --depth=0
