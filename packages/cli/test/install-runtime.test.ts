@@ -171,6 +171,50 @@ describe('install PATH-only process runtime', () => {
     }
   });
 
+  it('isolates resolver pnpm from every inherited npm and pnpm configuration key', async () => {
+    let resolverEnvironment: NodeJS.ProcessEnv | undefined;
+    const process = createPathProcessRuntime({
+      env: {
+        PATH: 'resolver-path-only',
+        PNPM_CONFIG_LOCKFILE_DIR: 'C:\\escape-lock',
+        pNpM_cOnFiG_gLoBaL: 'true',
+        NPM_CONFIG_PNPMFILE: 'C:\\escape-hook.cjs',
+        npm_config_registry: 'https://credentials.invalid/',
+        PnPm_CoNfIg_ViRtUaL_StOrE_DiR: 'C:\\escape-store',
+        npm_config_userconfig: 'C:\\escape-npmrc',
+      },
+      spawn: async (_command, _args, options) => {
+        resolverEnvironment = options.env;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+    const dshHome = await temporary();
+
+    await process.runPnpm(['add', '--lockfile-only'], {
+      dshHome,
+      cwd: dshHome,
+      scriptPolicy: 'deny',
+      environmentPolicy: 'resolution-isolated',
+    } as never);
+
+    const normalized = Object.fromEntries(
+      Object.entries(resolverEnvironment ?? {}).map(([key, value]) => [key.toLowerCase(), value]),
+    );
+    expect(normalized).toMatchObject({
+      path: 'resolver-path-only',
+      dsh_home: dshHome,
+      npm_config_ignore_scripts: 'true',
+      xdg_config_home: join(dshHome, 'config'),
+    });
+    expect(
+      Object.keys(normalized).filter(
+        (key) =>
+          (key.startsWith('npm_config_') || key.startsWith('pnpm_config_')) &&
+          key !== 'npm_config_ignore_scripts',
+      ),
+    ).toEqual([]);
+  });
+
   it('keeps a PATH-first lifecycle sentinel off during add and enables it only for approved rebuild', async () => {
     const root = await temporary();
     const shim = join(root, 'shim');

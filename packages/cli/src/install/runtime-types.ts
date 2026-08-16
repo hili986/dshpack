@@ -55,6 +55,7 @@ export interface InstallSubprocessResult {
 }
 
 export type LifecycleScriptPolicy = 'deny' | 'allow-approved';
+export type ProcessEnvironmentPolicy = 'inherited-safe' | 'resolution-isolated';
 
 export interface StagedPluginDownload {
   staged: StagedPluginTarball;
@@ -88,7 +89,12 @@ export interface InstallRuntime {
   ): Promise<InstallSubprocessResult>;
   runPnpm(
     args: readonly string[],
-    options: { dshHome: string; cwd: string; scriptPolicy?: LifecycleScriptPolicy },
+    options: {
+      dshHome: string;
+      cwd: string;
+      environmentPolicy?: ProcessEnvironmentPolicy;
+      scriptPolicy?: LifecycleScriptPolicy;
+    },
   ): Promise<InstallSubprocessResult>;
   confirm(prompt: InstallPromptDecision): Promise<boolean>;
   writeStderr(message: string): void;

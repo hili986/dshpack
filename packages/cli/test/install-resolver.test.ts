@@ -36,7 +36,12 @@ describe('install manifest resolver', () => {
     const homeBefore = await snapshot(dshHome);
     const read = await readValidatedPack(source, { frozen: false });
     expect(read.material).toBeDefined();
-    const calls: Array<{ args: readonly string[]; cwd: string; policy: string | undefined }> = [];
+    const calls: Array<{
+      args: readonly string[];
+      cwd: string;
+      environmentPolicy: string | undefined;
+      policy: string | undefined;
+    }> = [];
     let resolverRoot = '';
     const integrity = `sha512-${createHash('sha512').update('registry-tarball').digest('base64')}`;
     const process: PathProcessRuntime = {
@@ -44,7 +49,12 @@ describe('install manifest resolver', () => {
       runDsh: async () => ({ stdout: '', stderr: '' }),
       async runPnpm(args, options) {
         resolverRoot = options.cwd;
-        calls.push({ args, cwd: options.cwd, policy: options.scriptPolicy });
+        calls.push({
+          args,
+          cwd: options.cwd,
+          environmentPolicy: options.environmentPolicy,
+          policy: options.scriptPolicy,
+        });
         await writeFile(
           join(options.cwd, 'pnpm-lock.yaml'),
           [
@@ -90,15 +100,24 @@ describe('install manifest resolver', () => {
           'add',
           '--lockfile-only',
           '--ignore-scripts',
+          '--global=false',
+          '--ignore-pnpmfile',
+          '--lockfile-dir',
+          resolverRoot,
+          '--modules-dir',
+          join(resolverRoot, 'node_modules'),
           '--store-dir',
           join(resolverRoot, 'store'),
           '--cache-dir',
           join(resolverRoot, 'cache'),
           '--state-dir',
           join(resolverRoot, 'state'),
+          '--virtual-store-dir',
+          join(resolverRoot, 'node_modules', '.pnpm'),
           'example-bundle@^1.0.0',
         ],
         cwd: resolverRoot,
+        environmentPolicy: 'resolution-isolated',
         policy: 'deny',
       },
     ]);
