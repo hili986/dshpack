@@ -18,9 +18,13 @@ const packages = [
   { directory: 'packages/cli', name: 'dshpack' },
 ];
 
-function pnpmInvocation() {
-  if (process.platform !== 'win32') return { args: [], command: 'pnpm' };
-  const wrappers = (process.env.PATH ?? '')
+export function pnpmInvocation(platform = process.platform, environment = process.env) {
+  const npmExecPath = environment.npm_execpath;
+  if (npmExecPath !== undefined && existsSync(npmExecPath)) {
+    return { args: [npmExecPath], command: process.execPath };
+  }
+  if (platform !== 'win32') return { args: [], command: 'pnpm' };
+  const wrappers = (environment.PATH ?? '')
     .split(delimiter)
     .map((directory) => join(directory, 'pnpm.cmd'))
     .filter((candidate) => existsSync(candidate));
@@ -174,4 +178,4 @@ export async function verifyReleasePack() {
   );
 }
 
-await verifyReleasePack();
+if (import.meta.main) await verifyReleasePack();

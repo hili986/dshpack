@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
@@ -24,6 +26,29 @@ describe('release tarball verification', () => {
     expect(result.status, output(result)).toBe(0);
     expect(result.stdout).toContain('release tarballs verified');
   }, 30_000);
+
+  it('uses npm_execpath when a Windows Corepack layout has no sibling pnpm command', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack-corepack-pnpm-'));
+    const pnpmExecPath = join(root, 'pnpm.cjs');
+    try {
+      await writeFile(pnpmExecPath, 'module.exports = {};\n', 'utf8');
+      const evaluation = [
+        `import { pnpmInvocation } from ${JSON.stringify(pathToFileURL(verifyReleasePack).href)};`,
+        `process.stdout.write(JSON.stringify(pnpmInvocation('win32', ${JSON.stringify({ PATH: '', npm_execpath: pnpmExecPath })})));`,
+      ].join('\n');
+      const result = spawnSync(process.execPath, ['--input-type=module', '--eval', evaluation], {
+        cwd: repository,
+        encoding: 'utf8',
+      });
+      expect(result.status, output(result)).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        args: [pnpmExecPath],
+        command: process.execPath,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
   it('turns red when the core schema directory is omitted from npm files and green after restore', async () => {
     const original = await readFile(coreManifest, 'utf8');
