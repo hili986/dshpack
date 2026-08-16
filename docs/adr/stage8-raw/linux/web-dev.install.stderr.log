@@ -1,0 +1,19 @@
+Will install web-dev@0.1.0 as web-dev
+SOURCE: {"kind":"directory","path":"/home/hili986/dshpack-smoke-stage8-20260817/starters/web-dev"}
+dsh: current=0.1.0-rc.6 tested=0.1.0-rc.6 mismatch=false
+pnpm: current=11.7.0
+asset skills/accessibility-audit -> skills/accessibility-audit action=create collision=false [热生效]
+asset skills/browser-debug-checklist -> skills/browser-debug-checklist action=create collision=false [热生效]
+asset skills/commit-convention -> skills/commit-convention action=create collision=false [热生效]
+asset skills/frontend-review -> skills/frontend-review action=create collision=false [热生效]
+MCP context7: https://mcp.context7.com/mcp -> profile patch action=configure [重启生效]
+default permissionPreset=workspace-write [仅空白会话]
+write profiles/web-dev [重启生效]
+write profiles/web-dev/cordis.patch.yml [重启生效]
+write skills/accessibility-audit [热生效]
+write skills/browser-debug-checklist [热生效]
+write skills/commit-convention [热生效]
+write skills/frontend-review [热生效]
+write .dshpack/installed/web-dev.json [热生效]
+side-effect profiles/web-dev/cordis.yml: dsh --dump-config（E9）
+rollback snapshot: enabled=true state=sha256-bSGmM1FiexZIOjjfdgjsYA14kw8egAI8O58sWTaWVro

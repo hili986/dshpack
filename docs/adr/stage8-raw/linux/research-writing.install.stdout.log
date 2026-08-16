@@ -1,0 +1,5 @@
+启动：dsh --profile research-writing
+生效提醒：请 restart dsh；技能热生效，preset/settings 在 new session 生效。
+审计：dshpack --dsh-home '/home/hili986/dshpack-smoke-stage8-20260817/captured-dsh-home-2' doctor --profile research-writing --strict
+配置对账：dsh --profile research-writing --dump-config（会写 profiles/research-writing/cordis.yml）
+插件审计：dsh plugin --profile research-writing list --depth=0

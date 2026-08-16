@@ -1,0 +1,20 @@
+Will install research-writing@0.1.0 as research-writing
+SOURCE: {"kind":"directory","path":"/home/hili986/dshpack-smoke-stage8-20260817/starters/research-writing"}
+dsh: current=0.1.0-rc.6 tested=0.1.0-rc.6 mismatch=false
+pnpm: current=11.7.0
+asset skills/citation-verification -> skills/citation-verification action=create collision=false [热生效]
+asset skills/claim-evidence-map -> skills/claim-evidence-map action=create collision=false [热生效]
+asset skills/cn-academic-style -> skills/cn-academic-style action=create collision=false [热生效]
+asset skills/literature-triage -> skills/literature-triage action=create collision=false [热生效]
+asset skills/paper-outline -> skills/paper-outline action=create collision=false [热生效]
+default permissionPreset=workspace-write [仅空白会话]
+write profiles/research-writing [重启生效]
+write profiles/research-writing/cordis.patch.yml [重启生效]
+write skills/citation-verification [热生效]
+write skills/claim-evidence-map [热生效]
+write skills/cn-academic-style [热生效]
+write skills/literature-triage [热生效]
+write skills/paper-outline [热生效]
+write .dshpack/installed/research-writing.json [热生效]
+side-effect profiles/research-writing/cordis.yml: dsh --dump-config（E9）
+rollback snapshot: enabled=true state=sha256-hOfkUP6ZBqsOMskFTHioPJicJQaFGlVJkKu2OSwoAJU
