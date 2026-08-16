@@ -5,7 +5,8 @@ import { resolveDshHome, writeReport } from './shared.js';
 
 export const doctorCommand = {
   name: 'doctor',
-  description: '诊断 dsh 环境；dump 检查会让 dsh 写 profile/cordis.yml',
+  description:
+    '诊断 dsh 环境；dump 检查会让 dsh 写 profile/cordis.yml，dshpack 会写 .dshpack/logs/<file> 审计日志',
 } as const;
 
 export function registerDoctorCommand(program: Command): void {

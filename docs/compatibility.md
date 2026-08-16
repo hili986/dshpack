@@ -31,7 +31,7 @@
 | `dsh --version` | stdout `0.1.0-rc.6\n`、stderr 空、exit 0 | 发布物实测 E9 | weekly `smoke-real-dsh.mjs` 精确比较 | 红灯视为契约漂移，不自动放宽解析 |
 | 已初始化、未启动 profile 的 dump | 两种 dump 均可用，输出顶层 YAML array | 源码 + 实测 E9 | weekly built-in default dump + W3 custom fixture | dump 失败时 export 降 opaque patch |
 | 完全不存在的普通 profile dump | 两种均 exit 1，不初始化 | 源码 + 实测 E9 | missing-profile 负例 | install 必须先走 E1 |
-| dump 写入面 | 不启动 app，但生成/重写 profile `cordis.yml` | 源码 + 实测 E9 | dump 前后文件枚举 | 不再称“严格只读”；只在隔离/目标 profile 执行 |
+| doctor 写入面 | dump 不启动 app，但 dsh 可生成/重写 profile `cordis.yml`；每次 dsh 调用还会由 dshpack 写 `.dshpack/logs/<file>` 审计日志 | 源码 + 实测 E9 | 干净 DSH_HOME 前后枚举并按 `owner: dsh \| dshpack` 披露 | 不再称“严格只读”；只在隔离/目标 profile 执行，并保留审计日志 |
 | `agent-presets` Web 可见性 | 不在 literal WEB 数组；在 PRODUCT 集合并进入最终 allowlist | 源码 + 官方测试 E10 | 检查三集合与 `settings.update` 官方测试 | literal/effective 分开记录；未知 namespace 禁用 |
 | preset 内 skills 注入 | `customSkillDirs` 使用 `!!js` + `baseUrl` | 源码确认 E7，待 W14 | W14 启动 preset 并查 catalog | 未实测前不发布 starter |
 | 官方 preset 复制 | 目录 id + composition + metadata + 可选 skills/assets；MIT | 源码确认 E8，待 W14 | W14 copy/load + NOTICE 审计 | 保留许可文本；结构漂移停止派生 |

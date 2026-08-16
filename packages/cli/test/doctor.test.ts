@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
@@ -57,12 +57,41 @@ async function makeDshHome(patch = '[]\n', bundlePatch = './cordis.patch.yml'): 
   return root;
 }
 
-function doctorEnvironment(home: string): NodeJS.ProcessEnv {
+function doctorEnvironment(home: string, shim = join(home, 'shim')): NodeJS.ProcessEnv {
   return {
     ...process.env,
     DSHPACK_NODE_EXE: process.execPath,
-    PATH: [join(home, 'shim'), process.env.PATH ?? dirname(process.execPath)].join(delimiter),
+    PATH: [shim, process.env.PATH ?? dirname(process.execPath)].join(delimiter),
   };
+}
+
+async function makeEmptyDshHome(): Promise<{ env: NodeJS.ProcessEnv; home: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'dshpack-doctor-empty-'));
+  temporaryRoots.push(root);
+  const home = join(root, 'clean-dsh-home');
+  const shim = join(root, 'shim');
+  await Promise.all([mkdir(home), mkdir(shim)]);
+  await writeFile(
+    join(shim, 'doctor-shim.mjs'),
+    "const args = process.argv.slice(2); process.stdout.write(args.includes('--version') ? '0.1.0-rc.6\\n' : '[]\\n');\n",
+    'utf8',
+  );
+  if (process.platform === 'win32') {
+    await writeFile(
+      join(shim, 'dsh.cmd'),
+      `@echo off\n"%DSHPACK_NODE_EXE%" "%~dp0doctor-shim.mjs" %*\n`,
+      'utf8',
+    );
+  } else {
+    const executable = join(shim, 'dsh');
+    await writeFile(
+      executable,
+      "#!/usr/bin/env node\nawait import('./doctor-shim.mjs');\n",
+      'utf8',
+    );
+    await chmod(executable, 0o755);
+  }
+  return { env: doctorEnvironment(home, shim), home };
 }
 
 afterEach(async () => {
@@ -278,7 +307,12 @@ describe('doctor', () => {
     const home = await makeDshHome('');
     const env = doctorEnvironment(home);
     await expect(runDoctor({ dshHome: home, env })).resolves.toMatchObject({
-      metadata: { sideEffects: ['profile/cordis.yml'] },
+      metadata: {
+        sideEffects: [
+          { owner: 'dsh', path: 'profile/cordis.yml' },
+          { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+        ],
+      },
     });
     await expect(runDoctor({ dshHome: home, profile: 'absent', env })).resolves.toMatchObject({
       metadata: { profile: 'absent' },
@@ -314,8 +348,35 @@ describe('doctor', () => {
     });
 
     expect(report.exitCode).toBe(21);
-    expect(report.metadata.sideEffects).toEqual(['profile/cordis.yml']);
+    expect(report.metadata.sideEffects).toEqual([
+      { owner: 'dsh', path: 'profile/cordis.yml' },
+      { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+    ]);
     expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: 'DSH009' }));
+  });
+
+  it('writes only one dshpack audit log under a clean DSH_HOME', async () => {
+    const { env, home } = await makeEmptyDshHome();
+
+    const before = await readdir(home);
+    expect(before).toEqual([]);
+    const report = await runDoctor({ dshHome: home, env });
+
+    expect(report.exitCode).toBe(0);
+    const after = await readdir(home);
+    expect(after).toEqual(['.dshpack']);
+    expect(await readdir(join(home, '.dshpack'))).toEqual(['logs']);
+    const logs = await readdir(join(home, '.dshpack', 'logs'));
+    expect(logs).toHaveLength(1);
+    console.info(
+      `DOCTOR_CLEAN_HOME before=${before.length} after=${after.join(',')} logs=${logs.length}`,
+    );
+    await expect(readFile(join(home, 'settings.yaml'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(readFile(join(home, 'profile', 'cordis.yml'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('mutant: empty patch is RED, --fix writes [], then a fresh doctor run is GREEN for DSH008', async () => {

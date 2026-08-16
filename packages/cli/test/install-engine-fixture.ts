@@ -369,7 +369,10 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
         exitCode: 0,
         metadata: {
           ...(input.profile === undefined ? {} : { profile: input.profile }),
-          sideEffects: ['profile/cordis.yml'],
+          sideEffects: [
+            { owner: 'dsh', path: 'profile/cordis.yml' },
+            { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+          ],
         },
       };
     },

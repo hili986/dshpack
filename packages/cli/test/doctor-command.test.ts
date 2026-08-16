@@ -5,7 +5,12 @@ vi.mock('../src/doctor/engine.js', () => ({
   runDoctor: async () => ({
     diagnostics: [],
     exitCode: 0,
-    metadata: { sideEffects: ['profile/cordis.yml'] },
+    metadata: {
+      sideEffects: [
+        { owner: 'dsh', path: 'profile/cordis.yml' },
+        { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+      ],
+    },
   }),
 }));
 
@@ -30,6 +35,12 @@ describe('doctor command JSON output', () => {
       from: 'node',
     });
 
-    expect(JSON.parse(stdout)).toEqual({ diagnostics: [], sideEffects: ['profile/cordis.yml'] });
+    expect(JSON.parse(stdout)).toEqual({
+      diagnostics: [],
+      sideEffects: [
+        { owner: 'dsh', path: 'profile/cordis.yml' },
+        { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+      ],
+    });
   });
 });

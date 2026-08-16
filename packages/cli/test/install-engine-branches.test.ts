@@ -242,7 +242,12 @@ describe('install engine boundary branches', () => {
         fake.runtime.runDoctor = async () => ({
           diagnostics: [diagnostic('E_DOCTOR_RESULT', 'error', 'doctor red', 'fix')],
           exitCode: 30,
-          metadata: { sideEffects: ['profile/cordis.yml'] },
+          metadata: {
+            sideEffects: [
+              { owner: 'dsh', path: 'profile/cordis.yml' },
+              { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+            ],
+          },
         });
       } else {
         const capture = fake.runtime.captureTargetState;

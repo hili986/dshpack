@@ -19,7 +19,12 @@ export interface DoctorInput {
 
 export interface DoctorMetadata {
   profile?: string;
-  sideEffects: readonly ['profile/cordis.yml'];
+  sideEffects: readonly DoctorSideEffect[];
+}
+
+export interface DoctorSideEffect {
+  owner: 'dsh' | 'dshpack';
+  path: string;
 }
 
 export type DoctorDshRunner = (
@@ -38,7 +43,11 @@ export interface ProfileFacts {
   root: string;
 }
 
-export const sideEffects = ['profile/cordis.yml'] as const;
+/** Side effects are reported with ownership so callers cannot mistake dshpack audit logs for dsh writes. */
+export const sideEffects: readonly DoctorSideEffect[] = [
+  { owner: 'dsh', path: 'profile/cordis.yml' },
+  { owner: 'dshpack', path: '.dshpack/logs/<file>' },
+];
 
 export function dshOptions(input: DoctorInput): Pick<Parameters<typeof runDsh>[1], 'env'> {
   return input.env === undefined ? {} : { env: input.env };
