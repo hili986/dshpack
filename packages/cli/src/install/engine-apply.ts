@@ -134,7 +134,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
   }
   await runInstallFault(runtime, 'settings');
   await guardedInstall(
-    EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+    EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
     'E_DUMP_CONFIG',
     'dsh dump-config 对账失败。',
     () =>
@@ -145,7 +145,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
   );
   await runInstallFault(runtime, 'dump');
   const doctor = await guardedInstall(
-    EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+    EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
     'E_DOCTOR',
     'doctor --strict 快检失败。',
     () =>
@@ -158,7 +158,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
       }),
   );
   if (doctor.exitCode !== EXIT_CODES.SUCCESS)
-    throw new TransactionFailure(EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE, doctor.diagnostics);
+    throw new TransactionFailure(EXIT_CODES.POST_INSTALL_VERIFY_FAILURE, doctor.diagnostics);
   await runInstallFault(runtime, 'doctor');
   const metadata = installedMetadata(plan, facts, runtime.now(), txid, material);
   await transaction.writeManagedDocument(

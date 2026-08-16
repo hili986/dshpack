@@ -64,14 +64,14 @@ async function auditBuilds(
   replay: { current?: InstallReplayCommand },
 ): Promise<void> {
   const audit = await guardedInstall(
-    EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+    EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
     'E_BUILD_AUDIT',
     '安装后的构建脚本审计失败。',
     () => runtime.auditInstalledBuildScripts(profileRoot, material.manifest.plugins, approvals),
   );
   if (audit.unapprovedDirectBuildKeys.length > 0)
     throw installFailure(
-      EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+      EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
       'E_BUILD_DIRECT',
       '直接插件构建授权未精确生效。',
       '停止安装并审计 workspace。',
@@ -130,7 +130,7 @@ async function auditBuilds(
     );
   }
   const verified = await guardedInstall(
-    EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+    EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
     'E_BUILD_REVERIFY',
     '构建脚本复验失败。',
     () => runtime.auditInstalledBuildScripts(profileRoot, material.manifest.plugins, approvals),
@@ -140,7 +140,7 @@ async function auditBuilds(
   );
   if (verified.unapprovedDirectBuildKeys.length > 0 || unknown.length > 0)
     throw installFailure(
-      EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+      EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
       'E_BUILD_REVERIFY',
       '构建脚本复验发现未授权条目。',
       '停止并人工审计依赖闭包。',
@@ -185,7 +185,7 @@ export async function installProfile(
     );
     await runInstallFault(runtime, 'init');
     await guardedInstall(
-      EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+      EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
       'E_PROFILE_INIT_VERIFY',
       '官方 profile 初始化契约漂移。',
       () => runtime.verifyOfficialProfileInit(profileRoot, plan.targetProfile),
@@ -252,7 +252,7 @@ export async function installProfile(
       const locked = resolution.plugins[index] as InstallResolution['plugins'][number];
       facts.push(
         await guardedInstall(
-          EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+          EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
           'E_PLUGIN_VERIFY',
           `插件 ${plugin.name} 安装事实不匹配。`,
           () => runtime.verifyInstalledPlugin(profileRoot, plugin, locked),

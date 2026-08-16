@@ -221,7 +221,8 @@ export async function runTransaction<T>(
           ? error instanceof TransactionFailure
             ? error.exitCode
             : EXIT_CODES.INTERNAL
-          : EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+          : // The lock file outlived the failed setup; the caller must inspect it by hand.
+            EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
       manualRecovery:
         releaseError === undefined || lock === undefined
           ? []
@@ -260,7 +261,9 @@ export async function runTransaction<T>(
             ),
           ],
           status: 'committed',
-          exitCode: EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+          // The install itself committed, but a stranded lock will block the next run
+          // until a human inspects it — that is manual recovery, not a clean outcome.
+          exitCode: EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
           manualRecovery: [
             {
               actionId: 'artifact-lock',

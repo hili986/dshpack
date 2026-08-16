@@ -86,7 +86,7 @@ describe('install stage rollback hooks', () => {
       { source, dshHome, yes: true, interactive: false },
       fakeRuntime({ fault: 'assets', rollbackFailure: true }).runtime,
     );
-    expect(report).toMatchObject({ exitCode: 24, metadata: { status: 'rollback-failed' } });
+    expect(report).toMatchObject({ exitCode: 25, metadata: { status: 'rollback-failed' } });
     expect(report.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'E_TRANSACTION_ROLLBACK_FAILED' }),
     );

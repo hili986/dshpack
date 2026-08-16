@@ -157,7 +157,7 @@ describe('managed transaction actions', () => {
     });
   });
 
-  it('reports exit 24 and exact manual paths when managed-record rollback itself fails', async () => {
+  it('reports exit 25 and exact manual paths when managed-record rollback itself fails', async () => {
     await withHome(async (home) => {
       const record = join(home, '.dshpack', 'installed', 'blocked.json');
       const base = createNodeTransactionAdapter();
@@ -183,7 +183,7 @@ describe('managed transaction actions', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         manualRecovery: [
           {
             actionId: action.id,

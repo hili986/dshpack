@@ -116,7 +116,7 @@ describe('transaction fresh-home and identity safety', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         manualRecovery: [
           expect.objectContaining({
             operation: 'rename',
@@ -157,7 +157,7 @@ describe('transaction fresh-home and identity safety', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         journal: { actions: [{ kind: 'create', ownership: 'owned' }] },
         manualRecovery: [
           expect.objectContaining({

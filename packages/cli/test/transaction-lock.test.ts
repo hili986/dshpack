@@ -172,7 +172,7 @@ describe('transaction artifact lease', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'committed',
-        exitCode: 24,
+        exitCode: 25,
         journal: { state: 'committed', actions: [{ phase: 'applied' }] },
         manualRecovery: [{ actionId: 'artifact-lock', operation: 'inspect-lock' }],
       });
@@ -274,7 +274,7 @@ describe('transaction artifact lease', () => {
         { adapter, dshHome, txid: 'setup-release-failure' },
         async () => undefined,
       );
-      expect(result).toMatchObject({ ok: false, status: 'not-started', exitCode: 24 });
+      expect(result).toMatchObject({ ok: false, status: 'not-started', exitCode: 25 });
       expect(result.diagnostics.map(({ code }) => code)).toEqual([
         'E_TRANSACTION_ARTIFACT_LOCK_SCOPE',
         'E_TRANSACTION_ARTIFACT_LOCK_RELEASE_FAILED',
@@ -324,7 +324,7 @@ describe('transaction artifact lease', () => {
         journal,
         journalPath,
       });
-      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 24 });
+      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 25 });
       expect(result.diagnostics.map(({ code }) => code)).toContain('E_TRANSACTION_ROLLBACK_FAILED');
     });
   });
@@ -351,7 +351,7 @@ describe('transaction artifact lease', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         journal: { actions: [{ ownership: 'pending', phase: 'rollback-failed' }] },
       });
       expect(await nodeTransactionAdapter.pathExists(profilePath)).toBe(true);

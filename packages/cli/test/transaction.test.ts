@@ -249,7 +249,44 @@ describe('runTransaction', () => {
     ).toEqual([changed, original]);
   });
 
-  it('returns rollback-failed with exit 24 and exact manual recovery paths', async () => {
+  // Same injected cause, only the rollback outcome differs. A caller must be able to
+  // tell "machine is back to its pre-install state, retry is safe" from "machine was
+  // left mid-flight, retry would write onto dirty state" from the exit code alone,
+  // without parsing stdout.
+  it('separates a clean rollback from a failed one by exit code alone', async () => {
+    const scenario = async (breakRollback: boolean) => {
+      const adapter = new MemoryTransactionAdapter();
+      const dshHome = join('sandbox', `rollback-contrast-${breakRollback ? 'broken' : 'clean'}`);
+      const profilePath = join(dshHome, 'profiles', 'demo');
+      return await runTransaction(
+        { adapter, dshHome, txid: `tx-rollback-contrast-${breakRollback}` },
+        async (transaction) => {
+          await transaction.create('profile', profilePath, async () => {
+            adapter.populate(profilePath, 'partial-profile');
+          });
+          if (breakRollback) {
+            adapter.failRename = (from) =>
+              from === profilePath ? new Error('injected rollback rename failure') : undefined;
+          }
+          throw new TransactionFailure(23, [failureDiagnostic]);
+        },
+      );
+    };
+
+    const clean = await scenario(false);
+    const broken = await scenario(true);
+
+    expect(clean).toMatchObject({ status: 'rolled-back', exitCode: 23, manualRecovery: [] });
+    expect(broken.status).toBe('rollback-failed');
+    expect(broken.exitCode).not.toBe(clean.exitCode);
+    expect(broken.exitCode).toBe(25);
+    // The invariant that makes 25 mechanically checkable: it is raised exactly when
+    // the caller is handed manual recovery work, and never otherwise.
+    expect(broken.manualRecovery.length).toBeGreaterThan(0);
+    expect(clean.exitCode).not.toBe(25);
+  });
+
+  it('returns rollback-failed with exit 25 and exact manual recovery paths', async () => {
     const adapter = new MemoryTransactionAdapter();
     const dshHome = join('sandbox', 'rollback-failure-home');
     const profilePath = join(dshHome, 'profiles', 'demo');
@@ -270,7 +307,7 @@ describe('runTransaction', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 'rollback-failed',
-      exitCode: 24,
+      exitCode: 25,
       manualRecovery: [
         {
           actionId: 'action-0001',
@@ -366,7 +403,7 @@ describe('runTransaction', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 'rollback-failed',
-      exitCode: 24,
+      exitCode: 25,
       manualRecovery: [
         {
           actionId: 'journal',

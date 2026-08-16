@@ -12,10 +12,18 @@ describe('EXIT_CODES', () => {
       USER_DECLINED: 21,
       PROFILE_CONFLICT_OR_LOCK: 22,
       DSH_SUBPROCESS_FAILURE: 23,
-      POST_INSTALL_OR_ROLLBACK_FAILURE: 24,
+      POST_INSTALL_VERIFY_FAILURE: 24,
+      MANUAL_RECOVERY_REQUIRED: 25,
       CONTRACT: 30,
       SECURITY: 31,
       INTERNAL: 70,
     });
+  });
+
+  // 24 and 25 demand opposite operator responses and must never collapse into one
+  // code: 24 means the machine was restored to its pre-install state (retry is safe),
+  // 25 means it was left mid-flight (retry would write onto dirty state).
+  it('keeps clean-rollback and manual-recovery on distinct codes', () => {
+    expect(EXIT_CODES.POST_INSTALL_VERIFY_FAILURE).not.toBe(EXIT_CODES.MANUAL_RECOVERY_REQUIRED);
   });
 });

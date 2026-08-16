@@ -205,7 +205,7 @@ describe('transaction ownership and serialization', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 'rollback-failed',
-      exitCode: 24,
+      exitCode: 25,
       manualRecovery: [
         expect.objectContaining({
           actionId: 'action-0001',
@@ -292,7 +292,7 @@ describe('transaction ownership and serialization', () => {
   });
 
   it.each(['rolling-back', 'rolled-back'])(
-    'returns exit 24 when the %s journal write fails',
+    'returns exit 25 when the %s journal write fails',
     async (failedState) => {
       const adapter = new OwnedMemoryAdapter();
       const dshHome = join('sandbox', `${failedState}-journal-home`);
@@ -320,7 +320,7 @@ describe('transaction ownership and serialization', () => {
         },
       );
 
-      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 24 });
+      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 25 });
       expect(result.manualRecovery).toEqual([
         expect.objectContaining({ actionId: 'journal', operation: 'write-journal' }),
       ]);
@@ -385,7 +385,7 @@ describe('transaction ownership and serialization', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 'rollback-failed',
-      exitCode: 24,
+      exitCode: 25,
       manualRecovery: [
         expect.objectContaining({
           operation: 'rename',

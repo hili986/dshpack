@@ -138,7 +138,9 @@ export async function rollbackTransaction<T>(
       ok: false,
       diagnostics: [...operationDiagnostics, ...rollbackDiagnostics],
       status: 'rollback-failed',
-      exitCode: EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+      // Not POST_INSTALL_VERIFY_FAILURE: that one promises the machine is back to its
+      // pre-install state. Here it is not, and `manualRecovery` below says how to fix it.
+      exitCode: EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
       journal,
       journalPath,
       backupDirectory,

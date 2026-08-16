@@ -69,7 +69,7 @@ describe('transaction crash windows', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         journal: {
           actions: [{ ownership: 'pending', phase: 'rollback-failed' }],
         },
@@ -85,7 +85,7 @@ describe('transaction crash windows', () => {
     });
   });
 
-  it('returns exit 24 when settings changed but lock release leaves the result unknown', async () => {
+  it('returns exit 25 when settings changed but lock release leaves the result unknown', async () => {
     await withTemporaryRoot(async (root) => {
       const dshHome = join(root, 'home');
       const settingsPath = join(dshHome, 'settings.yaml');
@@ -118,7 +118,7 @@ describe('transaction crash windows', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         journal: { actions: [{ kind: 'settings-write', writeState: 'pending' }] },
         manualRecovery: [
           expect.objectContaining({
@@ -172,7 +172,7 @@ describe('transaction crash windows', () => {
       expect(result).toMatchObject({
         ok: false,
         status: 'rollback-failed',
-        exitCode: 24,
+        exitCode: 25,
         journal: {
           actions: [{ kind: 'settings-write', writeState: 'pending', phase: 'rollback-failed' }],
         },
@@ -264,7 +264,7 @@ describe('transaction crash windows', () => {
         },
       );
 
-      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 24 });
+      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 25 });
       expect(result.diagnostics.map(({ code }) => code)).toEqual([
         'E_TRANSACTION_ABORTED',
         'E_SETTINGS_LOCK_TIMEOUT',
