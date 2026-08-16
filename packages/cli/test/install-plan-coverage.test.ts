@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -75,6 +75,12 @@ async function smallFixture(
 }
 
 function planInput(directory: string): PrepareInstallPlanInput {
+  const targetBeforeState = {
+    profile: { path: 'profiles/coverage-pack', state: 'absent' as const },
+    skills: [],
+    presets: [],
+    settings: { path: 'settings.yaml', state: 'absent' as const },
+  };
   return {
     source: { directory, provenance: { kind: 'directory', path: directory } },
     options: { sourceArgument: 'C:/source with space/"pack"', yes: true },
@@ -84,6 +90,10 @@ function planInput(directory: string): PrepareInstallPlanInput {
       pnpmVersion: '11.7.0',
       profileExists: false,
       interactive: false,
+      targetBeforeState,
+      targetBeforeStateDigest: `sha256-${createHash('sha256')
+        .update(JSON.stringify(targetBeforeState))
+        .digest('base64url')}`,
     },
   };
 }
@@ -111,7 +121,7 @@ describe('install plan defensive branches', () => {
     const common = {
       accessFile: async () => undefined,
       validate: valid,
-      listPaths: async () => [],
+      listPaths: async () => ['pack.lock.yml', 'pack.yml'],
     };
     const changed = await readValidatedPack('C:/pack', {
       ...common,
@@ -126,6 +136,67 @@ describe('install plan defensive branches', () => {
     });
     expect(disappeared).toMatchObject({ exitCode: 20 });
     expect(disappeared.diagnostics[0]).toMatchObject({ code: 'E_SOURCE_READ', path: 'C:/pack' });
+  });
+
+  it('fails closed on private snapshot mutation, unsafe paths, and validation errors', async () => {
+    const root = await smallFixture();
+    const changed = await readValidatedPack(root, {
+      validate: async (snapshot) => {
+        await writeFile(join(snapshot, 'patch', 'cordis.patch.yml'), '- changed\n');
+        return { diagnostics: [], exitCode: 0, metadata: { source: snapshot, valid: true } };
+      },
+    });
+    expect(changed).toMatchObject({ exitCode: 20 });
+    expect(changed.diagnostics[0]).toMatchObject({ code: 'E_SOURCE_SNAPSHOT_CHANGED' });
+
+    const unsafe = await readValidatedPack('C:/pack', {
+      accessFile: async () => undefined,
+      listPaths: async () => ['../escape'],
+      readText: async () => 'bytes',
+      validate: async () => ({
+        diagnostics: [],
+        exitCode: 0,
+        metadata: { source: 'x', valid: true },
+      }),
+    });
+    expect(unsafe).toMatchObject({ exitCode: 31 });
+    expect(unsafe.diagnostics[0]).toMatchObject({ code: 'E_SOURCE_SNAPSHOT_ENTRY' });
+
+    const validation = await readValidatedPack(root, {
+      validate: async () => ({
+        diagnostics: [
+          {
+            code: 'E_PATH_ESCAPE',
+            severity: 'error',
+            message: 'unsafe',
+            hint: 'remove it',
+            evidence: 'local',
+          },
+        ],
+        exitCode: 31,
+        metadata: { source: root, valid: false },
+      }),
+    });
+    expect(validation).toMatchObject({ exitCode: 31 });
+  });
+
+  it('covers bound readBytes and rejects a snapshot missing required documents', async () => {
+    const root = await smallFixture();
+    const bytes = await readValidatedPack(root, { readBytes: (path) => readFile(path) });
+    expect(bytes.material, JSON.stringify(bytes.diagnostics)).toBeDefined();
+
+    const missing = await readValidatedPack('C:/pack', {
+      accessFile: async () => undefined,
+      listPaths: async () => ['pack.yml'],
+      readText: async () => 'formatVersion: 0\n',
+      validate: async () => ({
+        diagnostics: [],
+        exitCode: 0,
+        metadata: { source: 'x', valid: true },
+      }),
+    });
+    expect(missing).toMatchObject({ exitCode: 20 });
+    expect(missing.diagnostics[0]).toMatchObject({ code: 'E_SOURCE_READ' });
   });
 
   it.each([
@@ -196,8 +267,11 @@ describe('install plan defensive branches', () => {
     const build = planInput(await smallFixture({ allowBuilds: true }));
     build.options = { ...build.options, allowBuilds: ['not-requested'] };
     const unknown = await prepareInstallPlan(build);
-    expect(unknown).toMatchObject({ exitCode: 30 });
-    expect(unknown.diagnostics[0]).toMatchObject({ code: 'E_ALLOW_BUILD_UNKNOWN' });
+    expect(unknown).toMatchObject({
+      exitCode: 21,
+      plan: { extraBuildApprovals: ['not-requested'] },
+      decision: { missingAllowBuilds: ['example-bundle'] },
+    });
   });
 
   it('quotes non-interactive commands and plans force overwrite explicitly', async () => {
@@ -206,7 +280,7 @@ describe('install plan defensive branches', () => {
     value.options = { ...value.options, force: true };
     const result = await prepareInstallPlan(value);
     expect(result.exitCode).toBe(0);
-    expect(result.decision.nonInteractiveCommand).toContain('"C:/source with space/\\"pack\\""');
+    expect(result.decision.nonInteractiveCommand).toContain('\'C:/source with space/"pack"\'');
     expect(result.decision.nonInteractiveCommand).toContain('--force');
   });
 });

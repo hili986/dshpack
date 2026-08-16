@@ -33,12 +33,61 @@ export interface InstallPlanSideEffect {
   reason: string;
 }
 
+export interface InstallPlanSourceFile {
+  path: string;
+  sha512: string;
+}
+
+export type InstallPathBeforeState =
+  | { path: string; state: 'absent' }
+  | { path: string; state: 'present'; sha256: string };
+
+export interface InstallTargetBeforeState {
+  profile: InstallPathBeforeState;
+  skills: readonly InstallPathBeforeState[];
+  presets: readonly InstallPathBeforeState[];
+  settings: InstallPathBeforeState;
+}
+
+export interface InstallPlanAsset {
+  id: string;
+  source: string;
+  target: string;
+  collision: boolean;
+  action: 'create' | 'skip' | 'replace';
+  effectiveAt: '热生效' | '新会话生效';
+}
+
+export interface InstallPlanMcp {
+  serverName: string;
+  transport: 'streamable-http';
+  source: string;
+  target: 'profile patch';
+  action: 'configure';
+  effectiveAt: '重启生效';
+}
+
+export interface InstallPlanDefaults {
+  agentPreset?: {
+    value: string;
+    source: 'pack' | 'environment';
+    effectiveAt: '仅空白会话';
+  };
+  permissionPreset: {
+    value: 'workspace-write' | 'danger-full-access';
+    effectiveAt: '仅空白会话';
+  };
+}
+
 export interface InstallPlan {
   planVersion: 0;
   planDigest: string;
   manifestDigest: string;
+  lockDigest: string;
+  sourceFiles: readonly InstallPlanSourceFile[];
   stateDigest: string;
   source: SourceProvenance;
+  dshHome: string;
   pack: { name: string; version: string };
   targetProfile: string;
   replaceExistingProfile: boolean;
@@ -51,12 +100,22 @@ export interface InstallPlan {
   pnpm: { current: string };
   plugins: readonly InstallPlanPlugin[];
   allowBuilds: readonly string[];
-  skills: readonly string[];
-  presets: readonly string[];
-  mcp: readonly string[];
-  settingsNamespaces: readonly ['agent-presets'] | readonly [];
+  extraBuildApprovals: readonly string[];
+  skills: readonly InstallPlanAsset[];
+  presets: readonly InstallPlanAsset[];
+  mcp: readonly InstallPlanMcp[];
+  defaults: InstallPlanDefaults;
+  settingsNamespaces: readonly {
+    namespace: 'agent-presets';
+    source: 'settings/agent-presets.yml';
+    target: 'settings.yaml#agent-presets';
+    action: 'merge';
+    effectiveAt: '新会话生效';
+  }[];
   writes: readonly InstallPlanWrite[];
   sideEffects: readonly InstallPlanSideEffect[];
+  beforeState: InstallTargetBeforeState;
+  rollbackSnapshot: { enabled: true; targetBeforeStateDigest: string };
   requiredDangerousPermissions: readonly DangerousPermission[];
   authorizedDangerousPermissions: readonly DangerousPermission[];
 }
@@ -81,6 +140,9 @@ export interface InstallEnvironmentFacts {
   pnpmVersion: string;
   profileExists: boolean;
   interactive: boolean;
+  targetBeforeState: InstallTargetBeforeState;
+  targetBeforeStateDigest: string;
+  availableAgentPresets?: readonly string[];
 }
 
 export interface PrepareInstallPlanInput {
@@ -105,6 +167,7 @@ export interface InstallDecision {
   status: 'ready' | 'requires-interaction' | 'review-only' | 'rejected';
   prompts: readonly InstallPromptDecision[];
   missingAllowBuilds: readonly string[];
+  nonInteractiveArgv: readonly string[];
   nonInteractiveCommand: string;
 }
 

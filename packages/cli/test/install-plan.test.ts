@@ -13,6 +13,7 @@ import {
   integrity,
   lockedPlugin,
   manifest,
+  targetBeforeState,
 } from './install-plan-fixture.js';
 
 describe('prepareInstallPlan', () => {
@@ -20,6 +21,7 @@ describe('prepareInstallPlan', () => {
     const root = await fixture();
     const dshHome = join(tmpdir(), `absent-plan-home-${crypto.randomUUID()}`);
     const before = await directoryBytes(root);
+    const target = targetBeforeState();
     const result = await prepareInstallPlan(
       input(root, {
         source: {
@@ -38,6 +40,8 @@ describe('prepareInstallPlan', () => {
           pnpmVersion: '11.7.0',
           profileExists: false,
           interactive: false,
+          targetBeforeState: target.state,
+          targetBeforeStateDigest: target.digest,
         },
       }),
     );
@@ -67,8 +71,9 @@ describe('prepareInstallPlan', () => {
     expect(await directoryBytes(root)).toEqual(before);
     await expect(stat(dshHome)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    const repeated = await prepareInstallPlan(input(root));
-    const repeatedAgain = await prepareInstallPlan(input(root));
+    const repeatedInput = input(root);
+    const repeated = await prepareInstallPlan(repeatedInput);
+    const repeatedAgain = await prepareInstallPlan(repeatedInput);
     expect(repeated.plan?.planDigest).toBe(repeatedAgain.plan?.planDigest);
   });
 
@@ -184,6 +189,8 @@ describe('prepareInstallPlan', () => {
       pnpmVersion: '11.7.0',
       profileExists: true,
       interactive: false,
+      targetBeforeState: targetBeforeState('research-pack', { profilePresent: true }).state,
+      targetBeforeStateDigest: targetBeforeState('research-pack', { profilePresent: true }).digest,
     };
     const rejected = await prepareInstallPlan(
       input(root, { options: { sourceArgument: root, yes: true }, environment }),
@@ -315,6 +322,8 @@ describe('prepareInstallPlan', () => {
           pnpmVersion: '11.7.0',
           profileExists: false,
           interactive: false,
+          targetBeforeState: targetBeforeState().state,
+          targetBeforeStateDigest: targetBeforeState().digest,
         },
       }),
     );
@@ -328,7 +337,7 @@ describe('prepareInstallPlan', () => {
     );
     expect(unsafe.exitCode).toBe(31);
     expect(unsafe.plan).toBeUndefined();
-    expect(unsafe.diagnostics[0]).toMatchObject({ code: 'E_PROFILE_NAME' });
+    expect(unsafe.diagnostics[0]).toMatchObject({ code: 'E_PROFILE_PATH' });
   });
 
   it('enumerates managed assets, settings, and their activation timing', async () => {
@@ -349,12 +358,24 @@ describe('prepareInstallPlan', () => {
         'settings/agent-presets.yml': 'custom: {}\n',
       },
     });
-    const result = await prepareInstallPlan(input(root));
+    const target = targetBeforeState('research-pack', {
+      skills: [
+        { path: 'skills/folder', state: 'absent' },
+        { path: 'skills/notes', state: 'absent' },
+      ],
+      presets: [{ path: '.agent-presets/custom', state: 'absent' }],
+    });
+    const environment = {
+      ...input(root).environment,
+      targetBeforeState: target.state,
+      targetBeforeStateDigest: target.digest,
+    };
+    const result = await prepareInstallPlan(input(root, { environment }));
     expect(result.exitCode, JSON.stringify(result.diagnostics)).toBe(0);
-    expect(result.plan?.skills).toEqual(['folder', 'notes']);
+    expect(result.plan?.skills.map(({ id }) => id)).toEqual(['folder', 'notes']);
     expect(result.plan?.writes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: 'skills/notes.md', effectiveAt: '热生效' }),
+        expect.objectContaining({ path: 'skills/notes', effectiveAt: '热生效' }),
         expect.objectContaining({ path: '.agent-presets/custom', effectiveAt: '新会话生效' }),
         expect.objectContaining({ path: 'settings.yaml', effectiveAt: '新会话生效' }),
         expect.objectContaining({
@@ -364,7 +385,7 @@ describe('prepareInstallPlan', () => {
       ]),
     );
     const forced = await prepareInstallPlan(
-      input(root, { options: { sourceArgument: root, yes: true, force: true } }),
+      input(root, { options: { sourceArgument: root, yes: true, force: true }, environment }),
     );
     expect(forced.plan?.writes.filter(({ kind }) => kind === 'skill' || kind === 'preset')).toEqual(
       expect.arrayContaining([expect.objectContaining({ policy: 'create-or-replace' })]),

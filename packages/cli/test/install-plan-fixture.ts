@@ -6,7 +6,11 @@ import { join } from 'node:path';
 import type { PackLockedPlugin, PackManifest } from '@dshpack/core';
 import { stringify } from 'yaml';
 
-import type { PrepareInstallPlanInput } from '../src/install/types.js';
+import type {
+  InstallPathBeforeState,
+  InstallTargetBeforeState,
+  PrepareInstallPlanInput,
+} from '../src/install/types.js';
 
 const digest = (algorithm: 'sha256' | 'sha512', bytes: Uint8Array): string =>
   `${algorithm}-${createHash(algorithm)
@@ -15,6 +19,26 @@ const digest = (algorithm: 'sha256' | 'sha512', bytes: Uint8Array): string =>
 const packageDigest = `sha512-${Buffer.alloc(64, 7).toString('base64')}`;
 export const integrity = `sha512-${Buffer.alloc(64, 9).toString('base64')}`;
 export const commit = '0123456789abcdef0123456789abcdef01234567';
+
+export function targetBeforeState(
+  profile = 'research-pack',
+  options: {
+    profilePresent?: boolean;
+    skills?: readonly InstallPathBeforeState[];
+    presets?: readonly InstallPathBeforeState[];
+    settings?: InstallPathBeforeState;
+  } = {},
+): { state: InstallTargetBeforeState; digest: string } {
+  const state: InstallTargetBeforeState = {
+    profile: options.profilePresent
+      ? { path: `profiles/${profile}`, state: 'present', sha256: 'sha256-profile' }
+      : { path: `profiles/${profile}`, state: 'absent' },
+    skills: options.skills ?? [],
+    presets: options.presets ?? [],
+    settings: options.settings ?? { path: 'settings.yaml', state: 'absent' },
+  };
+  return { state, digest: digest('sha256', Buffer.from(JSON.stringify(state))) };
+}
 
 export function manifest(plugin?: Partial<PackManifest['plugins'][number]>): PackManifest {
   return {
@@ -91,6 +115,7 @@ export function input(
   directory: string,
   overrides: Partial<PrepareInstallPlanInput> = {},
 ): PrepareInstallPlanInput {
+  const before = targetBeforeState();
   return {
     source: { directory, provenance: { kind: 'directory', path: directory } },
     options: { sourceArgument: directory, yes: true },
@@ -100,6 +125,8 @@ export function input(
       pnpmVersion: '11.7.0',
       profileExists: false,
       interactive: false,
+      targetBeforeState: before.state,
+      targetBeforeStateDigest: before.digest,
     },
     ...overrides,
   };

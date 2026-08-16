@@ -8,31 +8,49 @@ import type {
   InstallPromptDecision,
 } from './types.js';
 
-function quote(value: string): string {
-  return /^[A-Za-z0-9_@./:\\#-]+$/u.test(value) ? value : `"${value.replaceAll('"', '\\"')}"`;
+function quotePowerShell(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
-export function nonInteractiveInstallCommand(
+export function nonInteractiveInstallArgv(
   options: InstallPlanOptions,
   plan: InstallPlan,
-): string {
+  environment: InstallEnvironmentFacts,
+): string[] {
   const args = [
-    'dshpack',
     'install',
-    quote(options.sourceArgument),
+    options.sourceArgument,
     '--as',
-    quote(plan.targetProfile),
+    plan.targetProfile,
+    '--dsh-home',
+    environment.dshHome,
     '--frozen',
   ];
   if (plan.replaceExistingProfile) args.push('--replace');
   if (plan.plugins.some(({ integrity }) => integrity.kind === 'unverified'))
     args.push('--allow-unverified');
-  for (const name of plan.allowBuilds) args.push('--allow-build', quote(name));
+  for (const name of [...plan.allowBuilds, ...plan.extraBuildApprovals])
+    args.push('--allow-build', name);
   if (plan.requiredDangerousPermissions.length > 0) args.push('--allow-danger-full-access');
   if (plan.dsh.versionMismatch) args.push('--allow-version-mismatch');
   if (options.force === true) args.push('--force');
   args.push('--yes');
-  return args.join(' ');
+  return args;
+}
+
+export function nonInteractiveInstallCommand(
+  options: InstallPlanOptions,
+  plan: InstallPlan,
+  environment: InstallEnvironmentFacts,
+): string {
+  const argv = nonInteractiveInstallArgv(options, plan, environment);
+  const rendered = argv.map((value, index) => {
+    const previous = argv[index - 1];
+    if (value === 'install' || value.startsWith('--')) return value;
+    if (index === 1 || previous === '--dsh-home') return quotePowerShell(value);
+    return /^[A-Za-z0-9_@.-]+$/u.test(value) ? value : quotePowerShell(value);
+  });
+  return ['dshpack', ...rendered].join(' ');
 }
 
 function prompt(kind: InstallPromptDecision['kind'], subject: string): InstallPromptDecision {
@@ -48,12 +66,14 @@ export function decideInstall(
   const missingAllowBuilds = plan.allowBuilds.filter((name) => !grantedBuilds.has(name));
   const prompts: InstallPromptDecision[] = [];
   if (options.dryRun === true) {
+    const nonInteractiveArgv = nonInteractiveInstallArgv(options, plan, environment);
     return {
       decision: {
         status: 'review-only',
         prompts,
         missingAllowBuilds,
-        nonInteractiveCommand: nonInteractiveInstallCommand(options, plan),
+        nonInteractiveArgv,
+        nonInteractiveCommand: nonInteractiveInstallCommand(options, plan, environment),
       },
     };
   }
@@ -68,10 +88,17 @@ export function decideInstall(
     prompts.push(prompt('version-mismatch', `${plan.dsh.current} ∉ dsh.tested`));
   }
   if (options.yes !== true) prompts.push(prompt('install', plan.targetProfile));
-  const command = nonInteractiveInstallCommand(options, plan);
+  const nonInteractiveArgv = nonInteractiveInstallArgv(options, plan, environment);
+  const command = nonInteractiveInstallCommand(options, plan, environment);
   if (prompts.length === 0) {
     return {
-      decision: { status: 'ready', prompts, missingAllowBuilds, nonInteractiveCommand: command },
+      decision: {
+        status: 'ready',
+        prompts,
+        missingAllowBuilds,
+        nonInteractiveArgv,
+        nonInteractiveCommand: command,
+      },
     };
   }
   if (environment.interactive) {
@@ -80,12 +107,19 @@ export function decideInstall(
         status: 'requires-interaction',
         prompts,
         missingAllowBuilds,
+        nonInteractiveArgv,
         nonInteractiveCommand: command,
       },
     };
   }
   return {
-    decision: { status: 'rejected', prompts, missingAllowBuilds, nonInteractiveCommand: command },
+    decision: {
+      status: 'rejected',
+      prompts,
+      missingAllowBuilds,
+      nonInteractiveArgv,
+      nonInteractiveCommand: command,
+    },
     diagnostic: {
       code: 'E_CONFIRMATION_REQUIRED',
       severity: 'error',

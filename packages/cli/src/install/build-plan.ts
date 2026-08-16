@@ -5,15 +5,34 @@ import type { PackLock, PackManifest } from '@dshpack/core';
 import type { SourceProvenance } from '../adapters/source.js';
 import type {
   InstallEnvironmentFacts,
+  InstallPathBeforeState,
   InstallPlan,
+  InstallPlanAsset,
   InstallPlanOptions,
   InstallPlanPlugin,
   InstallPlanSideEffect,
+  InstallPlanSourceFile,
   InstallPlanWrite,
+  InstallTargetBeforeState,
 } from './types.js';
 
 function sha256(value: unknown): string {
   return `sha256-${createHash('sha256').update(JSON.stringify(value)).digest('base64url')}`;
+}
+
+export function normalizeTargetBeforeState(
+  value: InstallTargetBeforeState,
+): InstallTargetBeforeState {
+  return {
+    profile: value.profile,
+    skills: [...value.skills].sort((a, b) => a.path.localeCompare(b.path, 'en')),
+    presets: [...value.presets].sort((a, b) => a.path.localeCompare(b.path, 'en')),
+    settings: value.settings,
+  };
+}
+
+export function digestTargetBeforeState(value: InstallTargetBeforeState): string {
+  return sha256(normalizeTargetBeforeState(value));
 }
 
 function uniqueTopLevel(paths: readonly string[], prefix: string): string[] {
@@ -27,7 +46,7 @@ function uniqueTopLevel(paths: readonly string[], prefix: string): string[] {
   ].sort((left, right) => left.localeCompare(right, 'en'));
 }
 
-function skillsIn(paths: readonly string[]): { id: string; source: string }[] {
+export function skillsIn(paths: readonly string[]): { id: string; source: string }[] {
   const skills = new Map<string, string>();
   for (const path of paths) {
     if (!path.startsWith('skills/')) continue;
@@ -35,18 +54,56 @@ function skillsIn(paths: readonly string[]): { id: string; source: string }[] {
     const first = remainder.split('/')[0] as string;
     const flat = !remainder.includes('/') && first.endsWith('.md');
     const id = flat ? first.slice(0, -3) : first;
-    if (!skills.has(id)) {
-      skills.set(id, flat ? path : `skills/${first}`);
-    }
+    if (!skills.has(id)) skills.set(id, flat ? path : `skills/${first}`);
   }
   return [...skills].map(([id, source]) => ({ id, source }));
 }
 
+function beforeAt(
+  states: readonly InstallPathBeforeState[],
+  target: string,
+): InstallPathBeforeState | undefined {
+  return states.find(({ path }) => path === target);
+}
+
+function asset(
+  id: string,
+  source: string,
+  target: string,
+  states: readonly InstallPathBeforeState[],
+  force: boolean,
+  effectiveAt: InstallPlanAsset['effectiveAt'],
+): InstallPlanAsset {
+  const collision = beforeAt(states, target)?.state === 'present';
+  return {
+    id,
+    source,
+    target,
+    collision,
+    action: collision ? (force ? 'replace' : 'skip') : 'create',
+    effectiveAt,
+  };
+}
+
+function assetsFor(
+  paths: readonly string[],
+  before: InstallTargetBeforeState,
+  force: boolean,
+): { skills: InstallPlanAsset[]; presets: InstallPlanAsset[] } {
+  return {
+    skills: skillsIn(paths).map(({ id, source }) =>
+      asset(id, source, `skills/${id}`, before.skills, force, '热生效'),
+    ),
+    presets: uniqueTopLevel(paths, 'presets/').map((id) =>
+      asset(id, `presets/${id}`, `.agent-presets/${id}`, before.presets, force, '新会话生效'),
+    ),
+  };
+}
+
 function writesFor(
   manifest: PackManifest,
-  paths: readonly string[],
   profile: string,
-  force: boolean,
+  assets: { skills: readonly InstallPlanAsset[]; presets: readonly InstallPlanAsset[] },
 ): InstallPlanWrite[] {
   const writes: InstallPlanWrite[] = [
     {
@@ -62,20 +119,20 @@ function writesFor(
       effectiveAt: '重启生效',
     },
   ];
-  for (const skill of skillsIn(paths)) {
+  for (const item of assets.skills) {
     writes.push({
-      path: skill.source,
+      path: item.target,
       kind: 'skill',
-      policy: force ? 'create-or-replace' : 'skip-existing',
-      effectiveAt: '热生效',
+      policy: item.action === 'skip' ? 'skip-existing' : 'create-or-replace',
+      effectiveAt: item.effectiveAt,
     });
   }
-  for (const preset of uniqueTopLevel(paths, 'presets/')) {
+  for (const item of assets.presets) {
     writes.push({
-      path: `.agent-presets/${preset}`,
+      path: item.target,
       kind: 'preset',
-      policy: force ? 'create-or-replace' : 'skip-existing',
-      effectiveAt: '新会话生效',
+      policy: item.action === 'skip' ? 'skip-existing' : 'create-or-replace',
+      effectiveAt: item.effectiveAt,
     });
   }
   if (manifest.settings !== undefined) {
@@ -99,6 +156,8 @@ export function buildInstallPlan(input: {
   provenance: SourceProvenance;
   manifest: PackManifest;
   lock: PackLock;
+  lockDigest: string;
+  sourceFiles: readonly InstallPlanSourceFile[];
   plugins: readonly InstallPlanPlugin[];
   paths: readonly string[];
   targetProfile: string;
@@ -115,17 +174,29 @@ export function buildInstallPlan(input: {
       ? (['danger-full-access'] as const)
       : ([] as const);
   const versionMismatch = !manifest.dsh.tested.includes(environment.dshVersion);
+  const requiredBuilds = plugins.filter(({ allowBuilds }) => allowBuilds).map(({ name }) => name);
+  const extraBuildApprovals = [...new Set(options.allowBuilds ?? [])]
+    .filter((name) => !requiredBuilds.includes(name))
+    .sort((left, right) => left.localeCompare(right, 'en'));
+  const assets = assetsFor(input.paths, environment.targetBeforeState, options.force === true);
+  const beforeState = normalizeTargetBeforeState(environment.targetBeforeState);
   const stateDigest = sha256({
     targetProfile,
-    profileExists: environment.profileExists,
     dshVersion: environment.dshVersion,
     pnpmVersion: environment.pnpmVersion,
+    targetBeforeStateDigest: environment.targetBeforeStateDigest,
   });
+  const packPreset = manifest.defaults.agentPreset;
+  const presetFromPack =
+    packPreset !== undefined && assets.presets.some(({ id }) => id === packPreset);
   const draft = {
     planVersion: 0 as const,
     manifestDigest: lock.manifestSha256,
+    lockDigest: input.lockDigest,
+    sourceFiles: [...input.sourceFiles].sort((a, b) => a.path.localeCompare(b.path, 'en')),
     stateDigest,
     source: input.provenance,
+    dshHome: environment.dshHome,
     pack: { name: manifest.name, version: manifest.version },
     targetProfile,
     replaceExistingProfile: environment.profileExists && options.replace === true,
@@ -133,19 +204,57 @@ export function buildInstallPlan(input: {
     dsh: { current: environment.dshVersion, tested: manifest.dsh.tested, versionMismatch },
     pnpm: { current: environment.pnpmVersion },
     plugins,
-    allowBuilds: plugins.filter(({ allowBuilds }) => allowBuilds).map(({ name }) => name),
-    skills: skillsIn(input.paths).map(({ id }) => id),
-    presets: uniqueTopLevel(input.paths, 'presets/'),
-    mcp: manifest.mcp.map(({ serverName }) => serverName),
+    allowBuilds: requiredBuilds,
+    extraBuildApprovals,
+    skills: assets.skills,
+    presets: assets.presets,
+    mcp: manifest.mcp.map(({ serverName, transport, url }) => ({
+      serverName,
+      transport,
+      source: url,
+      target: 'profile patch' as const,
+      action: 'configure' as const,
+      effectiveAt: '重启生效' as const,
+    })),
+    defaults: {
+      ...(packPreset === undefined
+        ? {}
+        : {
+            agentPreset: {
+              value: packPreset,
+              source: presetFromPack ? ('pack' as const) : ('environment' as const),
+              effectiveAt: '仅空白会话' as const,
+            },
+          }),
+      permissionPreset: {
+        value: manifest.defaults.permissionPreset,
+        effectiveAt: '仅空白会话' as const,
+      },
+    },
     settingsNamespaces:
-      manifest.settings === undefined ? ([] as const) : (['agent-presets'] as const),
-    writes: writesFor(manifest, input.paths, targetProfile, options.force === true),
+      manifest.settings === undefined
+        ? []
+        : [
+            {
+              namespace: 'agent-presets' as const,
+              source: 'settings/agent-presets.yml' as const,
+              target: 'settings.yaml#agent-presets' as const,
+              action: 'merge' as const,
+              effectiveAt: '新会话生效' as const,
+            },
+          ],
+    writes: writesFor(manifest, targetProfile, assets),
     sideEffects: [
       {
         path: `profiles/${targetProfile}/cordis.yml`,
         reason: 'dsh --dump-config（E9）',
       },
     ] satisfies InstallPlanSideEffect[],
+    beforeState,
+    rollbackSnapshot: {
+      enabled: true as const,
+      targetBeforeStateDigest: environment.targetBeforeStateDigest,
+    },
     requiredDangerousPermissions,
     authorizedDangerousPermissions,
   };
