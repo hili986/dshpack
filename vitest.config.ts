@@ -61,6 +61,12 @@ export default defineConfig({
         'packages/cli/src/install/runtime-process.ts': { branches: 90 },
         'packages/cli/src/install/runtime-state.ts': { branches: 90 },
         'packages/cli/src/install/runtime.ts': { branches: 90 },
+        // lock/engine.ts produces pack.lock.yml, the integrity record install verifies
+        // against, and shipped at 71.64% branches because nothing gated it. The gate goes
+        // in first so the gap cannot go quiet again; raise the tests to meet it.
+        'packages/cli/src/lock/engine.ts': { branches: 90 },
+        'packages/cli/src/commands/lock.ts': { branches: 90 },
+        'packages/cli/src/cli.ts': { branches: 90 },
         'packages/cli/src/list/contracts.ts': { branches: 90 },
         'packages/cli/src/list/engine.ts': { branches: 90 },
         'packages/cli/src/list/metadata-contract.ts': { branches: 90 },
