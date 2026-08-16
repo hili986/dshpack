@@ -5,6 +5,7 @@ import { exportCommand, registerExportCommand } from './commands/export.js';
 import { initCommand } from './commands/init.js';
 import { installCommand, registerInstallCommand } from './commands/install.js';
 import { listCommand, registerListCommand } from './commands/list.js';
+import { lockCommand, registerLockCommand } from './commands/lock.js';
 import { packCommand } from './commands/pack.js';
 import { diagnostic, writeReport } from './commands/shared.js';
 import { registerSwitchCommand, switchCommand } from './commands/switch.js';
@@ -15,6 +16,7 @@ const commandDefinitions = [
   exportCommand,
   installCommand,
   listCommand,
+  lockCommand,
   switchCommand,
   doctorCommand,
   validateCommand,
@@ -65,6 +67,7 @@ export function createProgram(): Command {
       name === 'export' ||
       name === 'install' ||
       name === 'list' ||
+      name === 'lock' ||
       name === 'switch'
     )
       continue;
@@ -83,6 +86,7 @@ export function createProgram(): Command {
   registerExportCommand(program);
   registerInstallCommand(program);
   registerListCommand(program);
+  registerLockCommand(program);
   registerSwitchCommand(program);
 
   return program;
