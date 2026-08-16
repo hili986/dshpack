@@ -38,7 +38,8 @@ const forbiddenNetworkPackages = [
 
 interface Violation {
   file: string;
-  specifier: string;
+  kind: 'escape' | 'import';
+  rule: string;
 }
 
 function isPackageOrSubpath(specifier: string, packageName: string): boolean {
@@ -68,6 +69,21 @@ function importedSpecifiers(source: string): readonly string[] {
   return [...specifiers];
 }
 
+const forbiddenEscapeRules = [
+  { rule: 'process.getBuiltinModule', pattern: /\bprocess\.getBuiltinModule\s*\(/gu },
+  { rule: 'process.binding', pattern: /\bprocess\.binding\s*\(/gu },
+  { rule: 'fetch', pattern: /(?<![\w$.])fetch\s*\(/gu },
+  { rule: 'new WebSocket', pattern: /\bnew\s+WebSocket\s*\(/gu },
+  {
+    rule: 'dynamic import expression',
+    pattern: /\bimport\s*\(\s*(?!['"](?:\\.|[^'"])*['"]\s*\))/gu,
+  },
+] as const;
+
+function forbiddenEscapeRoutes(source: string): readonly string[] {
+  return forbiddenEscapeRules.filter(({ pattern }) => pattern.test(source)).map(({ rule }) => rule);
+}
+
 async function typescriptFiles(directory: string): Promise<readonly string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = await Promise.all(
@@ -91,14 +107,24 @@ async function findForbiddenImports(root: string): Promise<readonly Violation[]>
       if (isForbidden(specifier)) {
         violations.push({
           file: path.relative(root, file).replaceAll(path.sep, '/'),
-          specifier,
+          kind: 'import',
+          rule: specifier,
         });
       }
+    }
+    for (const rule of forbiddenEscapeRoutes(source)) {
+      violations.push({
+        file: path.relative(root, file).replaceAll(path.sep, '/'),
+        kind: 'escape',
+        rule,
+      });
     }
   }
 
   return violations.sort((left, right) =>
-    `${left.file}:${left.specifier}`.localeCompare(`${right.file}:${right.specifier}`),
+    `${left.file}:${left.kind}:${left.rule}`.localeCompare(
+      `${right.file}:${right.kind}:${right.rule}`,
+    ),
   );
 }
 
@@ -127,7 +153,41 @@ describe('core source zero-side-effect boundary', () => {
       );
 
       await expect(findForbiddenImports(temporarySourceRoot)).resolves.toEqual([
-        { file: 'mutant.ts', specifier },
+        { file: 'mutant.ts', kind: 'import', rule: specifier },
+      ]);
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [
+      'process.getBuiltinModule',
+      "process.getBuiltinModule('node:fs');\nexport {};\n",
+      'process.getBuiltinModule',
+    ],
+    ['process.binding', "process.binding('fs');\nexport {};\n", 'process.binding'],
+    ['bare fetch', "fetch('https://example.test');\nexport {};\n", 'fetch'],
+    [
+      'WebSocket construction',
+      "new WebSocket('wss://example.test');\nexport {};\n",
+      'new WebSocket',
+    ],
+    [
+      'dynamic import expression',
+      "const specifier = 'node:fs';\nawait import(specifier);\nexport {};\n",
+      'dynamic import expression',
+    ],
+  ])('detects a temporary %s import-free escape mutant', async (_name, source, rule) => {
+    const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'dshpack-core-escape-mutant-'));
+    const temporarySourceRoot = path.join(temporaryRoot, 'src');
+
+    try {
+      await mkdir(temporarySourceRoot);
+      await writeFile(path.join(temporarySourceRoot, 'mutant.ts'), source, 'utf8');
+
+      await expect(findForbiddenImports(temporarySourceRoot)).resolves.toEqual([
+        { file: 'mutant.ts', kind: 'escape', rule },
       ]);
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
