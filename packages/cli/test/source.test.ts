@@ -309,7 +309,7 @@ describe('materializeSource', () => {
     const commit = '0123456789abcdef0123456789abcdef01234567';
     const pax = (value: string) => archive([{ name: 'pax_global_header', type: 'g', data: `52 comment=${value}\n` }, { name: 'repo/file', data: 'safe' }]);
     const result = await materialize(`github:owner/repo#${commit}`, { download: async () => ({ statusCode: 200, body: chunks(pax(commit)) }) });
-    await expect(readFile(join(result.directory, 'repo/file'), 'utf8')).resolves.toBe('safe');
+    await expect(readFile(join(result.directory, 'file'), 'utf8')).resolves.toBe('safe');
     await result.cleanup();
     await expectSourceError(materialize(`github:owner/repo#${commit}`, { download: async () => ({ statusCode: 200, body: chunks(pax('1123456789abcdef0123456789abcdef01234567')) }) }), 31, 'ARCHIVE_UNSAFE');
     const root = await temporaryRoot(); const local = join(root, 'pax.dshpack.tgz'); await writeFile(local, pax(commit));

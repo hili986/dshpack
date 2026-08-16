@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { createReadStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { lstat, mkdir } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createGunzip } from 'node:zlib';
 import { x as extractTar, Parser, type ReadEntry } from 'tar';
@@ -10,6 +10,10 @@ const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
 const MAX_ENTRIES = 1000;
 
 type ArchiveError = (code: string, message: string) => Error;
+
+export interface GitHubArchiveExpectation {
+  commit: string;
+}
 
 function dataAfterNul(block: Buffer, offset: number, length: number): boolean {
   const field = block.subarray(offset, offset + length);
@@ -87,15 +91,16 @@ function inspectEntry(
     parents: Set<string>;
     filePaths: Set<string>;
     bytes: number;
+    githubRootName: string | undefined;
   },
   fail: ArchiveError,
-  expectedGitHubCommit?: string,
+  expectedGitHub?: GitHubArchiveExpectation,
 ): void {
   const global = entry.globalExtended;
   const unsafeGlobal =
     global !== undefined &&
-    (expectedGitHubCommit === undefined ||
-      global.comment !== expectedGitHubCommit ||
+    (expectedGitHub === undefined ||
+      global.comment !== expectedGitHub.commit ||
       Object.entries(global).some(
         ([key, value]) => value !== undefined && key !== 'global' && key !== 'comment',
       ));
@@ -106,6 +111,12 @@ function inspectEntry(
     throw fail('ARCHIVE_UNSAFE', '归档包含链接或特殊文件。');
   }
   const segments = safeEntryPath(entry, fail).split('/');
+  if (expectedGitHub !== undefined) {
+    const root = segments[0] as string;
+    state.githubRootName ??= root;
+    if (root !== state.githubRootName)
+      throw fail('ARCHIVE_UNSAFE', 'GitHub codeload 归档包含多个顶层目录。');
+  }
   const leafCanonical = segments.join('/').normalize('NFC').toLowerCase();
   for (let index = 1; index <= segments.length; index += 1) {
     const original = segments.slice(0, index).join('/');
@@ -144,8 +155,8 @@ function inspectEntry(
 async function preflight(
   filename: string,
   fail: ArchiveError,
-  expectedGitHubCommit?: string,
-): Promise<void> {
+  expectedGitHub?: GitHubArchiveExpectation,
+): Promise<string | undefined> {
   if (!(await rawHeadersSafe(filename)))
     throw fail('ARCHIVE_UNSAFE', '归档原始 header 不安全或无效。');
   const state = {
@@ -154,6 +165,7 @@ async function preflight(
     parents: new Set<string>(),
     filePaths: new Set<string>(),
     bytes: 0,
+    githubRootName: undefined,
   };
   let entries = 0;
   let metaHeaders = 0;
@@ -182,7 +194,7 @@ async function preflight(
       }
       if (failure === undefined) {
         try {
-          inspectEntry(entry, state, fail, expectedGitHubCommit);
+          inspectEntry(entry, state, fail, expectedGitHub);
         } catch (error) {
           record(error instanceof Error ? error : fail('ARCHIVE_UNSAFE', '归档检查失败。'));
         }
@@ -205,15 +217,16 @@ async function preflight(
   if (failure !== undefined) throw failure;
   if (metaHeaders !== consumedMeta) throw fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。');
   if (entries === 0) throw fail('ARCHIVE_UNSAFE', '归档为空或无效。');
+  return state.githubRootName;
 }
 
 export async function inspectAndExtractArchive(
   archivePath: string,
   workspace: string,
   fail: ArchiveError,
-  expectedGitHubCommit?: string,
+  expectedGitHub?: GitHubArchiveExpectation,
 ): Promise<string> {
-  await preflight(archivePath, fail, expectedGitHubCommit);
+  const githubRoot = await preflight(archivePath, fail, expectedGitHub);
   const directory = join(workspace, 'contents');
   await mkdir(directory, { mode: 0o700 });
   try {
@@ -228,5 +241,10 @@ export async function inspectAndExtractArchive(
   } catch {
     throw fail('ARCHIVE_UNSAFE', '归档无法安全解包。');
   }
-  return directory;
+  if (githubRoot === undefined) return directory;
+  const root = join(directory, githubRoot);
+  const metadata = await lstat(root).catch(() => undefined);
+  if (metadata === undefined || !metadata.isDirectory() || metadata.isSymbolicLink())
+    throw fail('ARCHIVE_UNSAFE', 'GitHub codeload 顶层条目不是普通目录。');
+  return root;
 }

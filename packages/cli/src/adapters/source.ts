@@ -324,7 +324,7 @@ async function materializeArchive(
       archivePath,
       workspace,
       archiveFailure,
-      source.githubCommit,
+      source.githubCommit === undefined ? undefined : { commit: source.githubCommit },
     );
     return { directory, provenance, cleanup: cleanupOnce(workspace, removeDirectory) };
   } catch (error) {
