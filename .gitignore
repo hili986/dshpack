@@ -34,3 +34,8 @@ Desktop.ini
 *.temp
 *.swp
 *~
+
+# Stage-8 real-dsh smoke workspace: a 32k-file dsh install plus its captured
+# isolated DSH_HOMEs. The durable evidence is committed under docs/adr/stage8-raw/;
+# this tree is a reproducible working area and must never enter git.
+.stage8-*-smoke-*/
