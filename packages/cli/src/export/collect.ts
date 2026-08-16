@@ -162,7 +162,12 @@ export async function collectOptionalAssets(
   const settings = await text(join(input.dshHome, 'settings.yaml'));
   if (settings === undefined) return { diagnostics, materials, redactions };
   const parsed = parseCanonicalYaml(settings);
-  if (!parsed.ok || typeof parsed.value?.value !== 'object' || parsed.value.value === null) {
+  if (
+    !parsed.ok ||
+    typeof parsed.value?.value !== 'object' ||
+    parsed.value.value === null ||
+    Array.isArray(parsed.value.value)
+  ) {
     diagnostics.push(
       packDiagnostic('E_EXPORT_SETTINGS', 'settings.yaml 不能解析为 mapping。', 'settings.yaml'),
     );
