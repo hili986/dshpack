@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { Diagnostic } from '@dshpack/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -69,7 +70,7 @@ afterEach(async () => {
 
 describe('doctor checks', () => {
   it('distinguishes valid, malformed, and unavailable dsh versions', async () => {
-    const diagnostics = [];
+    const diagnostics: Diagnostic[] = [];
     await expect(dshVersion(input('home'), diagnostics)).resolves.toBe('0.1.0-rc.6');
     expect(diagnostics).toEqual([]);
 
@@ -86,7 +87,7 @@ describe('doctor checks', () => {
   });
 
   it('reports unavailable, too-old, and pnpm-11 environments', async () => {
-    const diagnostics = [];
+    const diagnostics: Diagnostic[] = [];
     await checkPnpm(input('home'), diagnostics);
     expect(diagnostics).toEqual([]);
 
@@ -127,7 +128,7 @@ describe('doctor checks', () => {
       'utf8',
     );
 
-    const diagnostics = [];
+    const diagnostics: Diagnostic[] = [];
     await checkBundles(facts, input(facts.root), diagnostics);
     expect(diagnostics).toEqual(
       expect.arrayContaining([
@@ -163,7 +164,7 @@ describe('doctor checks', () => {
       );
     }
     await writeFile(join(facts.root, 'pnpm-workspace.yaml'), '[', 'utf8');
-    const diagnostics = [];
+    const diagnostics: Diagnostic[] = [];
     await checkBuildAuthorization(facts, diagnostics);
     expect(diagnostics).toEqual(
       expect.arrayContaining([
@@ -177,7 +178,7 @@ describe('doctor checks', () => {
       "allowBuilds:\n  'git-build@git+https://example.test/repo.git#abc': true\n",
       'utf8',
     );
-    const authorized = [];
+    const authorized: Diagnostic[] = [];
     await checkBuildAuthorization(facts, authorized);
     expect(authorized).toEqual([]);
   });
@@ -185,18 +186,18 @@ describe('doctor checks', () => {
   it('checks settings parsing, agent-presets shape, secret scan, and an orphan lock independently', async () => {
     const root = await profile();
     const settings = join(root.root, 'settings.yaml');
-    const missing = [];
+    const missing: Diagnostic[] = [];
     await checkSettings(root.root, missing);
     expect(missing).toEqual([]);
 
     await writeFile(settings, '[', 'utf8');
-    const malformed = [];
+    const malformed: Diagnostic[] = [];
     await checkSettings(root.root, malformed);
     expect(malformed).toContainEqual(expect.objectContaining({ code: 'DSH018', severity: 'error' }));
 
     await writeFile(settings, 'agent-presets: [invalid]\n', 'utf8');
     await writeFile(`${settings}.lock`, 'pid', 'utf8');
-    const invalid = [];
+    const invalid: Diagnostic[] = [];
     await checkSettings(root.root, invalid);
     expect(invalid).toEqual(
       expect.arrayContaining([
@@ -206,7 +207,7 @@ describe('doctor checks', () => {
     );
 
     await writeFile(settings, 'agent-presets:\n  apiKey: sk-TESTONLY-01234567890123456789\n', 'utf8');
-    const secret = [];
+    const secret: Diagnostic[] = [];
     await checkSettings(root.root, secret);
     expect(secret).toContainEqual(expect.objectContaining({ code: 'DSH018', severity: 'error' }));
     expect(JSON.stringify(secret)).not.toContain('sk-TEST');
