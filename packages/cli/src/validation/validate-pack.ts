@@ -46,7 +46,6 @@ interface TreeInspection {
 function posixRelative(root: string, candidate: string): string {
   return relative(root, candidate).split(sep).join('/');
 }
-
 function statKind(stat: Awaited<ReturnType<typeof lstat>>): PackTreeEntry['stat']['kind'] {
   if (stat.isFile()) return 'file';
   if (stat.isDirectory()) return 'directory';
@@ -128,11 +127,9 @@ async function inspectTree(root: string): Promise<TreeInspection> {
 function sha512(content: Uint8Array): string {
   return `sha512-${createHash('sha512').update(content).digest('base64')}`;
 }
-
 function manifestSha256(content: Uint8Array): string {
   return `sha256-${createHash('sha256').update(content).digest('base64url')}`;
 }
-
 function isAllowedPath(path: string): boolean {
   if (['pack.yml', 'pack.lock.yml', 'export-report.json', 'patch/cordis.patch.yml'].includes(path))
     return true;
@@ -156,7 +153,6 @@ function contentDiagnostics(path: string, content: string): readonly Diagnostic[
     ? diagnostics.filter(({ code }) => code !== 'E_SECRET_HIGH_ENTROPY')
     : diagnostics;
 }
-
 function layoutDiagnostics(paths: ReadonlySet<string>): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   for (const path of paths) {
