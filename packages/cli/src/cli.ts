@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import { Command, CommanderError } from 'commander';
 
 import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
@@ -51,5 +51,31 @@ export function createProgram(): Command {
 }
 
 export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
-  await createProgram().parseAsync(argv);
+  const json = argv.includes('--json');
+  const program = createProgram().exitOverride();
+  if (json) {
+    program.configureOutput({ writeErr: () => undefined });
+  }
+  try {
+    await program.parseAsync(argv);
+  } catch (error) {
+    if (!(error instanceof CommanderError)) throw error;
+    if (error.exitCode === 0) return;
+    process.exitCode = EXIT_CODES.USAGE;
+    if (json) {
+      process.stdout.write(
+        `${JSON.stringify({
+          diagnostics: [
+            {
+              code: 'E_USAGE',
+              severity: 'error',
+              message: error.message,
+              hint: '运行 dshpack --help 查看完整用法。',
+              evidence: 'local',
+            },
+          ],
+        })}\n`,
+      );
+    }
+  }
 }

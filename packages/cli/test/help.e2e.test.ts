@@ -53,4 +53,28 @@ describe('dshpack --help', () => {
       expect(result.stdout).not.toContain('未实现（W10+）');
     },
   );
+
+  it('maps Commander usage failures to exit 2 without leaking a stack', () => {
+    const result = spawnSync(process.execPath, [binPath, '--definitely-unknown'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("error: unknown option '--definitely-unknown'");
+    expect(result.stderr).not.toContain('CommanderError');
+  });
+
+  it('emits one JSON object for a usage failure in JSON mode', () => {
+    const result = spawnSync(process.execPath, [binPath, '--json', '--definitely-unknown'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'E_USAGE', severity: 'error' })],
+    });
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+  });
 });
