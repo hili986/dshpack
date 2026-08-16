@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerListCommand } from '../src/commands/list.js';
 import { registerSwitchCommand } from '../src/commands/switch.js';
 
+const TEST_DSH_HOME = resolve('/temp-home');
+
 function program(): Command {
   return new Command().name('dshpack').exitOverride().option('--dsh-home <path>').option('--json');
 }
@@ -67,9 +69,9 @@ describe('list command registration', () => {
     }));
     const cli = program();
     registerListCommand(cli, run);
-    await cli.parseAsync(['node', 'dshpack', '--dsh-home', 'C:/temp-home', 'list', '--json']);
+    await cli.parseAsync(['node', 'dshpack', '--dsh-home', TEST_DSH_HOME, 'list', '--json']);
 
-    expect(run).toHaveBeenCalledWith({ dshHome: resolve('C:/temp-home') });
+    expect(run).toHaveBeenCalledWith({ dshHome: TEST_DSH_HOME });
     expect(io.stdout).toEqual([
       '{"diagnostics":[],"profiles":[{"profile":"demo","status":"tracked","pack":{"name":"demo-pack","version":"1.0.0"},"installedAt":"2026-08-16T00:00:00.000Z"}]}\n',
     ]);
@@ -99,10 +101,10 @@ describe('list command registration', () => {
       .mockResolvedValueOnce({ diagnostics: [], exitCode: 0, metadata: { profiles: [] } });
     const first = program();
     registerListCommand(first, run);
-    await first.parseAsync(['node', 'dshpack', '--dsh-home', 'C:/temp-home', 'list']);
+    await first.parseAsync(['node', 'dshpack', '--dsh-home', TEST_DSH_HOME, 'list']);
     const second = program();
     registerListCommand(second, run);
-    await second.parseAsync(['node', 'dshpack', '--dsh-home', 'C:/temp-home', 'list']);
+    await second.parseAsync(['node', 'dshpack', '--dsh-home', TEST_DSH_HOME, 'list']);
 
     expect(io.stdout.join('')).toContain('alpha  tracked  alpha-pack@1.0.0');
     expect(io.stdout.join('')).toContain('beta  untracked');
@@ -151,9 +153,9 @@ describe('switch command registration', () => {
     }));
     const cli = program();
     registerSwitchCommand(cli, run);
-    await cli.parseAsync(['node', 'dshpack', '--dsh-home', 'C:/temp-home', 'switch', 'demo']);
+    await cli.parseAsync(['node', 'dshpack', '--dsh-home', TEST_DSH_HOME, 'switch', 'demo']);
     expect(run).toHaveBeenCalledWith({
-      dshHome: resolve('C:/temp-home'),
+      dshHome: TEST_DSH_HOME,
       json: false,
       profile: 'demo',
       run: false,
@@ -183,7 +185,7 @@ describe('switch command registration', () => {
       'node',
       'dshpack',
       '--dsh-home',
-      'C:/temp-home',
+      TEST_DSH_HOME,
       '--json',
       'switch',
       'demo',
@@ -238,14 +240,14 @@ describe('switch command registration', () => {
       'node',
       'dshpack',
       '--dsh-home',
-      'C:/temp-home',
+      TEST_DSH_HOME,
       'switch',
       'demo',
       '--run',
     ]);
     const second = program();
     registerSwitchCommand(second, run);
-    await second.parseAsync(['node', 'dshpack', '--dsh-home', 'C:/temp-home', 'switch', 'missing']);
+    await second.parseAsync(['node', 'dshpack', '--dsh-home', TEST_DSH_HOME, 'switch', 'missing']);
     expect(io.stdout).toEqual([]);
     expect(io.stderr.join('')).toContain('E_SWITCH_PROFILE');
   });

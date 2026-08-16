@@ -16,6 +16,8 @@ type RegisterInstall = (
   interactive?: () => boolean,
 ) => void;
 
+const TEST_DSH_HOME = resolve('/temp-home');
+
 function program(): Command {
   return new Command()
     .name('dshpack')
@@ -66,7 +68,7 @@ describe('install command registration', () => {
       'node',
       'dshpack',
       '--dsh-home',
-      'C:/temp-home',
+      TEST_DSH_HOME,
       'install',
       '--as',
       'demo',
@@ -87,13 +89,13 @@ describe('install command registration', () => {
     ]);
 
     expect(runtimeFactory).toHaveBeenCalledWith(
-      resolve('C:/temp-home'),
+      TEST_DSH_HOME,
       expect.objectContaining({ writeStderr: expect.any(Function) }),
     );
     expect(runner).toHaveBeenCalledWith(
       {
         source: '--bad;Write-Output PWNED',
-        dshHome: resolve('C:/temp-home'),
+        dshHome: TEST_DSH_HOME,
         interactive: false,
         json: false,
         as: 'demo',
@@ -130,7 +132,7 @@ describe('install command registration', () => {
       'node',
       'dshpack',
       '--dsh-home',
-      'C:/temp-home',
+      TEST_DSH_HOME,
       '--json',
       'install',
       'fixture',
@@ -170,7 +172,7 @@ describe('install command registration', () => {
       'node',
       'dshpack',
       '--dsh-home',
-      'C:/temp-home',
+      TEST_DSH_HOME,
       'install',
       'fixture',
       '--yes',
@@ -210,7 +212,7 @@ describe('install command registration', () => {
       'node',
       'dshpack',
       '--dsh-home',
-      'C:/temp-home',
+      TEST_DSH_HOME,
       '--no-color',
       'install',
       'fixture',
@@ -251,7 +253,7 @@ describe('install command registration', () => {
           'node',
           'dshpack',
           '--dsh-home',
-          'C:/temp-home',
+          TEST_DSH_HOME,
           'install',
           'fixture',
         ]);
@@ -302,7 +304,7 @@ describe('install command registration', () => {
       () => ({}) as InstallRuntime,
       () => false,
     );
-    await cli.parseAsync(['node', 'dshpack', '--dsh-home', 'C:/temp-home', 'install', 'fixture']);
+    await cli.parseAsync(['node', 'dshpack', '--dsh-home', TEST_DSH_HOME, 'install', 'fixture']);
     expect(io.stdout).toEqual([]);
   });
 });
