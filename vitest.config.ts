@@ -32,8 +32,17 @@ export default defineConfig({
         'packages/cli/src/transaction-rollback.ts': { branches: 90 },
         'packages/cli/src/transaction-types.ts': { branches: 90 },
         'packages/cli/src/transaction.ts': { branches: 90 },
+        // W10/W11：doctor 与 export 的全部核心逻辑都受同一门槛约束，
+        // 不只是 engine——DSH001-018 的判定本体在 checks.ts，
+        // export 的采集与脱敏决策在 collect.ts / support.ts，
+        // 它们才是最需要分支覆盖的地方。
         'packages/cli/src/doctor/engine.ts': { branches: 90 },
+        'packages/cli/src/doctor/checks.ts': { branches: 90 },
+        'packages/cli/src/doctor/support.ts': { branches: 90 },
         'packages/cli/src/export/engine.ts': { branches: 90 },
+        'packages/cli/src/export/collect.ts': { branches: 90 },
+        'packages/cli/src/export/support.ts': { branches: 90 },
+        'packages/cli/src/validation/validate-pack.ts': { branches: 90 },
       },
     },
   },
