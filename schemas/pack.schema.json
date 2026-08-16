@@ -53,9 +53,7 @@
     "dsh": {
       "additionalProperties": false,
       "type": "object",
-      "required": [
-        "tested"
-      ],
+      "required": ["tested"],
       "properties": {
         "tested": {
           "minItems": 1,
@@ -76,11 +74,7 @@
       "items": {
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name",
-          "source",
-          "allowBuilds"
-        ],
+        "required": ["name", "source", "allowBuilds"],
         "properties": {
           "name": {
             "minLength": 1,
@@ -91,10 +85,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "range"
-                ],
+                "required": ["kind", "range"],
                 "properties": {
                   "kind": {
                     "const": "npm",
@@ -109,12 +100,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "owner",
-                  "repo",
-                  "ref"
-                ],
+                "required": ["kind", "owner", "repo", "ref"],
                 "properties": {
                   "kind": {
                     "const": "github",
@@ -137,10 +123,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "url"
-                ],
+                "required": ["kind", "url"],
                 "properties": {
                   "kind": {
                     "const": "tarball",
@@ -177,11 +160,7 @@
       "items": {
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "serverName",
-          "transport",
-          "url"
-        ],
+        "required": ["serverName", "transport", "url"],
         "properties": {
           "serverName": {
             "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -207,9 +186,7 @@
     "defaults": {
       "additionalProperties": false,
       "type": "object",
-      "required": [
-        "permissionPreset"
-      ],
+      "required": ["permissionPreset"],
       "properties": {
         "agentPreset": {
           "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -232,16 +209,12 @@
     "settings": {
       "additionalProperties": false,
       "type": "object",
-      "required": [
-        "namespaces"
-      ],
+      "required": ["namespaces"],
       "properties": {
         "namespaces": {
           "additionalProperties": false,
           "type": "object",
-          "required": [
-            "agent-presets"
-          ],
+          "required": ["agent-presets"],
           "properties": {
             "agent-presets": {
               "minLength": 1,

@@ -32,9 +32,7 @@
     "dsh": {
       "additionalProperties": false,
       "type": "object",
-      "required": [
-        "exportedFrom"
-      ],
+      "required": ["exportedFrom"],
       "properties": {
         "exportedFrom": {
           "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
@@ -47,13 +45,7 @@
       "items": {
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name",
-          "resolved",
-          "integrity",
-          "packageJsonSha512",
-          "bundlePatch"
-        ],
+        "required": ["name", "resolved", "integrity", "packageJsonSha512", "bundlePatch"],
         "properties": {
           "name": {
             "minLength": 1,
@@ -64,9 +56,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "version"
-                ],
+                "required": ["version"],
                 "properties": {
                   "version": {
                     "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
@@ -77,9 +67,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "commit"
-                ],
+                "required": ["commit"],
                 "properties": {
                   "commit": {
                     "pattern": "^[a-f0-9]{40}$",
@@ -90,9 +78,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "url"
-                ],
+                "required": ["url"],
                 "properties": {
                   "url": {
                     "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$",
@@ -107,10 +93,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "value"
-                ],
+                "required": ["kind", "value"],
                 "properties": {
                   "kind": {
                     "const": "npm-sri",
@@ -125,10 +108,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "value"
-                ],
+                "required": ["kind", "value"],
                 "properties": {
                   "kind": {
                     "const": "git-commit",
@@ -143,10 +123,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "value"
-                ],
+                "required": ["kind", "value"],
                 "properties": {
                   "kind": {
                     "const": "sha512",
@@ -161,10 +138,7 @@
               {
                 "additionalProperties": false,
                 "type": "object",
-                "required": [
-                  "kind",
-                  "reason"
-                ],
+                "required": ["kind", "reason"],
                 "properties": {
                   "kind": {
                     "const": "unverified",
@@ -194,10 +168,7 @@
       "items": {
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "path",
-          "sha512"
-        ],
+        "required": ["path", "sha512"],
         "properties": {
           "path": {
             "minLength": 1,

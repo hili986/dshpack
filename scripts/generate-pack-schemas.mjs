@@ -25,4 +25,10 @@ await Promise.all([
   writeFile(resolve(schemaDirectory, 'pack.schema.json'), render(schemas.pack), 'utf8'),
   writeFile(resolve(schemaDirectory, 'pack-lock.schema.json'), render(schemas.lock), 'utf8'),
 ]);
+const biome = resolve(repository, 'node_modules', '@biomejs', 'biome', 'bin', 'biome');
+execFileSync(
+  process.execPath,
+  [biome, 'format', '--write', 'schemas/pack.schema.json', 'schemas/pack-lock.schema.json'],
+  { cwd: repository, stdio: 'inherit' },
+);
 console.log('pack schemas generated from TypeBox truth source');
