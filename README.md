@@ -1,138 +1,178 @@
 # dshpack
 
-`dshpack` 旨在为 DSH 提供可复现、可审计、跨平台的 pack 管理格式与 CLI。
+把一个 dsh 场景——skills、MCP、profile patch、权限默认值——导出成一个**可安装、可分享、可审计**的 pack，再把 pack 装成标准的 dsh profile。
 
-> 当前状态：M0 读侧命令已提供 `validate`、`doctor` 与 `export`。`install`、`list`、`switch`、`init`、`pack` 仍是占位实现并以 `exit 70` 结束。
+> **当前状态：M0，预发布，尚未发布到 npm。** pack 格式与 CLI 参数都还不是稳定 API。`init` 与 `pack` 两个作者向命令仍未实现。
 
-## 非目标
+## 它不做什么
 
-`dshpack` 不会：
+- 不分发、不代理、不 fork `@deepseek-ai/dsh`；
+- 不修改 dsh 上游仓库，也不碰你真实的 `~/.dsh`（所有操作都要求显式的 `DSH_HOME`）；
+- 不把第三方 install/build script 当可信代码执行；
+- 不热更新正在运行的 dsh 进程；
+- 不把 preset 合进已有内容的 session，也不替你解决 session 迁移冲突。
 
-- 分发、代理或 fork `@deepseek-ai/dsh`；
-- 修改 DSH 上游仓库、上游文档仓或用户真实的 `.dsh` 目录；
-- 把任意第三方 install/build script 当作可信代码执行；
-- 热更新一个正在运行的 DSH 进程；
-- 把 preset 合并进已有内容的 session，或替用户解决 session 迁移冲突；
-- 在 M0 阶段承诺稳定的 pack schema、registry 或安装行为。
+## 安装前你会看到什么
 
-## 前提
+`install` 在写任何东西之前先给出完整计划。下面是**真实输出**，对 [`dsh-packs/web-dev`](https://github.com/dsh-packs) 跑 `--dry-run` 得到：
 
-- Node.js `22.19.0`
-- 由 Corepack 激活的 pnpm `11.7.0`
-- Windows 或 Ubuntu；两者都进入阻塞 CI
-- 只有 opt-in 的真实合约 smoke test 才需要 `@deepseek-ai/dsh@0.1.0-rc.6`
+```text
+Will install web-dev@0.1.0 as web-dev
+SOURCE: {"kind":"directory","path":"...\dsh-packs\web-dev"}
+dsh: current=0.1.0-rc.6 tested=0.1.0-rc.6 mismatch=false
+pnpm: current=11.7.0
+asset skills/frontend-review -> skills/frontend-review action=create collision=false [热生效]
+MCP context7: https://mcp.context7.com/mcp -> profile patch action=configure [重启生效]
+default permissionPreset=workspace-write [仅空白会话]
+write profiles/web-dev [重启生效]
+write profiles/web-dev/cordis.patch.yml [重启生效]
+write skills/frontend-review [热生效]
+write .dshpack/installed/web-dev.json [热生效]
+side-effect profiles/web-dev/cordis.yml: dsh --dump-config（E9）
+rollback snapshot: enabled=true state=sha256-bSGmM1FiexZIOjjfdgjsYA14kw8egAI8O58sWTaWVro
+```
 
-## 3 分钟 Quickstart
+每一行都带**生效时机**标签，因为这是 dsh 最容易踩的坑：skills 热生效，插件与 MCP 要重启新进程，preset 只对空白新 session 有意义。计划里还单列了 `side-effect`——那一行不是我们写的，是 dsh 自己在 dump 时重写 `cordis.yml`，我们只是触发方，但仍然要告诉你。
 
-M0 先提供只读/导出工作流，不提供安装示例：
+`--dry-run` 期间对 `DSH_HOME` 的写入数为 **0**。
+
+## Quickstart
 
 ```sh
 corepack enable pnpm
 corepack prepare pnpm@11.7.0 --activate
 pnpm install --frozen-lockfile
 pnpm build
-node packages/cli/dist/bin.js --help
+
+# 只读校验一个本地 pack（不调用 dsh，零写入）
+node packages/cli/dist/bin.js validate --strict <pack-dir>
+
+# 看安装计划，不写任何东西
+node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目录> -- <pack-dir>
 ```
 
-`validate SOURCE --strict` 只读取本地 pack，绝不调用 dsh 或写盘。`doctor` 和 `export` 为获取 dump 会调用 dsh；上游 dsh 会生成或重写目标 profile 的 `cordis.yml`。务必传入隔离的 `DSH_HOME`，并在对 untracked profile 执行 `doctor` dump 前显式给出 `--yes`。
+**始终传一个隔离的 `--dsh-home`**，不要拿你真实的 dsh 目录当试验场。
 
-## “Will install” 安全示例
+## 安全模型
 
-未来 `install` 在写入前必须展示可审计计划。以下仅描述安全契约，不是当前可执行输出：
+这些不是承诺，是有测试锁住、且每条都有能让它转红的 mutant 的行为：
 
-```text
-Will install
-  pack:     starter@1.0.0
-  source:   immutable release artifact
-  integrity: sha512-<publisher-provided-base64-digest>
-  plugins:  example-plugin@1.2.3
-  preset:   starter (new empty session only)
-  writes:   <isolated target paths listed individually>
-  builds:   none (allowBuilds is empty)
-  restart:  start a new DSH process after plugin changes
-```
+**来源必须可复现。** GitHub 源只接受 **40 位小写 commit SHA**——分支名、tag、短 SHA、甚至 40 位但含大写，一律 exit 20 且在任何子进程启动前就拒绝。HTTPS tarball 必须带 sha512 SRI，URL 不得含 userinfo。
 
-来源、SRI、目标路径或允许执行的 build script 有任何变化时，工具必须中止并重新生成计划。详见 [Security Policy](./SECURITY.md)。
+**`--yes` 不能替代危险确认。** 它只能省掉那句"确定要装吗"。逐包的 `--allow-build`、`danger-full-access` 都仍需各自的显式授权；`--replace`（覆盖已有 profile）和 `--allow-unverified` 更是**硬门**——前者不给就不会发生，后者不给直接失败，都不走"提示一下"这条路。任何交互提示的默认值都是拒绝；非 TTY 环境下缺确认会 exit 21 并打印完整的非交互命令，不会把 CI 卡死。
+
+**build script 默认全禁。** 依赖的 install/lifecycle script 只有在 pack 的 `allowBuilds` 里**逐个精确包名**列出、且你在安装时逐项授权后才会执行。父包、scope、或某个已授权的依赖，都不会把权限隐式传递出去。这是一份允许名单，不是 sandbox——放行一个 build script 等于允许该依赖以你的用户权限执行代码，所以它应该保持为空。
+
+**凭据不外泄，也不"悄悄删掉"。** `export` 在收集前、写入前、写入后各扫一次，命中直接 exit 31 失败——**不会**替你删掉再给一个看起来干净、实则不可审计的 pack。诊断只给 `path:line:column`，**绝不回显命中的值**。扫描分五层：敏感键名、已知 token 形状（含 GitHub / npm / AWS / Google / Stripe / Slack / OpenAI 前缀）、`Bearer|Basic`、URL userinfo，以及基于 Shannon 熵的未知格式兜底。
+
+> 一个刻意的取舍：32/40 位十六进制串与 UUID **不**被判为凭据。它们与 pack 强制要求的 40 位 commit SHA、校验和、以及各种合法 id 完全同形，纳入检测会让每个 pinned source 都误报。所以残余暴露面可以精确表述为：凭据要**同时**"存放在非敏感键名下"**且**"形状与合法标识符碰撞"才可能漏。
+
+**装坏了能退回去。** `install` 是一个带 journal 的事务。任一步失败都会回滚：新 profile 移进 `$DSH_HOME/.dshpack/backups/<txid>/`（**不删除**），`--replace` 场景把原 profile 原样 rename 回去，skills/presets 只清理本次事务创建的项，settings 用保存的原文原子恢复。
+
+## 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功 |
+| 2 | 用法 / schema |
+| 10 | 环境（Node / pnpm / dsh 不可用） |
+| 20 | source、网络、完整性 |
+| 21 | 用户拒绝，或非交互环境缺少确认 |
+| 22 | profile 冲突或锁 |
+| 23 | dsh 子进程失败 |
+| **24** | **装后验证失败，但已干净回滚** —— 机器状态等同安装前，**重试是安全的** |
+| **25** | **需人工恢复** —— 机器停在中间态，**不要盲目重试**，先按打印的恢复路径处理 |
+| 30 | 契约（patch / skill / settings / profile） |
+| 31 | 安全（路径 / 凭据） |
+| 70 | 内部错误 |
+
+24 和 25 必须分开：自动化拿到退出码就要决定要不要重试，而这两种结局要求的响应恰好相反。JSON 输出里的 `status` 也区分（`rolled-back` / `rollback-failed`），但不该要求调用方解析 stdout 才知道能不能重试。
 
 ## 命令
 
-| 命令 | 目标职责 | M0 状态 |
-| --- | --- | --- |
-| `export` | 将受支持 profile 导出为 pack | 已实现；三重脱敏、自 validate、原子发布 |
-| `install` | 按 “Will install” 计划安装 pack | 占位，`exit 70` |
-| `list` | 列出可见 pack 或受管状态 | 占位，`exit 70` |
-| `switch` | 切换受管 pack | 占位，`exit 70` |
-| `doctor` | 检查环境和配置边界 | 已实现；dump 具有 `profile/cordis.yml` 副作用 |
-| `validate` | 验证本地 pack 格式、来源和完整性 | 已实现；零写入且不调用 dsh |
-| `init` | 初始化新 pack | 占位，`exit 70` |
-| `pack` | 生成可分发工件 | 占位，`exit 70` |
+| 命令 | 作用 | 副作用 |
+|---|---|---|
+| `validate <source>` | 校验 pack 格式、来源、完整性、凭据 | **零写入，且不调用 dsh** |
+| `install <source>` | 按计划以可回滚事务安装 | 见上方计划输出 |
+| `list` | 列出 tracked / untracked / broken profiles | 只读 |
+| `switch <profile>` | 校验并**打印**启动命令 | 默认不 spawn、不改 session；只有 `--run` 才前台启动 dsh |
+| `lock [dir]` | 为手写 pack 生成/更新 `pack.lock.yml` | 只写该目录，产物确定且幂等 |
+| `doctor` | 诊断环境与配置边界 | **会写**，见下 |
+| `export` | 把 profile 导出成本地 pack | dsh dump 会写 `profile/cordis.yml` |
+| `init` / `pack` | 作者向 | **未实现** |
 
-稳定参数、退出码细分和输出 schema 会在相应里程碑实现时文档化。
+`doctor` 的副作用要说清楚，因为它容易被误以为只读：走 `--dump-*` 的检查项会让 **dsh** 重写 `profile/cordis.yml`（不是我们写的，但由我们触发），而 **dshpack 自己**会在 `$DSH_HOME/.dshpack/logs/` 写审计日志。`--json` 的 `sideEffects` 字段把两者都列出来并标注归属：
 
-## 格式
-
-pack 将使用带版本号的声明式格式。预期覆盖身份、来源、插件、preset、完整性和 build 授权；M0 尚未接受任何格式为稳定 API。下面是设计轮廓，不是当前 parser 输入：
-
-```yaml
-formatVersion: 0
-name: starter
-version: 0.1.0
-description: 最小场景包示意。
-author: dsh-packs
-license: MIT
-dsh:
-  tested: [0.1.0-rc.6]
-plugins: []
-mcp: []
-defaults:
-  permissionPreset: workspace-write
+```json
+[
+  { "owner": "dsh",     "path": "profile/cordis.yml" },
+  { "owner": "dshpack", "path": ".dshpack/logs/<file>" }
+]
 ```
 
-最终 schema 必须能在不执行 pack 代码的前提下完成静态验证，并使 “Will install” 集合可被精确计算。
+全命令支持 `--dsh-home`、`--no-color`、`--quiet`、`--json`。JSON 模式下 stdout 只有一个 object，进度走 stderr。
 
-## `allowBuilds`
+## pack 目录长什么样
 
-依赖 build/lifecycle script 默认禁止。未来只有 pack 中 `allowBuilds` 明确列出的**精确包名**才可获准执行；父包、scope 或某个已允许依赖不会把权限隐式传给其他依赖。任何 `allowBuilds` 变化都属于需人工审查的安全变更，并必须出现在 “Will install” 计划中。
+pack 目录里的文件分三类，各有各的待遇：
 
-这是一份允许名单，不是 sandbox。允许某个 build script 等同于允许该依赖以当前用户权限运行代码，因此应保持为空或最小化。
+| 类别 | 成员 | 布局校验 | 会被部署 | 进 lock | 过凭据扫描 |
+|---|---|---|---|---|---|
+| pack 语义文件 | `pack.yml`、`pack.lock.yml`、`skills/`、`patch/`、`settings/` | 未知项**拒绝** | 是 | 是 | 是 |
+| 仓库常规物 | `README*`、`LICENSE*`、`.gitignore`、`.github/`、`CHANGELOG*` | 允许 | 否 | 否 | **是** |
+| 完全忽略 | `.git/`、`node_modules/` | 不遍历 | 否 | 否 | 否 |
 
-## Windows
+第二类**允许但不部署**，然而**照样要过凭据扫描**——README 里贴了 token 是真实且常见的事故。第三类是根本不进去，不是"进去了再忽略"。
 
-Windows 是阻塞 CI 平台。开发命令应在 PowerShell 中直接工作，不依赖 Bash 专属的环境变量赋值语法、符号链接权限或大小写敏感路径。文本文件统一提交 LF；Windows 专属脚本可由 Git 属性声明其行尾。
+`pack.lock.yml` 是必需的，且应当提交进 git。手写的 pack 用 `dshpack lock` 生成。
 
-测试和本地调试必须把 DSH home 指向隔离临时目录。不要拿 `%USERPROFILE%\.dsh` 做 fixture，也不要用真实用户目录验证占位命令。
+JSON Schema 随 `@dshpack/core` 一起发布，可以直接 resolve：
 
-## 兼容矩阵
+```js
+import schema from '@dshpack/core/schemas/pack.schema.json' with { type: 'json' };
+```
 
-| 组件 | 版本/平台 | 状态 |
-| --- | --- | --- |
-| Node.js | `>=22.19.0 <25` | CI 使用 22.19.0；本次 Windows 实测为 24.13.1 |
-| pnpm | `11.7.0` | 由 Corepack 固定 |
-| Ubuntu | GitHub-hosted runner | 阻塞 check |
-| Windows | GitHub-hosted runner | 阻塞 check |
-| DSH | `0.1.0-rc.6` | 仅 weekly/manual contract smoke；非产品依赖承诺 |
-| dshpack schema | M0 draft | 不稳定且不可安装 |
+它由 TypeBox 真源生成，发布前会解包 tarball 逐字节比对——**schema 必须在包里，且必须与真源一致**，两个方向都有断言。
 
-升级固定版本必须通过独立 PR，同步更新配置、lockfile、CI、兼容矩阵和 [ADR-0002](./docs/adr/0002-toolchain-pins.md)。
+## Starter packs
 
-## `starter`
+两个示例 pack 在 [`dsh-packs`](https://github.com/dsh-packs) org：`web-dev`（四个前端 skills + 零凭据的 context7 文档检索 MCP）与 `research-writing`（五个研究写作 skills，**刻意不连任何 MCP**）。
 
-`starter` 是计划中的最小示例 pack，用来演示可复现的插件集合、只面向空白新 session 的 preset，以及默认空的 `allowBuilds`。M0 仅保留这一文档意图；它不是已发布 pack，也不能被当前 CLI 安装。
+两者都在 **Windows 原生**与 **WSL2 Ubuntu 24.04 原生 ext4** 上做过端到端认证：`install` → 新 dsh 进程 `--dump-config` 行全命中 → `doctor --strict` 全部 exit 0。矩阵与全部原始 stdout/stderr/exit code 见 [`docs/starter-pack-certification.md`](./docs/starter-pack-certification.md)。两个 pack 都**不声明 `allowBuilds`**——即没有任何 build script 被授权。安装它们时若出现要求授权 build script 的提示，说明来源不对，请中止。
 
-重要限制：preset 只在创建**空白的新 session**时生效。它不会补写、覆盖或合并已有 session；需要 preset 的用户必须显式创建新 session。
+`research-writing` 不连 MCP 是设计决定，不是没做完：研究场景处理的是未发表稿件与他人版权材料，任何 MCP 都意味着内容离开你的机器。真实 dump 里已验证它零 MCP 配置。
+
+## 你需要知道的限制
+
+1. **插件与 MCP 变更需要新的 dsh 进程**，不会热加载。skills 是热生效的。
+2. **agent preset 只对空白新 session 生效**，不会补写或合并已有 session。M0 的两个 starter pack 都不带 preset。
+3. **skills 是提示词内容，不是校验器**。`citation-verification` 告诉你怎么核实引用，但不会替你去核。
+4. pack 格式在 M0 **不是稳定 API**。
+
+## 平台
+
+| 组件 | 版本 | 状态 |
+|---|---|---|
+| Node.js | `>=22.19.0 <25` | CI 用 22.19.0；真机实测覆盖 22.19.0 与 24.13.1 |
+| pnpm | `11.7.0` | Corepack 固定 |
+| dsh | `0.1.0-rc.6` | 契约 smoke 使用；非产品依赖承诺 |
+| Windows | 原生 | 阻塞 CI + 真机认证 |
+| Ubuntu | GitHub runner + WSL2 24.04 | 阻塞 CI + 真机认证 |
+
+Windows 上开发命令应在 PowerShell 里直接可用，不依赖 Bash 专属语法、符号链接权限或大小写敏感路径。升级固定版本须走独立 PR，同步更新配置、lockfile、CI、本表与 [ADR-0002](./docs/adr/0002-toolchain-pins.md)。
 
 ## 故障排查
 
-- `dshpack install|list|switch|init|pack` 返回 `70`：这些写侧/作者命令仍是占位实现。
-- pnpm 版本不一致：重新运行 `corepack prepare pnpm@11.7.0 --activate`，再检查 `pnpm --version`。
-- `pnpm install --frozen-lockfile` 失败：不要手改 lockfile；确认 Node/pnpm 固定版本并在依赖变更 PR 中重新生成。
-- 安装插件后当前 DSH 没有变化：插件变更不会热加载，必须完全退出并启动一个**新的 DSH 进程**。
-- preset 没有进入旧 session：这是预期边界；preset 只对空白的新 session 生效。
+- `init` / `pack` 返回 `70`：这两个作者向命令尚未实现。
+- **exit 10 `E_PROBE`**：`dsh` 或 `pnpm` 不在 PATH 上。注意 Windows 上可能同时存在无扩展名的 `dsh` 与 `dsh.CMD`。
+- **exit 25**：不要重试。先按输出里的人工恢复路径处理，机器处于中间态。
+- 装完插件但 dsh 没变化：插件变更不热加载，必须完全退出并启动新的 dsh 进程。
+- `pnpm install --frozen-lockfile` 失败：不要手改 lockfile，确认 Node/pnpm 固定版本后在依赖变更 PR 中重新生成。
 
-报告问题时请提供脱敏后的命令、版本、操作系统和最小复现；不要上传 token、真实 `.dsh` 或会话内容。
+报 issue 请给脱敏后的命令、版本、OS 和最小复现；**不要上传 token、真实 `.dsh` 或会话内容**。
 
-## 贡献与安全报告
+## 贡献与安全
 
-开发流程和验证命令见 [CONTRIBUTING.md](./CONTRIBUTING.md)。漏洞请通过 [SECURITY.md](./SECURITY.md) 指定的私密渠道报告，不要创建公开漏洞 issue。
+开发流程与验证命令见 [CONTRIBUTING.md](./CONTRIBUTING.md)。漏洞请走 [SECURITY.md](./SECURITY.md) 的私密渠道，不要开公开 issue。
 
-本项目使用 [MIT License](./LICENSE)。
+[MIT License](./LICENSE)。
