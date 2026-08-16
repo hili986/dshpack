@@ -1,4 +1,5 @@
 import type { Diagnostic } from '@dshpack/core';
+import { satisfies } from 'semver';
 
 import { SourceError } from '../adapters/source.js';
 import { diagnostic } from '../commands/shared.js';
@@ -197,6 +198,19 @@ export async function installPack(
       'not-started',
     );
   }
+  if (!satisfies(versions.pnpmVersion, '>=10.0.0'))
+    return report(
+      EXIT_CODES.ENVIRONMENT,
+      [
+        diagnostic(
+          'E_PNPM_VERSION_UNSUPPORTED',
+          'error',
+          `pnpm ${versions.pnpmVersion} 低于 install 要求的 10.0.0。`,
+          '从 PATH 提供 pnpm >=10 后重试；未执行任何目标写入。',
+        ),
+      ],
+      'not-started',
+    );
   const request = captureRequest(input, material);
   let before: InstallTargetCapture;
   try {

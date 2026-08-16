@@ -52,6 +52,8 @@ export interface InstallSubprocessResult {
   stderr: string;
 }
 
+export type LifecycleScriptPolicy = 'deny' | 'allow-approved';
+
 export interface StagedPluginDownload {
   staged: StagedPluginTarball;
   cleanup(): Promise<void>;
@@ -76,11 +78,11 @@ export interface InstallRuntime {
   authorizeBuild(profileRoot: string, authorizationKey: string): Promise<void>;
   runDsh(
     args: readonly string[],
-    options: { dshHome: string; cwd?: string },
+    options: { dshHome: string; cwd?: string; scriptPolicy?: LifecycleScriptPolicy },
   ): Promise<InstallSubprocessResult>;
   runPnpm(
     args: readonly string[],
-    options: { dshHome: string; cwd: string },
+    options: { dshHome: string; cwd: string; scriptPolicy?: LifecycleScriptPolicy },
   ): Promise<InstallSubprocessResult>;
   confirm(prompt: InstallPromptDecision): Promise<boolean>;
   writeStderr(message: string): void;

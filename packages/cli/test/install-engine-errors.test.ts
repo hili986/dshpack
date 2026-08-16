@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { installPack } from '../src/install/engine.js';
-import { enginePack, fakeRuntime } from './install-engine-fixture.js';
+import { enginePack, fakeRuntime, snapshot } from './install-engine-fixture.js';
 
 const roots: string[] = [];
 
@@ -20,6 +20,38 @@ afterEach(async () => {
 });
 
 describe('install engine typed stage failures', () => {
+  it('rejects pnpm below 10 before target capture or transaction writes', async () => {
+    const dshHome = await home();
+    const before = await snapshot(dshHome);
+    const fake = fakeRuntime();
+    fake.runtime.probe = async () => {
+      fake.calls.push('probe:pnpm-9');
+      return { dshVersion: '0.1.0-rc.6', pnpmVersion: '9.15.0' };
+    };
+    const capture = fake.runtime.captureTargetState;
+    fake.runtime.captureTargetState = async (input) => {
+      fake.calls.push('capture-target');
+      return capture(input);
+    };
+    const report = await installPack(
+      {
+        source: await enginePack(),
+        dshHome,
+        yes: true,
+        interactive: false,
+      },
+      fake.runtime,
+    );
+    expect(report).toMatchObject({
+      exitCode: 10,
+      metadata: { status: 'not-started' },
+      diagnostics: [expect.objectContaining({ code: 'E_PNPM_VERSION_UNSUPPORTED' })],
+    });
+    expect(fake.calls).not.toContain('capture-target');
+    expect(fake.calls.some((call) => call.startsWith('dsh:'))).toBe(false);
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
   it('rejects an invalid existing settings document inside the transaction', async () => {
     const dshHome = await home();
     await writeFile(join(dshHome, 'settings.yaml'), '- invalid-root\n');

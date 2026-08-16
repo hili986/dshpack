@@ -165,11 +165,13 @@ export interface FakeRuntimeResult {
   runtime: InstallRuntime;
   calls: string[];
   stderr: string[];
+  scriptPolicies: Array<{ command: 'dsh' | 'pnpm'; policy: string | undefined }>;
 }
 
 export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult {
   const calls: string[] = [];
   const stderr: string[] = [];
+  const scriptPolicies: FakeRuntimeResult['scriptPolicies'] = [];
   const confirmations = [...(control.confirmations ?? [])];
   const baseAdapter = createNodeTransactionAdapter();
   let settingsMutated = false;
@@ -277,6 +279,7 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
     },
     async runDsh(args, options): Promise<InstallSubprocessResult> {
       calls.push(`dsh:${args.join(' ')}`);
+      scriptPolicies.push({ command: 'dsh', policy: options.scriptPolicy });
       const profileIndex = args.indexOf('--profile');
       const profile = args[profileIndex + 1] as string;
       const profileRoot = join(options.dshHome, 'profiles', profile);
@@ -284,8 +287,9 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
       if (args.includes('--dump-config')) await writeFile(join(profileRoot, 'cordis.yml'), '[]\n');
       return { stdout: args.includes('--version') ? '0.1.0-rc.6\n' : '', stderr: '' };
     },
-    async runPnpm(args) {
+    async runPnpm(args, options) {
       calls.push(`pnpm:${args.join(' ')}`);
+      scriptPolicies.push({ command: 'pnpm', policy: options.scriptPolicy });
       return { stdout: '', stderr: '' };
     },
     async confirm(prompt) {
@@ -369,7 +373,7 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
     now: () => '2026-08-16T12:00:00.000Z',
     txid: () => `tx-${randomUUID()}`,
   };
-  return { runtime, calls, stderr };
+  return { runtime, calls, stderr, scriptPolicies };
 }
 
 export async function snapshot(root: string): Promise<Record<string, string>> {

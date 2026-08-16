@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 
-import type { InstallSubprocessResult } from './runtime-types.js';
+import type { InstallSubprocessResult, LifecycleScriptPolicy } from './runtime-types.js';
 
 export interface PathSpawnOptions {
   cwd: string;
@@ -22,11 +22,11 @@ export interface PathProcessRuntime {
   probe(dshHome: string): Promise<{ dshVersion: string; pnpmVersion: string }>;
   runDsh(
     args: readonly string[],
-    options: { dshHome: string; cwd?: string },
+    options: { dshHome: string; cwd?: string; scriptPolicy?: LifecycleScriptPolicy },
   ): Promise<InstallSubprocessResult>;
   runPnpm(
     args: readonly string[],
-    options: { dshHome: string; cwd: string },
+    options: { dshHome: string; cwd: string; scriptPolicy?: LifecycleScriptPolicy },
   ): Promise<InstallSubprocessResult>;
 }
 
@@ -71,18 +71,48 @@ export function createPathProcessRuntime(
   dependencies: { spawn?: PathSpawn; env?: Readonly<NodeJS.ProcessEnv> } = {},
 ): PathProcessRuntime {
   const spawn = dependencies.spawn ?? defaultSpawn;
+  const environment = (
+    dshHome: string,
+    scriptPolicy: LifecycleScriptPolicy,
+  ): NodeJS.ProcessEnv & { DSH_HOME: string } => {
+    const merged = { ...process.env, ...dependencies.env };
+    const sanitized = Object.fromEntries(
+      Object.entries(merged).filter(([key]) => {
+        const normalized = key.toLowerCase();
+        const prefix = normalized.startsWith('npm_config_')
+          ? 'npm_config_'
+          : normalized.startsWith('pnpm_config_')
+            ? 'pnpm_config_'
+            : undefined;
+        if (prefix === undefined) return true;
+        const setting = normalized.slice(prefix.length).replaceAll('_', '');
+        return ![
+          'ignorescripts',
+          'dangerouslyallowallbuilds',
+          'onlybuiltdependencies',
+          'allowbuilds',
+        ].includes(setting);
+      }),
+    );
+    return {
+      ...sanitized,
+      DSH_HOME: dshHome,
+      npm_config_ignore_scripts: scriptPolicy === 'allow-approved' ? 'false' : 'true',
+    };
+  };
   const run = async (
     command: 'dsh' | 'pnpm',
     args: readonly string[],
     dshHome: string,
     cwd: string,
     timeout: number,
+    scriptPolicy: LifecycleScriptPolicy,
   ): Promise<InstallSubprocessResult> => {
     let result: Awaited<ReturnType<PathSpawn>>;
     try {
       result = await spawn(command, args, {
         cwd,
-        env: { ...process.env, ...dependencies.env, DSH_HOME: dshHome },
+        env: environment(dshHome, scriptPolicy),
         killDescendants: false,
         reject: false,
         shell: false,
@@ -97,15 +127,23 @@ export function createPathProcessRuntime(
   };
   return {
     async probe(dshHome) {
-      const dsh = await run('dsh', ['--version'], dshHome, dshHome, 5_000);
-      const pnpm = await run('pnpm', ['--version'], dshHome, dshHome, 5_000);
+      const dsh = await run('dsh', ['--version'], dshHome, dshHome, 5_000, 'deny');
+      const pnpm = await run('pnpm', ['--version'], dshHome, dshHome, 5_000, 'deny');
       return {
         dshVersion: cleanVersion('dsh', dsh.stdout),
         pnpmVersion: cleanVersion('pnpm', pnpm.stdout),
       };
     },
     runDsh: (args, options) =>
-      run('dsh', args, options.dshHome, options.cwd ?? options.dshHome, 30_000),
-    runPnpm: (args, options) => run('pnpm', args, options.dshHome, options.cwd, 30_000),
+      run(
+        'dsh',
+        args,
+        options.dshHome,
+        options.cwd ?? options.dshHome,
+        30_000,
+        options.scriptPolicy ?? 'deny',
+      ),
+    runPnpm: (args, options) =>
+      run('pnpm', args, options.dshHome, options.cwd, 30_000, options.scriptPolicy ?? 'deny'),
   };
 }

@@ -9,18 +9,15 @@ import { inspectMetadata } from '../src/list/contracts.js';
 import { enginePack, fakeRuntime, snapshot } from './install-engine-fixture.js';
 
 const roots: string[] = [];
-
 async function home(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dshpack-engine-home-'));
   roots.push(root);
   return root;
 }
-
 afterEach(async () => {
   const { rm } = await import('node:fs/promises');
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
-
 describe('install ten-stage engine', () => {
   it('stops dry-run at the plan, cleans source, and leaves DSH_HOME byte-identical', async () => {
     const dshHome = await home();
@@ -33,12 +30,10 @@ describe('install ten-stage engine', () => {
     });
     const before = await snapshot(dshHome);
     const fake = fakeRuntime();
-
     const report = await installPack(
       { source, dshHome, dryRun: true, json: true, interactive: false },
       fake.runtime,
     );
-
     expect(report).toMatchObject({ exitCode: 0, metadata: { status: 'planned' } });
     expect(report.metadata.plan?.writes).toEqual(expect.any(Array));
     expect(fake.stderr).toEqual([]);
@@ -181,6 +176,10 @@ describe('install ten-stage engine', () => {
     );
     expect(allowed.exitCode).toBe(0);
     expect(fake.calls).toContain('pnpm:rebuild transitive-build');
+    expect(fake.scriptPolicies).toContainEqual({
+      command: 'pnpm',
+      policy: 'allow-approved',
+    });
   });
 
   it('returns a complete safe replay argv for a newly discovered transitive build', async () => {
@@ -303,6 +302,7 @@ describe('install ten-stage engine', () => {
         (call) => call === 'dsh:plugin --profile engine-pack add example-bundle@1.0.0',
       ),
     ).toHaveLength(1);
+    expect(directFake.scriptPolicies).toContainEqual({ command: 'dsh', policy: 'deny' });
 
     const danger = await installPack(
       {

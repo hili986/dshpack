@@ -121,7 +121,12 @@ async function auditBuilds(
       EXIT_CODES.DSH_SUBPROCESS_FAILURE,
       'E_BUILD_REBUILD',
       `pnpm rebuild ${name} 失败。`,
-      () => runtime.runPnpm(['rebuild', name], { dshHome: input.dshHome, cwd: profileRoot }),
+      () =>
+        runtime.runPnpm(['rebuild', name], {
+          dshHome: input.dshHome,
+          cwd: profileRoot,
+          scriptPolicy: 'allow-approved',
+        }),
     );
   }
   const verified = await guardedInstall(
@@ -226,6 +231,7 @@ export async function installProfile(
             runtime.runDsh(['plugin', '--profile', plan.targetProfile, 'add', spec], {
               dshHome: input.dshHome,
               cwd: profileRoot,
+              scriptPolicy: 'deny',
             }),
         );
         await runInstallFault(runtime, 'add');

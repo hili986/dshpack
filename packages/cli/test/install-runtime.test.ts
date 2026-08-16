@@ -131,6 +131,45 @@ describe('install PATH-only process runtime', () => {
       });
     },
   );
+
+  it('removes inherited lifecycle escalation keys and toggles scripts only for rebuild', async () => {
+    const environments: NodeJS.ProcessEnv[] = [];
+    const process = createPathProcessRuntime({
+      env: {
+        NPM_CONFIG_IGNORE_SCRIPTS: 'false',
+        npm_config_DANGEROUSLY_ALLOW_ALL_BUILDS: 'true',
+        PnPm_CoNfIg_OnLy_BuIlT_DePeNdEnCiEs: '*',
+        NpM_CoNfIg_AlLoW_BuIlDs: '*',
+      },
+      spawn: async (_command, _args, options) => {
+        environments.push(options.env);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+    const dshHome = await temporary();
+    await process.runDsh(['plugin', 'add', 'exact-package@1.0.0'], {
+      dshHome,
+      scriptPolicy: 'deny',
+    } as never);
+    await process.runPnpm(['rebuild', 'exact-package'], {
+      dshHome,
+      cwd: dshHome,
+      scriptPolicy: 'allow-approved',
+    } as never);
+
+    const normalized = environments.map((environment) =>
+      Object.fromEntries(
+        Object.entries(environment).map(([key, value]) => [key.toLowerCase(), value]),
+      ),
+    );
+    expect(normalized[0]).toMatchObject({ npm_config_ignore_scripts: 'true' });
+    expect(normalized[1]).toMatchObject({ npm_config_ignore_scripts: 'false' });
+    for (const environment of normalized) {
+      expect(environment).not.toHaveProperty('npm_config_dangerously_allow_all_builds');
+      expect(environment).not.toHaveProperty('pnpm_config_only_built_dependencies');
+      expect(environment).not.toHaveProperty('npm_config_allow_builds');
+    }
+  });
 });
 
 function material(files: Record<string, string>): ValidatedPackMaterial {
