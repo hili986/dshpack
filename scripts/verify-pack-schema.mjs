@@ -14,10 +14,6 @@ function truth() {
   return JSON.parse(output);
 }
 
-function render(value) {
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
-
 const expected = truth();
 const files = [
   ['schemas/pack.schema.json', expected.pack],
@@ -25,8 +21,14 @@ const files = [
 ];
 const drifted = [];
 for (const [relative, schema] of files) {
-  const actual = await readFile(resolve(repository, relative), 'utf8').catch(() => undefined);
-  if (actual !== render(schema)) drifted.push(relative);
+  const raw = await readFile(resolve(repository, relative), 'utf8').catch(() => undefined);
+  try {
+    if (raw === undefined || JSON.stringify(JSON.parse(raw)) !== JSON.stringify(schema)) {
+      drifted.push(relative);
+    }
+  } catch {
+    drifted.push(relative);
+  }
 }
 if (drifted.length > 0) {
   throw new Error(`pack schema drift: ${drifted.join(', ')}; run pnpm schemas:generate`);

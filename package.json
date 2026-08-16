@@ -16,7 +16,7 @@
     "test:e2e": "pnpm build && vitest run --config vitest.e2e.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "pack:validate": "node scripts/validate-example-pack.mjs",
-    "schemas:generate": "node scripts/generate-pack-schemas.mjs",
+    "schemas:generate": "node scripts/generate-pack-schemas.mjs && pnpm exec biome format --write schemas/pack.schema.json schemas/pack-lock.schema.json",
     "verify:pack-schema": "node scripts/verify-pack-schema.mjs",
     "pack:dry-run": "pnpm --filter @dshpack/core pack --dry-run && pnpm --filter dshpack pack --dry-run",
     "publint": "publint packages/core && publint packages/cli",
