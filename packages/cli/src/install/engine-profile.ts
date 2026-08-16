@@ -106,15 +106,22 @@ async function auditBuilds(
     confirmedTransitive.add(key);
     approvals.add(key);
   }
-  for (const key of audit.unexpectedTransitiveBuildKeys) {
+  const approvedFindings = [...audit.approvedDirect, ...audit.transitive];
+  const authorizationKeys = [
+    ...new Set(approvedFindings.map(({ authorizationKey }) => authorizationKey)),
+  ];
+  const rebuildNames = [...new Set(approvedFindings.map(({ name }) => name))];
+  for (const key of authorizationKeys) {
     await guardedInstall(EXIT_CODES.CONTRACT, 'E_BUILD_AUTHORIZE', `无法精确授权 ${key}。`, () =>
       runtime.authorizeBuild(profileRoot, key),
     );
+  }
+  for (const name of rebuildNames) {
     await guardedInstall(
       EXIT_CODES.DSH_SUBPROCESS_FAILURE,
       'E_BUILD_REBUILD',
-      `pnpm rebuild ${key} 失败。`,
-      () => runtime.runPnpm(['rebuild', key], { dshHome: input.dshHome, cwd: profileRoot }),
+      `pnpm rebuild ${name} 失败。`,
+      () => runtime.runPnpm(['rebuild', name], { dshHome: input.dshHome, cwd: profileRoot }),
     );
   }
   const verified = await guardedInstall(
@@ -191,12 +198,6 @@ export async function installProfile(
           );
         const key = buildAuthorizationKey(plugin);
         approvals.add(key);
-        await guardedInstall(
-          EXIT_CODES.CONTRACT,
-          'E_BUILD_AUTHORIZE',
-          `无法精确授权 ${plugin.name}。`,
-          () => runtime.authorizeBuild(profileRoot, key),
-        );
       }
       const download =
         plugin.source.kind === 'tarball'
@@ -228,14 +229,6 @@ export async function installProfile(
             }),
         );
         await runInstallFault(runtime, 'add');
-        facts.push(
-          await guardedInstall(
-            EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
-            'E_PLUGIN_VERIFY',
-            `插件 ${plugin.name} 安装事实不匹配。`,
-            () => runtime.verifyInstalledPlugin(profileRoot, plugin, locked),
-          ),
-        );
       } finally {
         if (download !== undefined)
           await guardedInstall(
@@ -246,8 +239,20 @@ export async function installProfile(
           );
       }
     }
-    await runInstallFault(runtime, 'verify');
     await auditBuilds(input, runtime, plan, material, profileRoot, approvals, replay);
+    for (let index = 0; index < material.manifest.plugins.length; index += 1) {
+      const plugin = material.manifest.plugins[index] as PluginDeclaration;
+      const locked = material.lock.plugins[index] as PackLockedPlugin;
+      facts.push(
+        await guardedInstall(
+          EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
+          'E_PLUGIN_VERIFY',
+          `插件 ${plugin.name} 安装事实不匹配。`,
+          () => runtime.verifyInstalledPlugin(profileRoot, plugin, locked),
+        ),
+      );
+    }
+    await runInstallFault(runtime, 'verify');
     const profilePatch = await guardedInstall(
       EXIT_CODES.CONTRACT,
       'E_PROFILE_PATCH_MCP',

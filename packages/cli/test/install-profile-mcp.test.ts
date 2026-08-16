@@ -181,6 +181,7 @@ describe('install manifest MCP application', () => {
     const source = await enginePack({ plugin: { allowBuilds: true } });
     const oneFlagHome = await mkdtemp(join(tmpdir(), 'dshpack-build-home-'));
     roots.push(oneFlagHome);
+    const oneFlagFake = fakeRuntime({ transitive: ['example-bundle'] });
     const oneFlag = await installPack(
       {
         source,
@@ -189,11 +190,13 @@ describe('install manifest MCP application', () => {
         allowBuilds: ['example-bundle'],
         interactive: false,
       },
-      fakeRuntime({ transitive: ['example-bundle'] }).runtime,
+      oneFlagFake.runtime,
     );
 
     expect(oneFlag.exitCode).toBe(21);
     expect(oneFlag.diagnostics[0]?.hint?.match(/--allow-build 'example-bundle'/gu)).toHaveLength(2);
+    expect(oneFlagFake.calls.some((call) => call.startsWith('allow-build:'))).toBe(false);
+    expect(oneFlagFake.calls.some((call) => call.startsWith('pnpm:rebuild'))).toBe(false);
 
     const twoFlagHome = await mkdtemp(join(tmpdir(), 'dshpack-build-home-'));
     roots.push(twoFlagHome);
@@ -209,6 +212,13 @@ describe('install manifest MCP application', () => {
       fake.runtime,
     );
     expect(twoFlags.exitCode).toBe(0);
-    expect(fake.calls).toContain('pnpm:rebuild example-bundle');
+    const addIndex = fake.calls.findIndex((call) => call.includes(' add '));
+    const authorizeIndex = fake.calls.indexOf('allow-build:example-bundle');
+    const rebuildIndex = fake.calls.indexOf('pnpm:rebuild example-bundle');
+    const verifyIndex = fake.calls.indexOf('verify-plugin:example-bundle');
+    expect(addIndex).toBeGreaterThanOrEqual(0);
+    expect(authorizeIndex).toBeGreaterThan(addIndex);
+    expect(rebuildIndex).toBeGreaterThan(authorizeIndex);
+    expect(verifyIndex).toBeGreaterThan(rebuildIndex);
   });
 });

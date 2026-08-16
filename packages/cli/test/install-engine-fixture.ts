@@ -11,6 +11,7 @@ import { writeFileAtomic } from '../src/adapters/fs.js';
 import { digestTargetBeforeState } from '../src/install/build-plan.js';
 import { validateOfficialProfileInit } from '../src/install/profile-init.js';
 import { stageVerifiedPluginTarball } from '../src/install/profile-tarball.js';
+import { buildAuthorizationKey } from '../src/install/profile-workspace.js';
 import { readValidatedPack } from '../src/install/read.js';
 import type {
   InstallRuntime,
@@ -297,6 +298,7 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
     },
     verifyOfficialProfileInit: validateOfficialProfileInit,
     async verifyInstalledPlugin(_profileRoot, plugin, locked) {
+      calls.push(`verify-plugin:${plugin.name}`);
       return {
         name: plugin.name,
         packageJsonSha512: locked.packageJsonSha512,
@@ -308,16 +310,27 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
             : locked.integrity,
       };
     },
-    async auditInstalledBuildScripts() {
+    async auditInstalledBuildScripts(_profileRoot, plugins, approvedBuilds) {
       const transitive = control.transitive ?? [];
+      const direct = plugins
+        .filter((plugin) => plugin.allowBuilds === true)
+        .map((plugin) => ({
+          name: plugin.name,
+          authorizationKey: buildAuthorizationKey(plugin),
+          scripts: ['install'] as ('install' | 'preinstall' | 'postinstall' | 'prepare')[],
+        }));
       return {
-        approvedDirect: [],
+        approvedDirect: direct.filter(({ authorizationKey }) =>
+          approvedBuilds.has(authorizationKey),
+        ),
         transitive: transitive.map((name) => ({
           name,
           authorizationKey: name,
           scripts: ['install'] as const,
         })),
-        unapprovedDirectBuildKeys: [],
+        unapprovedDirectBuildKeys: direct
+          .filter(({ authorizationKey }) => !approvedBuilds.has(authorizationKey))
+          .map(({ authorizationKey }) => authorizationKey),
         unexpectedTransitiveBuildKeys: [...transitive],
       };
     },
