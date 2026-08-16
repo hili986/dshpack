@@ -64,9 +64,12 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # DSH_HOME cannot live here: the `runner` context is only available to steps, and
+    # naming it at job level fails workflow validation before a single job starts — which
+    # is why every run reported failure with zero jobs and the workflow displayed as its
+    # own path instead of "CI". It is set per step below instead.
     env:
       DSH_REAL_SMOKE: "1"
-      DSH_HOME: ${{ runner.temp }}/dshpack-contract-version-home
 
     steps:
       - name: Check out repository
@@ -88,6 +91,10 @@ jobs:
 
       - name: Resolve the pinned DSH contract
         run: npx --yes @deepseek-ai/dsh@0.1.0-rc.6 --version
+        env:
+          DSH_HOME: ${{ runner.temp }}/dshpack-contract-version-home
 
       - name: Run isolated real-DSH smoke test
         run: pnpm exec node scripts/smoke-real-dsh.mjs
+        env:
+          DSH_HOME: ${{ runner.temp }}/dshpack-contract-version-home
