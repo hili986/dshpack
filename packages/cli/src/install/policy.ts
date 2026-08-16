@@ -15,7 +15,7 @@ function quotePowerShell(value: string): string {
 export function nonInteractiveInstallArgv(
   options: InstallPlanOptions,
   plan: InstallPlan,
-  environment: InstallEnvironmentFacts,
+  environment: Pick<InstallEnvironmentFacts, 'dshHome'>,
 ): string[] {
   const args = [
     'install',
@@ -40,7 +40,7 @@ export function nonInteractiveInstallArgv(
 export function nonInteractiveInstallCommand(
   options: InstallPlanOptions,
   plan: InstallPlan,
-  environment: InstallEnvironmentFacts,
+  environment: Pick<InstallEnvironmentFacts, 'dshHome'>,
 ): string {
   const argv = nonInteractiveInstallArgv(options, plan, environment);
   const rendered = argv.map((value, index) => {
