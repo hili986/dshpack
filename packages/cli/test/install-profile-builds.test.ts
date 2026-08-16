@@ -141,6 +141,40 @@ describe('installed build-script audit', () => {
     expect(result.transitive[0]?.name).toBe('direct-plugin');
   });
 
+  it('rejects a junction in a direct scoped package ancestor', async () => {
+    const root = await temporary();
+    const external = await temporary();
+    await pkg(external, 'plugin', { name: '@scope/plugin' });
+    await symlink(join(external, 'node_modules'), join(root, 'node_modules', '@scope'), 'junction');
+    const scoped: PluginDeclaration = {
+      name: '@scope/plugin',
+      source: { kind: 'npm', range: '1.0.0' },
+      allowBuilds: false,
+    };
+
+    await expect(auditInstalledBuildScripts(root, [scoped], new Set())).rejects.toMatchObject({
+      code: 'E_PLUGIN_PATH_ALIAS',
+    });
+  });
+
+  it.each([
+    { name: 'child', junction: 'node_modules' },
+    { name: '@scope/child', junction: 'node_modules/@scope' },
+  ])('rejects a junction in nested dependency ancestor $junction', async ({ name, junction }) => {
+    const root = await temporary();
+    const directRoot = await pkg(root, direct.name, { dependencies: { [name]: '1.0.0' } });
+    const external = await temporary();
+    const externalName = name.includes('/') ? 'child' : name;
+    await pkg(external, externalName, { name });
+    const junctionPath = join(directRoot, ...junction.split('/'));
+    if (junction !== 'node_modules') await mkdir(join(directRoot, 'node_modules'));
+    await symlink(join(external, 'node_modules'), junctionPath, 'junction');
+
+    await expect(auditInstalledBuildScripts(root, [direct], new Set())).rejects.toMatchObject({
+      code: 'E_PLUGIN_PATH_ALIAS',
+    });
+  });
+
   it('fails closed for missing required dependencies and package aliases', async () => {
     const missing = await temporary();
     await pkg(missing, direct.name, { dependencies: { absent: '1.0.0' } });

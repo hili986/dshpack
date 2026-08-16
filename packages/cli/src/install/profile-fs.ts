@@ -13,6 +13,8 @@ export interface ProfileReadHooks {
   afterFileOpen?(path: string): Promise<void>;
   /** Test seam for deterministic in-place modification after bytes are read. */
   afterFileRead?(path: string): Promise<void>;
+  /** Test seam for pathname replacement after the final handle snapshot. */
+  afterFileSnapshot?(path: string): Promise<void>;
   /** Test seam for deterministic directory replacement mutants. */
   afterDirectoryLstat?(path: string): Promise<void>;
 }
@@ -88,6 +90,15 @@ export async function readAtomicFile(
     await hooks.afterFileRead?.(path);
     const after = (await handle.stat({ bigint: true })) as BigStats;
     if (!sameContentSnapshot(opened, after)) throw changed(path);
+    await hooks.afterFileSnapshot?.(path);
+    let finalPath: BigStats;
+    try {
+      finalPath = (await lstat(path, { bigint: true })) as BigStats;
+    } catch {
+      throw changed(path);
+    }
+    if (!finalPath.isFile() || finalPath.isSymbolicLink() || !sameIdentity(after, finalPath))
+      throw changed(path);
     return { bytes, identity: identity(opened) };
   } finally {
     await handle.close();
@@ -138,6 +149,41 @@ export async function requireSecureDirectory(
 function within(root: string, candidate: string): boolean {
   const path = relative(resolve(root), resolve(candidate));
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+/** Inspect every lexical ancestor relative to one stable physical root. */
+export async function inspectConfinedDirectory(
+  rootPath: string,
+  root: SecureDirectory,
+  candidate: string,
+  hooks: ProfileReadHooks = {},
+): Promise<SecureDirectory | undefined> {
+  const relativePath = relative(resolve(rootPath), resolve(candidate));
+  if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath))
+    throw new InstallProfileError(
+      'E_PLUGIN_PATH_ALIAS',
+      '依赖目录在稳定 profile root 之外。',
+      candidate,
+    );
+  const currentRoot = await requireSecureDirectory(rootPath, hooks);
+  if (currentRoot.identity !== root.identity)
+    throw new InstallProfileError('E_PROFILE_FILE_CHANGED', 'profile root 在审计期间被替换。');
+  if (relativePath === '') return currentRoot;
+
+  let cursor = rootPath;
+  for (const segment of relativePath.split(sep)) {
+    cursor = join(cursor, segment);
+    const directory = await inspectSecureDirectory(cursor, hooks);
+    if (directory === undefined) return undefined;
+    if (!within(root.canonical, directory.canonical))
+      throw new InstallProfileError(
+        'E_PLUGIN_PATH_ALIAS',
+        '依赖目录祖先逃逸 profile root。',
+        cursor,
+      );
+    if (cursor === candidate) return directory;
+  }
+  return undefined;
 }
 
 /** Check every ancestor and the final file against the package's canonical root. */

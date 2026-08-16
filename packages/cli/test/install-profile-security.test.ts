@@ -16,6 +16,7 @@ import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { auditInstalledBuildScripts } from '../src/install/profile-builds.js';
+import { inspectConfinedDirectory, requireSecureDirectory } from '../src/install/profile-fs.js';
 import { validateOfficialProfileInit } from '../src/install/profile-init.js';
 import {
   exactPluginAddSpec,
@@ -98,6 +99,15 @@ packages:
 }
 
 describe('bundle patch path boundary', () => {
+  it('pins confinement to one stable root and rejects lexical escape', async () => {
+    const root = await temporary();
+    const stable = await requireSecureDirectory(root);
+    await expect(inspectConfinedDirectory(root, stable, root)).resolves.toEqual(stable);
+    await expect(
+      inspectConfinedDirectory(root, stable, join(root, '..', 'outside')),
+    ).rejects.toMatchObject({ code: 'E_PLUGIN_PATH_ALIAS' });
+  });
+
   it('rejects an intermediate junction even when the final entry is an ordinary file', async () => {
     const root = await temporary();
     const external = await temporary();
@@ -337,5 +347,21 @@ describe('atomic reads and private tarball staging', () => {
     await expect(exactPluginAddSpec(declaration, locked, staged)).rejects.toMatchObject({
       code: 'E_PLUGIN_TARBALL_INTEGRITY',
     });
+
+    const stagedSwap = await stageVerifiedPluginTarball(source, root, integrity);
+    const malicious = join(root, 'malicious.tgz');
+    await writeFile(malicious, 'malicious replacement');
+    let swapped = false;
+    await expect(
+      exactPluginAddSpec(declaration, locked, stagedSwap, {
+        afterFileSnapshot: async (path) => {
+          if (!swapped && path === stagedSwap.path) {
+            swapped = true;
+            await rename(stagedSwap.path, `${stagedSwap.path}.old`);
+            await rename(malicious, stagedSwap.path);
+          }
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'E_PROFILE_FILE_CHANGED' });
   });
 });

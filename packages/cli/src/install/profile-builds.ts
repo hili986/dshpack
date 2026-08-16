@@ -8,7 +8,13 @@ import {
   InstallProfileError,
   isRecord,
 } from './profile-common.js';
-import { inspectSecureDirectory, type ProfileReadHooks, readAtomicFile } from './profile-fs.js';
+import {
+  inspectConfinedDirectory,
+  inspectSecureDirectory,
+  type ProfileReadHooks,
+  readAtomicFile,
+  type SecureDirectory,
+} from './profile-fs.js';
 import { buildAuthorizationKey } from './profile-workspace.js';
 
 const lifecycleScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
@@ -81,11 +87,13 @@ function scriptFacts(value: unknown, packageName: string): (typeof lifecycleScri
 }
 
 async function readPackage(
+  profileRoot: string,
+  stableRoot: SecureDirectory,
   root: string,
   expectedName: string,
   hooks: ProfileReadHooks,
 ): Promise<PackageFacts> {
-  const directory = await inspectSecureDirectory(root, hooks);
+  const directory = await inspectConfinedDirectory(profileRoot, stableRoot, root, hooks);
   if (directory === undefined)
     throw new InstallProfileError(
       'E_PLUGIN_DEPENDENCY_MISSING',
@@ -93,7 +101,7 @@ async function readPackage(
       root,
     );
   const json = await packageJson(root, hooks);
-  const currentDirectory = await inspectSecureDirectory(root, hooks);
+  const currentDirectory = await inspectConfinedDirectory(profileRoot, stableRoot, root, hooks);
   if (currentDirectory?.identity !== directory.identity)
     throw new InstallProfileError('E_PROFILE_FILE_CHANGED', `依赖目录在读取期间被替换：${root}`);
   if (json.name !== expectedName)
@@ -126,6 +134,7 @@ function isInside(root: string, candidate: string): boolean {
 
 async function resolveDependency(
   profileRoot: string,
+  stableRoot: SecureDirectory,
   packageRoot: string,
   name: string,
   optional: boolean,
@@ -134,7 +143,7 @@ async function resolveDependency(
   let cursor = packageRoot;
   while (isInside(profileRoot, cursor)) {
     const candidate = join(cursor, 'node_modules', ...name.split('/'));
-    const directory = await inspectSecureDirectory(candidate, hooks);
+    const directory = await inspectConfinedDirectory(profileRoot, stableRoot, candidate, hooks);
     if (directory !== undefined) return candidate;
     if (resolve(cursor) === resolve(profileRoot)) break;
     cursor = dirname(cursor);
@@ -157,9 +166,17 @@ export async function auditInstalledBuildScripts(
   approvedBuildKeys: ReadonlySet<string>,
   hooks: ProfileReadHooks = {},
 ): Promise<BuildScriptAudit> {
-  if ((await inspectSecureDirectory(profileRoot, hooks)) === undefined)
+  const stableRoot = await inspectSecureDirectory(profileRoot, hooks);
+  if (stableRoot === undefined)
     throw new InstallProfileError('E_PLUGIN_PATH_ALIAS', 'profile 根目录不存在。', profileRoot);
-  if ((await inspectSecureDirectory(join(profileRoot, 'node_modules'), hooks)) === undefined)
+  if (
+    (await inspectConfinedDirectory(
+      profileRoot,
+      stableRoot,
+      join(profileRoot, 'node_modules'),
+      hooks,
+    )) === undefined
+  )
     throw new InstallProfileError(
       'E_PLUGIN_PATH_ALIAS',
       'profile node_modules 不存在。',
@@ -175,6 +192,8 @@ export async function auditInstalledBuildScripts(
   const directByIdentity = new Map<string, PluginDeclaration>();
   for (const plugin of directByName.values()) {
     const facts = await readPackage(
+      profileRoot,
+      stableRoot,
       join(profileRoot, 'node_modules', ...plugin.name.split('/')),
       plugin.name,
       hooks,
@@ -204,12 +223,27 @@ export async function auditInstalledBuildScripts(
       else unapprovedDirect.push(authorizationKey);
     }
     for (const name of current.requiredDependencies) {
-      const dependencyRoot = await resolveDependency(profileRoot, current.root, name, false, hooks);
-      queue.push(await readPackage(dependencyRoot as string, name, hooks));
+      const dependencyRoot = await resolveDependency(
+        profileRoot,
+        stableRoot,
+        current.root,
+        name,
+        false,
+        hooks,
+      );
+      queue.push(await readPackage(profileRoot, stableRoot, dependencyRoot as string, name, hooks));
     }
     for (const name of current.optionalDependencies) {
-      const dependencyRoot = await resolveDependency(profileRoot, current.root, name, true, hooks);
-      if (dependencyRoot !== undefined) queue.push(await readPackage(dependencyRoot, name, hooks));
+      const dependencyRoot = await resolveDependency(
+        profileRoot,
+        stableRoot,
+        current.root,
+        name,
+        true,
+        hooks,
+      );
+      if (dependencyRoot !== undefined)
+        queue.push(await readPackage(profileRoot, stableRoot, dependencyRoot, name, hooks));
     }
   }
 
