@@ -137,6 +137,7 @@ describe('install plan defensive branches', () => {
       lock({ integrity: { kind: 'git-commit', value: commit } }),
       'E_LOCK_NPM_INTEGRITY',
     ],
+    [npmDeclaration(), lock({ bundlePatch: '../escape.yml' }), 'E_LOCK_BUNDLE_PATCH_PATH'],
     [
       npmDeclaration({ source: { kind: 'github', owner: 'o', repo: 'r', ref: commit } }),
       lock({ resolved: { commit }, integrity: { kind: 'npm-sri', value: sri } }),
@@ -185,6 +186,12 @@ describe('install plan defensive branches', () => {
     );
     expect(badSettings).toMatchObject({ exitCode: 30 });
     expect(badSettings.diagnostics[0]).toMatchObject({ code: 'E_SETTINGS_SOURCE' });
+
+    const missingSettings = await prepareInstallPlan(
+      planInput(await smallFixture({ settingsFile: 'agent-presets.yml' })),
+    );
+    expect(missingSettings).toMatchObject({ exitCode: 30 });
+    expect(missingSettings.diagnostics[0]).toMatchObject({ code: 'E_SETTINGS_SOURCE_MISSING' });
 
     const build = planInput(await smallFixture({ allowBuilds: true }));
     build.options = { ...build.options, allowBuilds: ['not-requested'] };

@@ -1,4 +1,9 @@
-import type { Diagnostic, PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
+import {
+  type Diagnostic,
+  type PackLockedPlugin,
+  type PluginDeclaration,
+  validatePackPath,
+} from '@dshpack/core';
 import { satisfies, validRange } from 'semver';
 
 import type { InstallPlanPlugin } from './types.js';
@@ -125,6 +130,12 @@ export function reconcileLockedPlugin(
       'E_LOCK_PLUGIN_NAME',
       'manifest 与 lock 的插件名不一致。',
       '按 manifest 顺序重新生成 lock。',
+    );
+  if (!validatePackPath(locked.bundlePatch).ok)
+    return failure(
+      'E_LOCK_BUNDLE_PATCH_PATH',
+      `${declaration.name} 的 bundlePatch 不是安全的包内相对路径。`,
+      '重新导出并锁定不含绝对路径、反斜杠或导航段的 bundlePatch。',
     );
   const exact =
     declaration.source.kind === 'npm'

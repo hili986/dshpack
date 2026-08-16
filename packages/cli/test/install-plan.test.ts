@@ -344,12 +344,14 @@ describe('prepareInstallPlan', () => {
       manifest: pack,
       files: {
         'skills/notes.md': '---\nname: notes\ndescription: notes helper\n---\n# Notes\n',
+        'skills/folder/SKILL.md': '---\nname: folder\ndescription: folder helper\n---\n# Folder\n',
         'presets/custom/agent.cordis.yml': '[]\n',
         'settings/agent-presets.yml': 'custom: {}\n',
       },
     });
     const result = await prepareInstallPlan(input(root));
     expect(result.exitCode, JSON.stringify(result.diagnostics)).toBe(0);
+    expect(result.plan?.skills).toEqual(['folder', 'notes']);
     expect(result.plan?.writes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: 'skills/notes.md', effectiveAt: '热生效' }),
@@ -360,6 +362,12 @@ describe('prepareInstallPlan', () => {
           effectiveAt: '重启生效',
         }),
       ]),
+    );
+    const forced = await prepareInstallPlan(
+      input(root, { options: { sourceArgument: root, yes: true, force: true } }),
+    );
+    expect(forced.plan?.writes.filter(({ kind }) => kind === 'skill' || kind === 'preset')).toEqual(
+      expect.arrayContaining([expect.objectContaining({ policy: 'create-or-replace' })]),
     );
   });
 });

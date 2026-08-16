@@ -156,6 +156,16 @@ export async function prepareInstallPlan(
       ),
     ]);
   }
+  if (manifest.settings !== undefined && !paths.includes('settings/agent-presets.yml')) {
+    return failure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_SETTINGS_SOURCE_MISSING',
+        'manifest 声明了 agent-presets settings，但 payload 文件不存在。',
+        '提供 settings/agent-presets.yml 并将其加入 lock.files。',
+        'settings/agent-presets.yml',
+      ),
+    ]);
+  }
 
   const plugins: InstallPlanPlugin[] = [];
   for (let index = 0; index < manifest.plugins.length; index += 1) {

@@ -27,6 +27,21 @@ function uniqueTopLevel(paths: readonly string[], prefix: string): string[] {
   ].sort((left, right) => left.localeCompare(right, 'en'));
 }
 
+function skillsIn(paths: readonly string[]): { id: string; source: string }[] {
+  const skills = new Map<string, string>();
+  for (const path of paths) {
+    if (!path.startsWith('skills/')) continue;
+    const remainder = path.slice('skills/'.length);
+    const first = remainder.split('/')[0] as string;
+    const flat = !remainder.includes('/') && first.endsWith('.md');
+    const id = flat ? first.slice(0, -3) : first;
+    if (!skills.has(id)) {
+      skills.set(id, flat ? path : `skills/${first}`);
+    }
+  }
+  return [...skills].map(([id, source]) => ({ id, source }));
+}
+
 function writesFor(
   manifest: PackManifest,
   paths: readonly string[],
@@ -47,13 +62,9 @@ function writesFor(
       effectiveAt: '重启生效',
     },
   ];
-  for (const skill of uniqueTopLevel(paths, 'skills/')) {
-    // uniqueTopLevel only returns names derived from paths, so this assertion cannot invent a path.
-    const source = paths.find(
-      (path) => path === `skills/${skill}` || path.startsWith(`skills/${skill}/`),
-    ) as string;
+  for (const skill of skillsIn(paths)) {
     writes.push({
-      path: source,
+      path: skill.source,
       kind: 'skill',
       policy: force ? 'create-or-replace' : 'skip-existing',
       effectiveAt: '热生效',
@@ -123,7 +134,7 @@ export function buildInstallPlan(input: {
     pnpm: { current: environment.pnpmVersion },
     plugins,
     allowBuilds: plugins.filter(({ allowBuilds }) => allowBuilds).map(({ name }) => name),
-    skills: uniqueTopLevel(input.paths, 'skills/'),
+    skills: skillsIn(input.paths).map(({ id }) => id),
     presets: uniqueTopLevel(input.paths, 'presets/'),
     mcp: manifest.mcp.map(({ serverName }) => serverName),
     settingsNamespaces:
