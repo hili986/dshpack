@@ -60,10 +60,16 @@ function requireMetadata(manifest, packageDirectory) {
   if (manifest.repository.directory !== packageDirectory) {
     throw new Error(`${packageDirectory} repository.directory must equal ${packageDirectory}`);
   }
-  if (
-    manifest.repository.url !== placeholderRepositoryUrl &&
-    !repositoryUrl.test(manifest.repository.url)
-  ) {
+  // The placeholder used to be waved through here, which made `release:check` green on a
+  // manifest that `npm publish --provenance` rejects with a 422 — the gate said "ready"
+  // about the one field that would stop the publish. The owner/repo was already settled,
+  // so the exemption is gone and the placeholder now fails like any other bad shape.
+  if (manifest.repository.url === placeholderRepositoryUrl) {
+    throw new Error(
+      `${packageDirectory} repository.url is still the placeholder; provenance needs the real repo`,
+    );
+  }
+  if (!repositoryUrl.test(manifest.repository.url)) {
     throw new Error(`${packageDirectory} repository.url has an invalid git+https GitHub shape`);
   }
   if (!Array.isArray(manifest.keywords) || manifest.keywords.length === 0) {
@@ -173,8 +179,13 @@ export async function verifyReleasePack() {
   console.log(
     'release tarballs verified: required schemas match TypeBox truth; forbidden files absent',
   );
+  // What this step can and cannot promise: the manifest now names a real repository, which
+  // is necessary for `npm publish --provenance` but not sufficient — npm compares the URL
+  // against the repository the workflow actually runs in, case-sensitively, and rejects a
+  // mismatch with a 422 that cancels the publish. So the repo still has to exist under this
+  // exact name before W18.
   console.log(
-    `repository URL placeholder remains explicit: ${placeholderRepositoryUrl}; provenance publish is blocked until user selects the repository.`,
+    'repository metadata verified; provenance additionally requires this repo to exist and match case-for-case at publish time.',
   );
 }
 

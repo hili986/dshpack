@@ -72,8 +72,15 @@ function importedSpecifiers(source: string): readonly string[] {
 const forbiddenEscapeRules = [
   { rule: 'process.getBuiltinModule', pattern: /\bprocess\.getBuiltinModule\s*\(/u },
   { rule: 'process.binding', pattern: /\bprocess\.binding\s*\(/u },
-  { rule: 'fetch', pattern: /(?<![\w$.])fetch\s*\(/u },
-  { rule: 'new WebSocket', pattern: /\bnew\s+WebSocket\s*\(/u },
+  // The global-object prefix has to be part of the pattern: `globalThis.fetch(...)` is an
+  // ordinary way to spell the call (some style guides prefer it), and matching only the
+  // bare name let it through. The prefix stays enumerated rather than open so that an
+  // unrelated `someClient.fetch(...)` is still not a violation.
+  { rule: 'fetch', pattern: /(?<![\w$.])(?:(?:globalThis|self|window)\.)?fetch\s*\(/u },
+  {
+    rule: 'new WebSocket',
+    pattern: /\bnew\s+(?:(?:globalThis|self|window)\.)?WebSocket\s*\(/u,
+  },
   {
     rule: 'dynamic import expression',
     pattern: /\bimport\s*\(\s*(?!['"](?:\\.|[^'"])*['"]\s*\))/u,
@@ -169,8 +176,18 @@ describe('core source zero-side-effect boundary', () => {
     ['process.binding', "process.binding('fs');\nexport {};\n", 'process.binding'],
     ['bare fetch', "fetch('https://example.test');\nexport {};\n", 'fetch'],
     [
+      'globalThis-prefixed fetch',
+      "globalThis.fetch('https://example.test');\nexport {};\n",
+      'fetch',
+    ],
+    [
       'WebSocket construction',
       "new WebSocket('wss://example.test');\nexport {};\n",
+      'new WebSocket',
+    ],
+    [
+      'globalThis-prefixed WebSocket construction',
+      "new globalThis.WebSocket('wss://example.test');\nexport {};\n",
       'new WebSocket',
     ],
     [

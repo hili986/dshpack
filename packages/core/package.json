@@ -7,7 +7,7 @@
   "author": "dsh-packs",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<owner>/<repo>.git",
+    "url": "git+https://github.com/hili986/dshpack.git",
     "directory": "packages/core"
   },
   "homepage": "https://github.com/<owner>/<repo>#readme",
