@@ -28,8 +28,11 @@ export function nonInteractiveInstallArgv(
   if (plan.replaceExistingProfile) args.push('--replace');
   if (plan.plugins.some(({ integrity }) => integrity.kind === 'unverified'))
     args.push('--allow-unverified');
-  for (const name of [...plan.allowBuilds, ...plan.extraBuildApprovals])
-    args.push('--allow-build', name);
+  const buildApprovals = [...(options.allowBuilds ?? [])];
+  for (const name of [...plan.allowBuilds, ...plan.extraBuildApprovals]) {
+    if (!buildApprovals.includes(name)) buildApprovals.push(name);
+  }
+  for (const name of buildApprovals) args.push('--allow-build', name);
   if (plan.requiredDangerousPermissions.length > 0) args.push('--allow-danger-full-access');
   if (plan.dsh.versionMismatch) args.push('--allow-version-mismatch');
   if (options.force === true) args.push('--force');

@@ -5,6 +5,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterAll, describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
 import { enginePack } from './install-engine-fixture.js';
 
@@ -52,7 +53,7 @@ afterAll(async () => {
 describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
   it('installs a local pack, lists it as tracked, and passes doctor --strict', async () => {
     const { env, home, log } = await fixture();
-    const source = await enginePack({ assets: true });
+    const source = await enginePack({ assets: true, mcp: true });
     const installed = run(home, env, ['install', source, '--yes']);
     expect(installed.status).toBe(0);
     expect(installed.stderr).toContain('rollback snapshot: enabled=true');
@@ -75,6 +76,20 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
       sideEffects: ['profile/cordis.yml'],
     });
     expect(await readFile(join(home, 'settings.yaml'), 'utf8')).toContain('agent-presets');
+    const profilePatch = await readFile(
+      join(home, 'profiles', 'engine-pack', 'cordis.patch.yml'),
+      'utf8',
+    );
+    const profileRows = parse(profilePatch) as Array<{ insert?: unknown[] }>;
+    expect(profileRows.flatMap((row) => row.insert ?? [])).toContainEqual({
+      id: 'mcp-docs',
+      name: '@deepseek-ai/dsh-mcp-client',
+      config: {
+        serverName: 'docs',
+        transport: 'streamable-http',
+        url: 'https://mcp.example/docs',
+      },
+    });
     expect(await readFile(join(home, 'skills', 'notes', 'SKILL.md'), 'utf8')).toContain('fixture');
     expect(await readFile(join(home, '.agent-presets', 'custom', 'agent.cordis.yml'), 'utf8')).toBe(
       '[]\n',

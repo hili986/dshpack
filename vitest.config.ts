@@ -51,6 +51,7 @@ export default defineConfig({
         'packages/cli/src/install/profile-common.ts': { branches: 90 },
         'packages/cli/src/install/profile-fs.ts': { branches: 90 },
         'packages/cli/src/install/profile-init.ts': { branches: 90 },
+        'packages/cli/src/install/profile-mcp.ts': { branches: 90 },
         'packages/cli/src/install/profile-plugin.ts': { branches: 90 },
         'packages/cli/src/install/profile-tarball.ts': { branches: 90 },
         'packages/cli/src/install/profile-workspace.ts': { branches: 90 },

@@ -6,6 +6,7 @@ import { EXIT_CODES } from '../exit-codes.js';
 import type { TransactionContext } from '../transaction.js';
 import { guardedInstall, installFailure, runInstallFault } from './engine-errors.js';
 import { nonInteractiveInstallArgv, nonInteractiveInstallCommand } from './policy.js';
+import { renderProfilePatch } from './profile-mcp.js';
 import { exactPluginAddSpec, type InstalledPluginFact } from './profile-plugin.js';
 import { buildAuthorizationKey } from './profile-workspace.js';
 import type { ValidatedPackMaterial } from './read.js';
@@ -22,7 +23,7 @@ function buildReplay(
   plan: InstallPlan,
   missing: readonly string[],
 ): InstallReplayCommand {
-  const approved = [...new Set([...(input.allowBuilds ?? []), ...missing])];
+  const approved = [...(input.allowBuilds ?? []), ...missing];
   const direct = new Set(plan.allowBuilds);
   const replayPlan = {
     ...plan,
@@ -36,6 +37,21 @@ function buildReplay(
     argv: nonInteractiveInstallArgv(options, replayPlan, environment),
     powerShell: nonInteractiveInstallCommand(options, replayPlan, environment),
   };
+}
+
+function countApproval(input: InstallInput, name: string): number {
+  return (input.allowBuilds ?? []).filter((item) => item === name).length;
+}
+
+function hasTransitiveApproval(
+  input: InstallInput,
+  plan: InstallPlan,
+  confirmed: ReadonlySet<string>,
+  name: string,
+): boolean {
+  if (confirmed.has(name)) return true;
+  const directOccurrence = plan.allowBuilds.includes(name) ? 1 : 0;
+  return countApproval(input, name) > directOccurrence;
 }
 
 async function auditBuilds(
@@ -60,7 +76,10 @@ async function auditBuilds(
       '直接插件构建授权未精确生效。',
       '停止安装并审计 workspace。',
     );
-  const missing = audit.unexpectedTransitiveBuildKeys.filter((key) => !approvals.has(key));
+  const confirmedTransitive = new Set<string>();
+  const missing = audit.unexpectedTransitiveBuildKeys.filter(
+    (key) => !hasTransitiveApproval(input, plan, confirmedTransitive, key),
+  );
   for (const key of missing) {
     replay.current = buildReplay(input, plan, missing);
     if (!input.interactive || input.json === true)
@@ -84,6 +103,7 @@ async function auditBuilds(
         '用户拒绝传递依赖构建授权。',
         `运行完整非交互命令：${replay.current.powerShell}`,
       );
+    confirmedTransitive.add(key);
     approvals.add(key);
   }
   for (const key of audit.unexpectedTransitiveBuildKeys) {
@@ -103,7 +123,9 @@ async function auditBuilds(
     '构建脚本复验失败。',
     () => runtime.auditInstalledBuildScripts(profileRoot, material.manifest.plugins, approvals),
   );
-  const unknown = verified.unexpectedTransitiveBuildKeys.filter((key) => !approvals.has(key));
+  const unknown = verified.unexpectedTransitiveBuildKeys.filter(
+    (key) => !hasTransitiveApproval(input, plan, confirmedTransitive, key),
+  );
   if (verified.unapprovedDirectBuildKeys.length > 0 || unknown.length > 0)
     throw installFailure(
       EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,
@@ -226,15 +248,18 @@ export async function installProfile(
     }
     await runInstallFault(runtime, 'verify');
     await auditBuilds(input, runtime, plan, material, profileRoot, approvals, replay);
+    const profilePatch = await guardedInstall(
+      EXIT_CODES.CONTRACT,
+      'E_PROFILE_PATCH_MCP',
+      '无法把 manifest MCP 合成到 profile patch。',
+      async () =>
+        renderProfilePatch(materialText(material, 'patch/cordis.patch.yml'), material.manifest.mcp),
+    );
     await guardedInstall(
       EXIT_CODES.CONTRACT,
       'E_PROFILE_PATCH_WRITE',
       'profile patch 写入失败。',
-      () =>
-        runtime.atomicWriteText(
-          join(profileRoot, 'cordis.patch.yml'),
-          materialText(material, 'patch/cordis.patch.yml'),
-        ),
+      () => runtime.atomicWriteText(join(profileRoot, 'cordis.patch.yml'), profilePatch),
     );
   });
   return facts;
