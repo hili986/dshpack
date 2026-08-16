@@ -20,6 +20,9 @@ export interface Result<T> {
 const semanticVersion =
   '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$';
 const kebabCase = '^[a-z0-9]+(?:-[a-z0-9]+)*$';
+const packName = '^(?!web$)(?!headless$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$';
+const npmPackageName = '^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$';
+const githubIdentifier = '^[A-Za-z0-9][A-Za-z0-9._-]*$';
 const sha512 = '^sha512-[A-Za-z0-9+/]+={0,2}$';
 const sha256Base64Url = '^sha256-[A-Za-z0-9_-]+$';
 const gitCommit = '^[a-f0-9]{40}$';
@@ -36,8 +39,8 @@ const NpmPluginSourceSchema = strictObject({
 
 const GitHubPluginSourceSchema = strictObject({
   kind: Type.Literal('github'),
-  owner: Type.String({ minLength: 1 }),
-  repo: Type.String({ minLength: 1 }),
+  owner: Type.String({ pattern: githubIdentifier }),
+  repo: Type.String({ pattern: githubIdentifier }),
   ref: Type.String({ pattern: gitCommit }),
 });
 
@@ -53,7 +56,7 @@ export const PluginSourceSchema = Type.Union([
 ]);
 
 export const PluginDeclarationSchema = strictObject({
-  name: Type.String({ minLength: 1 }),
+  name: Type.String({ pattern: npmPackageName }),
   source: PluginSourceSchema,
   allowBuilds: Type.Boolean(),
   role: Type.Optional(Type.Union([Type.Literal('bundle'), Type.Literal('mcp-client')])),
@@ -89,7 +92,7 @@ const SettingsSchema = strictObject({
 export const PackManifestSchema = Type.Object(
   {
     formatVersion: Type.Literal(0),
-    name: Type.String({ pattern: kebabCase }),
+    name: Type.String({ pattern: packName, minLength: 3, maxLength: 64 }),
     version: Type.String({ pattern: semanticVersion }),
     description: Type.String({ minLength: 1, maxLength: 280 }),
     author: Type.String({ minLength: 1, maxLength: 160 }),

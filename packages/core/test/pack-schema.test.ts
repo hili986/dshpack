@@ -112,6 +112,29 @@ describe('PackManifest TypeBox truth source', () => {
     expect(validatePackValue(setAt(manifest, path, value)).diagnostics).not.toEqual([]);
   });
 
+  it.each(['ab', '1-web', 'web', 'headless', 'a'.repeat(65)])(
+    'enforces the §3.2 pack-name rule for %s',
+    (name) => {
+      expect(validatePackValue({ ...manifest, name }).ok).toBe(false);
+    },
+  );
+
+  it('rejects an invalid npm plugin name', () => {
+    expect(
+      validatePackValue(setAt(manifest, ['plugins', '0', 'name'], 'bad/package/name')).ok,
+    ).toBe(false);
+  });
+
+  it('rejects duplicate plugin names and duplicate MCP server names', () => {
+    const duplicatePlugin = structuredClone(manifest) as Record<string, unknown>;
+    (duplicatePlugin.plugins as unknown[]).push(structuredClone(manifest.plugins[0]));
+    expect(validatePackValue(duplicatePlugin).ok).toBe(false);
+
+    const duplicateMcp = structuredClone(manifest) as Record<string, unknown>;
+    (duplicateMcp.mcp as unknown[]).push(structuredClone(manifest.mcp[0]));
+    expect(validatePackValue(duplicateMcp).ok).toBe(false);
+  });
+
   it.each([
     ['npm', 'range'],
     ['github', 'owner'],

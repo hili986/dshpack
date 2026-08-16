@@ -21,7 +21,9 @@
       "type": "number"
     },
     "name": {
-      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "pattern": "^(?!web$)(?!headless$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "minLength": 3,
+      "maxLength": 64,
       "type": "string"
     },
     "version": {
@@ -77,7 +79,7 @@
         "required": ["name", "source", "allowBuilds"],
         "properties": {
           "name": {
-            "minLength": 1,
+            "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
             "type": "string"
           },
           "source": {
@@ -107,11 +109,11 @@
                     "type": "string"
                   },
                   "owner": {
-                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
                     "type": "string"
                   },
                   "repo": {
-                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
                     "type": "string"
                   },
                   "ref": {

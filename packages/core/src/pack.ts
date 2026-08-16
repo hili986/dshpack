@@ -219,7 +219,40 @@ function validate<T>(
 }
 
 export function validatePackValue(value: unknown): Result<PackManifest> {
-  return validate(value, validatePack, 'formatVersion');
+  const result = validate(value, validatePack, 'formatVersion');
+  if (!result.ok || result.value === undefined) return result;
+
+  const diagnostics: Diagnostic[] = [];
+  const pluginNames = new Set<string>();
+  for (const [index, plugin] of result.value.plugins.entries()) {
+    if (pluginNames.has(plugin.name)) {
+      diagnostics.push(
+        diagnostic(
+          'E_SCHEMA_DUPLICATE',
+          'plugins 中的 name 必须唯一。',
+          '删除或重命名重复的插件声明。',
+          `/plugins/${index}/name`,
+        ),
+      );
+    }
+    pluginNames.add(plugin.name);
+  }
+
+  const serverNames = new Set<string>();
+  for (const [index, mcp] of result.value.mcp.entries()) {
+    if (serverNames.has(mcp.serverName)) {
+      diagnostics.push(
+        diagnostic(
+          'E_SCHEMA_DUPLICATE',
+          'mcp 中的 serverName 必须唯一。',
+          '删除或重命名重复的 MCP server。',
+          `/mcp/${index}/serverName`,
+        ),
+      );
+    }
+    serverNames.add(mcp.serverName);
+  }
+  return diagnostics.length === 0 ? result : failure(diagnostics);
 }
 
 export function validateLockValue(value: unknown): Result<PackLock> {
