@@ -172,7 +172,9 @@ function githubSource(reference: string): {
     match === null ||
     match[1] === undefined ||
     match[2] === undefined ||
-    match[3] === undefined
+    match[3] === undefined ||
+    match[2] === '.' ||
+    match[2] === '..'
   ) {
     throw sourceFailure(
       'SOURCE_INVALID',
@@ -229,13 +231,18 @@ async function downloadToPrivateFile(
         await discard(response);
         throw sourceFailure('SOURCE_NETWORK', '远程 source 下载失败。', hint);
       }
-      for await (const chunk of response.body) {
-        total += chunk.byteLength;
-        if (total > MAX_DOWNLOAD_BYTES) {
-          throw sourceFailure('SOURCE_TOO_LARGE', '远程 source 超过 50 MiB 限制。', hint);
+      try {
+        for await (const chunk of response.body) {
+          total += chunk.byteLength;
+          if (total > MAX_DOWNLOAD_BYTES) {
+            throw sourceFailure('SOURCE_TOO_LARGE', '远程 source 超过 50 MiB 限制。', hint);
+          }
+          hash.update(chunk);
+          await handle.write(chunk);
         }
-        hash.update(chunk);
-        await handle.write(chunk);
+      } catch (error) {
+        if (error instanceof SourceError) throw error;
+        throw sourceFailure('SOURCE_NETWORK', '远程 source 下载失败。', hint);
       }
       await handle.sync();
       if (

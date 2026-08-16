@@ -305,13 +305,12 @@ describe('materializeSource', () => {
     );
     expect(result.provenance).toMatchObject({ kind: 'github', owner: 'owner', repo: 'repo', commit });
     await result.cleanup();
+    await expectSourceError(materialize(`github:owner/..#${commit}`), 20, 'SOURCE_INVALID');
 
     const secret = 'signed-url-secret';
     const failure = await expectSourceError(
       materialize(`github:owner/repo#${commit}`, {
-        download: async () => {
-          throw new Error(secret);
-        },
+        download: async () => ({ statusCode: 200, body: (async function* () { yield await Promise.reject(new Error(secret)); })() }),
       }),
       20,
       'SOURCE_NETWORK',
@@ -330,7 +329,7 @@ describe('materializeSource', () => {
     'a/../parent',
     'a//empty',
     'safe:ads',
-    'CON.txt',
+    'CON.txt', 'CLOCK$', 'COM¹.txt',
     'trailing./file',
     'space /file',
   ])('rejects unsafe archive path %j', async (name) => {
@@ -354,11 +353,14 @@ describe('materializeSource', () => {
     { entries: [{ name: 'A.txt', data: 'a' }, { name: 'a.txt', data: 'b' }] },
     { entries: [{ name: '\u00e9.txt', data: 'a' }, { name: 'e\u0301.txt', data: 'b' }] },
     { entries: [{ name: 'same.txt', data: 'a' }, { name: 'same.txt', data: 'b' }] },
+    { entries: [{ name: 'a', data: 'a' }, { name: 'a/b', data: 'b' }] },
+    { entries: [{ name: 'a/b', data: 'b' }, { name: 'a', data: 'a' }] },
+    { entries: [{ name: '././@LongLink', type: 'L', data: 'a\\evil\0' }, { name: 'placeholder', data: 'x' }] },
   ])('fails closed on case, NFC, or duplicate path collision', async ({ entries }) => {
     const root = await temporaryRoot();
     const source = join(root, 'collision.dshpack.tgz');
     await writeFile(source, archive(entries));
-    await expectSourceError(materialize(source), 31, 'ARCHIVE_COLLISION');
+    await expectSourceError(materialize(source), 31, entries[0]?.type === 'L' ? 'ARCHIVE_UNSAFE' : 'ARCHIVE_COLLISION');
   });
 
   it('enforces per-file, aggregate, and file-count extraction limits', async () => {

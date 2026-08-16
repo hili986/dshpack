@@ -33,7 +33,9 @@ function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
       segment === '..' ||
       segment.includes(':') ||
       /[. ]$/u.test(segment) ||
-      /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(segment)
+      /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(
+        segment,
+      )
     ) {
       throw fail('ARCHIVE_UNSAFE', '归档包含不安全路径。');
     }
@@ -43,13 +45,24 @@ function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
 
 function inspectEntry(
   entry: ReadEntry,
-  state: { paths: Map<string, string>; terminals: Set<string>; files: number; bytes: number },
+  state: {
+    paths: Map<string, string>;
+    terminals: Set<string>;
+    parents: Set<string>;
+    filePaths: Set<string>;
+    files: number;
+    bytes: number;
+  },
   fail: ArchiveError,
 ): void {
+  if (entry.extended !== undefined || entry.globalExtended !== undefined) {
+    throw fail('ARCHIVE_UNSAFE', '归档包含扩展元数据。');
+  }
   if (entry.type !== 'File' && entry.type !== 'OldFile' && entry.type !== 'Directory') {
     throw fail('ARCHIVE_UNSAFE', '归档包含链接或特殊文件。');
   }
   const segments = safeEntryPath(entry, fail).split('/');
+  const leafCanonical = segments.join('/').normalize('NFC').toLowerCase();
   for (let index = 1; index <= segments.length; index += 1) {
     const original = segments.slice(0, index).join('/');
     const canonical = original.normalize('NFC').toLowerCase();
@@ -58,8 +71,15 @@ function inspectEntry(
       throw fail('ARCHIVE_COLLISION', '归档路径在目标文件系统上发生冲突。');
     }
     state.paths.set(canonical, original);
+    if (index < segments.length) {
+      if (state.filePaths.has(canonical)) throw fail('ARCHIVE_COLLISION', '归档文件路径包含后代。');
+      state.parents.add(canonical);
+    }
     if (index === segments.length) {
       if (state.terminals.has(canonical)) throw fail('ARCHIVE_COLLISION', '归档包含重复路径。');
+      if (entry.type !== 'Directory' && state.parents.has(canonical)) {
+        throw fail('ARCHIVE_COLLISION', '归档文件路径与目录冲突。');
+      }
       state.terminals.add(canonical);
     }
   }
@@ -67,6 +87,7 @@ function inspectEntry(
     if (entry.size !== 0) throw fail('ARCHIVE_UNSAFE', '归档目录条目无效。');
     return;
   }
+  state.filePaths.add(leafCanonical);
   if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > MAX_FILE_BYTES) {
     throw fail('ARCHIVE_LIMIT', '归档单文件超过 1 MiB 限制。');
   }
@@ -81,6 +102,8 @@ async function preflight(filename: string, fail: ArchiveError): Promise<void> {
   const state = {
     paths: new Map<string, string>(),
     terminals: new Set<string>(),
+    parents: new Set<string>(),
+    filePaths: new Set<string>(),
     files: 0,
     bytes: 0,
   };
