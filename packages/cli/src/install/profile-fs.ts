@@ -146,6 +146,34 @@ export async function requireSecureDirectory(
   return directory;
 }
 
+/** Require POSIX transaction storage to be inaccessible to group and other users. */
+export async function requirePrivateDirectory(
+  path: string,
+  hooks: ProfileReadHooks = {},
+): Promise<SecureDirectory> {
+  const directory = await requireSecureDirectory(path, hooks);
+  if (process.platform === 'win32') return directory;
+  let current: BigStats;
+  try {
+    current = (await lstat(path, { bigint: true })) as BigStats;
+  } catch {
+    throw changed(path);
+  }
+  if (
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    identity(current) !== directory.identity
+  )
+    throw changed(path);
+  if ((current.mode & 0o077n) !== 0n)
+    throw new InstallProfileError(
+      'E_PROFILE_DIRECTORY',
+      `private staging parent permits group or other access: ${path}`,
+      path,
+    );
+  return directory;
+}
+
 function within(root: string, candidate: string): boolean {
   const path = relative(resolve(root), resolve(candidate));
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));

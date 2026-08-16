@@ -3,7 +3,7 @@ import { chmod, mkdtemp, open, rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
 import { InstallProfileError } from './profile-common.js';
-import { type ProfileReadHooks, readAtomicFile, requireSecureDirectory } from './profile-fs.js';
+import { type ProfileReadHooks, readAtomicFile, requirePrivateDirectory } from './profile-fs.js';
 
 export interface StagedPluginTarball {
   readonly path: string;
@@ -36,7 +36,7 @@ export async function stageVerifiedPluginTarball(
   const source = await readAtomicFile(sourcePath, 'E_PLUGIN_TARBALL_PATH', hooks);
   if (sha512(source.bytes) !== expectedIntegrity)
     throw new InstallProfileError('E_PLUGIN_TARBALL_INTEGRITY', '下载物 sha512 与 lock 不一致。');
-  const parent = await requireSecureDirectory(privateParent, hooks);
+  const parent = await requirePrivateDirectory(privateParent, hooks);
   const directory = await mkdtemp(join(parent.canonical, 'dshpack-plugin-'));
   try {
     await chmod(directory, 0o700);
