@@ -1,0 +1,20 @@
+before_files=8260
+after_files=8260
+diff_count=1
+before_snapshot_sha256=d77aaab47823fd57b83d19c74dc8d83ba14f25d359f7486d6333ce6cdf291fde
+after_snapshot_sha256=8f7cfa3536d40ded3d77dc231f7491d306c9091a262fb782c0c75b88c572eecd
+[
+  {
+    "path": "storages/usage-stats-cache.json",
+    "before": {
+      "path": "storages/usage-stats-cache.json",
+      "size": 692,
+      "mtimeUtc": "2026-08-16T05:23:55.7603566Z"
+    },
+    "after": {
+      "path": "storages/usage-stats-cache.json",
+      "size": 692,
+      "mtimeUtc": "2026-08-16T06:03:55.8038281Z"
+    }
+  }
+]

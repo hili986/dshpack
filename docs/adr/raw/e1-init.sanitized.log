@@ -1,0 +1,8 @@
+dsh.cmd : dsh: initialized profile e1-fresh at <PROBE_ROOT>\dsh-hom
+e\profiles\e1-fresh
+At line:2 char:293
++ ...  $env:PATH; & $dsh plugin --profile e1-fresh list --depth=0 2>&1 | Te ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (dsh: initialize...ofiles\e1-fresh:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 

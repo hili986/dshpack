@@ -1,0 +1,22 @@
+dsh.cmd : dsh: initialized profile e3-git at <PROBE_ROOT>\dsh-home\
+profiles\e3-git
+At line:2 char:605
++ ... ase.Name)"; & $dsh plugin --profile $case.Name add $case.Spec 2>&1 |  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (dsh: initialize...profiles\e3-git:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: C:\Users\<REDACTED>\AppData\Local\pnpm\store\v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 0, reused 0, downloaded 1, added 0
+
+dependencies:
++ yocto-queue github:sindresorhus/yocto-queue#b07eac099753833b29d06c614149904445739776
+
+Packages: +1
++
+Progress: resolved 1, reused 0, downloaded 1, added 1, done
+Done in 4.6s using pnpm v11.7.0
+dsh: warning: yocto-queue declares no dsh.bundle — installed as a plain dependency, not a profile layer (a later update
+ that gains one activates it automatically)

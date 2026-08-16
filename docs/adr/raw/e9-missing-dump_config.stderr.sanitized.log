@@ -1,0 +1,24 @@
+node.exe : file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai/d
+sh-app-boot/lib/index.js:543
+At line:2 char:341
++ ... e('-','_'); & node $dshJs --profile e9-missing $flag 1> (Join-Path $p ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (file:///C:/User...ib/index.js:543:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+		if (template === void 0) throw new Error(`${binName}: profile ${JSON.stringify(name)} does not exist; create it with 
+'dsh plugin --profile ${name} add <package>'`);
+		                               ^
+
+Error: dsh: profile "e9-missing" does not exist; create it with 'dsh plugin --profile e9-missing add <package>'
+    at loadProfile (file:///<WORKSPACE>/dsh-cli/node_modules/@deep
+seek-ai/dsh-app-boot/lib/index.js:543:34)
+    at prepareProfile (file:///<WORKSPACE>/dsh-cli/node_modules/@d
+eepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:142:18)
+    at runDumpConfig (file:///<WORKSPACE>/dsh-cli/node_modules/@de
+epseek-ai/dsh/lib/dump-config-D-jtgwY3.js:24:17)
+    at file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai/dsh/l
+ib/bin.js:148:3
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+Node.js v24.13.1

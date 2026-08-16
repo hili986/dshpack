@@ -1,0 +1,20 @@
+dsh.cmd : dsh: initialized profile e3-npm at <PROBE_ROOT>\dsh-home\
+profiles\e3-npm
+At line:2 char:605
++ ... ase.Name)"; & $dsh plugin --profile $case.Name add $case.Spec 2>&1 |  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (dsh: initialize...profiles\e3-npm:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Progress: resolved 1, reused 0, downloaded 0, added 0
+
+dependencies:
++ yocto-queue 1.2.2
+
+Packages: +1
++
+Progress: resolved 1, reused 0, downloaded 1, added 0
+Progress: resolved 1, reused 0, downloaded 1, added 1, done
+Done in 1.8s using pnpm v11.7.0
+dsh: warning: yocto-queue declares no dsh.bundle — installed as a plain dependency, not a profile layer (a later update
+ that gains one activates it automatically)

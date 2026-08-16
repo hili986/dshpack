@@ -1,0 +1,8 @@
+- insert:
+    - id: mcp-e5-probe
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: e5probe
+        transport: streamable-http
+        url: http://127.0.0.1:9/mcp
+        failOnStartupError: true

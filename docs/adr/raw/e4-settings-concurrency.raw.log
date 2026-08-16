@@ -1,0 +1,13 @@
+{
+  "concurrentNamespacesPreserved": true,
+  "concurrentFinalValues": {
+    "alpha": 5,
+    "beta": 5
+  },
+  "busyLockWaitedMs": 173,
+  "staleLockTimeoutMs": 2195,
+  "staleLockMessageMatched": true,
+  "staleLockPreserved": true,
+  "documentUnchangedAfterTimeout": true,
+  "lockSuffix": ".lock"
+}

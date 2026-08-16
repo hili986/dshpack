@@ -1,0 +1,9 @@
+node.exe : npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn deprec...ception instead:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+added 530 packages in 4m

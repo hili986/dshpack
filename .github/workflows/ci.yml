@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+
+      - name: Activate pnpm through Corepack
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@11.7.0 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check source
+        run: pnpm check
+
+      - name: Run coverage suite
+        run: pnpm test:coverage
+
+      - name: Run end-to-end suite
+        run: pnpm test:e2e
+
+      - name: Dry-run package contents
+        run: pnpm pack:dry-run
+
+  real-dsh-contract:
+    name: Real DSH contract smoke
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DSH_REAL_SMOKE: "1"
+      DSH_HOME: ${{ runner.temp }}/dshpack-contract-version-home
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+
+      - name: Activate pnpm through Corepack
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@11.7.0 --activate
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve the pinned DSH contract
+        run: npx --yes @deepseek-ai/dsh@0.1.0-rc.6 --version
+
+      - name: Run isolated real-DSH smoke test
+        run: pnpm exec node scripts/smoke-real-dsh.mjs

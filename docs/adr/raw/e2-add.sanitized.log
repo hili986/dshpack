@@ -1,0 +1,14 @@
+dsh.cmd : dsh: initialized profile e2-stage-20260816 at C:\Users\<REDACTED>\AppData\Local\Temp\dshpack-probe\20260816T052000
+Z\dsh-home\profiles\e2-stage-20260816
+At line:2 char:396
++ ...  $env:PATH; & $dsh plugin --profile $profileName add $fixture 2>&1 |  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (dsh: initialize...-stage-20260816:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+dependencies:
++ @dshpack/w3-local-bundle link:<WORKSPACE>/scripts/fixtures/w3-local-bundle
+
+Already up to date
+Done in 302ms using pnpm v11.7.0

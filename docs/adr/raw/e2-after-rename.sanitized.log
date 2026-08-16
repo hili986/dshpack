@@ -1,0 +1,8 @@
+Legend: production dependency, optional only, dev only
+
+dsh-profile-e2-stage-20260816 <PROBE_ROOT>\dsh-home\profiles\e2-final (PRIVATE)
+│
+│   dependencies:
+└── @dshpack/w3-local-bundle@link:../../../../../../../../Desktop/111/dshpack/scripts/fixtures/w3-local-bundle
+
+1 package

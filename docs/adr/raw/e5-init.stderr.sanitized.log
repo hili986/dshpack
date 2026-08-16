@@ -1,0 +1,8 @@
+node.exe : dsh: initialized profile e5-mcp at <PROBE_ROOT>\dsh-home
+\profiles\e5-mcp
+At line:2 char:320
++ ...  $env:PATH; & node $dshJs plugin --profile e5-mcp list --depth=0 1> ( ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (dsh: initialize...profiles\e5-mcp:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 

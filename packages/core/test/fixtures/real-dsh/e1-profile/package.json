@@ -1,0 +1,12 @@
+{
+  "name": "dsh-profile-e1-fresh",
+  "private": true,
+  "dependencies": {},
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base"
+      ]
+    }
+  }
+}

@@ -1,0 +1,45 @@
+
+ RUN  v4.1.10 <WORKSPACE>
+
+ ❯ packages/core/test/zero-side-effects.test.ts (7 tests | 1 failed) 21ms
+     × contains no filesystem, subprocess, or network imports 9ms
+node.exe : 
+At <WORKSPACE>\.corepack-shims\pnpm.ps1:24 char:5
++     & "node$exe"  "$basedir/../../../../../../Program Files/nodejs/no ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  packages/core/test/zero-side-effects.test.ts > core source zero-side-effect boundary > contains no filesystem, s
+ubprocess, or network imports
+AssertionError: expected [ { file: 'pack.ts', …(1) } ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "file": "pack.ts",
++     "specifier": "node:fs",
++   },
++ ]
+
+ ❯ packages/core/test/zero-side-effects.test.ts:107:51
+    105| describe('core source zero-side-effect boundary', () => {
+    106|   it('contains no filesystem, subprocess, or network imports', async (…
+    107|     await expect(findForbiddenImports(sourceRoot)).resolves.toEqual([]…
+       |                                                   ^
+    108|   });
+    109|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 6 passed (7)
+   Start at  14:00:54
+   Duration  184ms (transform 15ms, setup 0ms, import 26ms, tests 21ms, environment 0ms)
+

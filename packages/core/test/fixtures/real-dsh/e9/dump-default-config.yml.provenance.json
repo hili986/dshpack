@@ -1,0 +1,15 @@
+{
+  "command": "<DSH_BIN> --profile e1-fresh --dump-default-config",
+  "dshVersion": "0.1.0-rc.6",
+  "pnpmVersion": "11.7.0",
+  "nodeVersion": "v24.13.1",
+  "os": "win32 10.0.26200",
+  "generatedAt": "2026-08-16T05:39:38.018Z",
+  "upstreamCommit": "47f943859bef60e4160492346772ded9b24f765a",
+  "isolation": "所有 DSH 进程均显式使用临时 DSH_HOME。",
+  "sanitization": [
+    "替换临时根目录与工作区绝对路径。",
+    "替换用户名、机器名与 anonymous-user-id。",
+    "扫描常见 token 前缀；未命中。"
+  ]
+}

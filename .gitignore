@@ -1,0 +1,35 @@
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+.corepack-shims/
+.corepack-portable/
+
+# Build, test, and generated artifacts
+dist/
+coverage/
+.turbo/
+*.tsbuildinfo
+*.tgz
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+codex-goals/
+.omx/
+# 例外：W3/W14 实测的脱敏证据日志是交付物（"无记录不作结论"），必须入库
+!docs/adr/raw/*.log
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~

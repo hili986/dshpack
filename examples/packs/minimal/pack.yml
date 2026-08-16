@@ -1,0 +1,3 @@
+# W2 仅用于验证工具链可读取示例 YAML；完整 pack schema 从 W4 开始实现。
+name: minimal
+status: scaffold-only
