@@ -80,6 +80,11 @@ function assertAllowedUrl(url: URL): void {
   }
 }
 
+function isUnsafeRawUrlCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return code <= 0x20 || code === 0x7f;
+}
+
 function assertRawRemoteSyntax(value: string): void {
   const withoutFragment = value.split('#', 1)[0] ?? '';
   const authorityStart = /^https:\/\//iu.test(withoutFragment)
@@ -92,6 +97,7 @@ function assertRawRemoteSyntax(value: string): void {
       ? undefined
       : withoutFragment.slice(authorityStart).split(/[/?#]/u, 1)[0];
   if (
+    [...value].some(isUnsafeRawUrlCharacter) ||
     withoutFragment.includes('?') ||
     withoutFragment.includes('\\') ||
     (/^https:/iu.test(withoutFragment) && authorityStart === undefined) ||
@@ -326,7 +332,10 @@ export async function materializeSource(
       dependencies,
     );
   }
-  if (/^https?:\/\//iu.test(reference)) {
+  const remoteProbe = [...reference]
+    .filter((character) => !isUnsafeRawUrlCharacter(character))
+    .join('');
+  if (/^https?:\/\//iu.test(remoteProbe)) {
     const parsed = parseHttpsSource(reference);
     return materializeArchive(
       { url: parsed.requestUrl, integrity: parsed.integrity },

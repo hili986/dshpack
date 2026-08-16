@@ -172,11 +172,11 @@ describe('materializeSource', () => {
     await expectSourceError(materialize(`https://empty.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => [] }), 20, 'SOURCE_HOST_REJECTED');
     await expectSourceError(materialize(`https://failed.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => { throw new Error('dns failure'); } }), 20, 'SOURCE_HOST_REJECTED');
   });
-  it.each(['http://example.test/a.tgz', 'https://user@example.test/a.tgz', 'https://example.test/a.tgz?q=x', 'https://@example.test/a.tgz', 'https:////@example.test/a.tgz', 'https:\\\\@example.test/a.tgz', 'https://example.test/a.tgz?', 'https://[']) (
+  it.each(['http://example.test/a.tgz', 'https://user@example.test/a.tgz', 'https://example.test/a.tgz?q=x', 'https://@example.test/a.tgz', 'https:////@example.test/a.tgz', 'https:\\\\@example.test/a.tgz', 'h\tttps://@example.test/a.tgz', 'https://example.test/a\rb.tgz', 'https://example.test/a\nb.tgz', 'https://example.test/a\tb.tgz', 'https://example.test/a\0b.tgz', 'https://example.test/a b.tgz', 'https://example.test/a\x7fb.tgz', 'https://example.test/a.tgz?', 'https://[']) (
     'rejects URL policy violation with an otherwise valid integrity %s',
     async (base) => {
       const download = vi.fn();
-      await expectSourceError(materialize(`${base}#${sri(archive())}`, { download }), 20, 'SOURCE_INVALID');
+      const failure = await expectSourceError(materialize(`${base}#${sri(archive())}`, { download }), 20, 'SOURCE_INVALID'); if (base.startsWith('h\t')) expect(failure.message).toContain('URL');
       expect(download).not.toHaveBeenCalled();
     },
   );
@@ -202,19 +202,19 @@ describe('materializeSource', () => {
     const download = vi.fn(async (url: URL): Promise<DownloadResponse> => {
       seen.push(url.href);
       return seen.length === 1
-        ? { statusCode: 307, location: 'https://cdn.example.test/final.tgz' }
+        ? { statusCode: 307, location: 'https://cdn.example.test/final%20archive.tgz' }
         : { statusCode: 200, body: chunks(bytes) };
     });
-    const result = await materialize(`https://example.test/a.tgz#${sri(bytes)}`, { download });
+    const result = await materialize(`https://example.test/a%20archive.tgz#${sri(bytes)}`, { download });
     expect(seen).toEqual([
-      'https://example.test/a.tgz',
-      'https://cdn.example.test/final.tgz',
+      'https://example.test/a%20archive.tgz',
+      'https://cdn.example.test/final%20archive.tgz',
     ]);
     expect(result.provenance).toMatchObject({ kind: 'https', integrity: sri(bytes) });
     await expect(readFile(join(result.directory, 'pack/file.txt'), 'utf8')).resolves.toBe('safe');
     await result.cleanup();
   });
-  it.each(['https://@cdn.example/a.tgz', 'https:////@cdn.example/a.tgz', 'https:\\\\@cdn.example/a.tgz', 'https://cdn.example/a.tgz?'])('rejects raw redirect syntax %s before requesting the hop', async (location) => {
+  it.each(['https://@cdn.example/a.tgz', 'https:////@cdn.example/a.tgz', 'https:\\\\@cdn.example/a.tgz', 'h\tttps://@cdn.example/a.tgz', 'https://cdn.example/a\rb.tgz', 'https://cdn.example/a\nb.tgz', 'https://cdn.example/a\tb.tgz', 'https://cdn.example/a\0b.tgz', 'https://cdn.example/a b.tgz', 'https://cdn.example/a\x7fb.tgz', 'https://cdn.example/a.tgz?'])('rejects raw redirect syntax %s before requesting the hop', async (location) => {
     const bytes = archive(); const download = vi.fn(async () => ({ statusCode: 302, location }));
     await expectSourceError(materialize(`https://example.test/a.tgz#${sri(bytes)}`, { download }), 20, 'SOURCE_INVALID');
     expect(download).toHaveBeenCalledTimes(1);
