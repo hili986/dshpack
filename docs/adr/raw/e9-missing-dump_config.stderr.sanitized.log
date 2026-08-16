@@ -1,4 +1,4 @@
-node.exe : file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai/d
+node.exe : file:///<PROBE_ROOT>/dsh-cli/node_modules/@deepseek-ai/d
 sh-app-boot/lib/index.js:543
 At line:2 char:341
 + ... e('-','_'); & node $dshJs --profile e9-missing $flag 1> (Join-Path $p ...
@@ -11,13 +11,13 @@ At line:2 char:341
 		                               ^
 
 Error: dsh: profile "e9-missing" does not exist; create it with 'dsh plugin --profile e9-missing add <package>'
-    at loadProfile (file:///<WORKSPACE>/dsh-cli/node_modules/@deep
+    at loadProfile (file:///<PROBE_ROOT>/dsh-cli/node_modules/@deep
 seek-ai/dsh-app-boot/lib/index.js:543:34)
-    at prepareProfile (file:///<WORKSPACE>/dsh-cli/node_modules/@d
+    at prepareProfile (file:///<PROBE_ROOT>/dsh-cli/node_modules/@d
 eepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:142:18)
-    at runDumpConfig (file:///<WORKSPACE>/dsh-cli/node_modules/@de
+    at runDumpConfig (file:///<PROBE_ROOT>/dsh-cli/node_modules/@de
 epseek-ai/dsh/lib/dump-config-D-jtgwY3.js:24:17)
-    at file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai/dsh/l
+    at file:///<PROBE_ROOT>/dsh-cli/node_modules/@deepseek-ai/dsh/l
 ib/bin.js:148:3
     at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
 

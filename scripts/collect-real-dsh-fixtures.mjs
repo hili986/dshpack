@@ -89,13 +89,14 @@ const rawLogNames = [
 
 function sanitize(input) {
   let output = input.replaceAll('\r\n', '\n');
-  for (const value of [
-    probeRoot,
-    probeRoot.replaceAll('\\', '/'),
-    workspaceRoot,
-    workspaceRoot.replaceAll('\\', '/'),
-  ]) {
-    output = output.replaceAll(value, value.startsWith(probeRoot) ? '<PROBE_ROOT>' : '<WORKSPACE>');
+  const pathReplacements = [
+    [probeRoot, '<PROBE_ROOT>'],
+    [probeRoot.replaceAll('\\', '/'), '<PROBE_ROOT>'],
+    [workspaceRoot, '<WORKSPACE>'],
+    [workspaceRoot.replaceAll('\\', '/'), '<WORKSPACE>'],
+  ];
+  for (const [value, replacement] of pathReplacements) {
+    output = output.replaceAll(value, replacement);
   }
   for (const value of [process.env.USERNAME, process.env.COMPUTERNAME]) {
     if (value) output = output.replaceAll(value, '<REDACTED>');
@@ -118,7 +119,9 @@ function assertSanitized(text, destination) {
     process.env.USERNAME,
     process.env.COMPUTERNAME,
     probeRoot,
+    probeRoot.replaceAll('\\', '/'),
     workspaceRoot,
+    workspaceRoot.replaceAll('\\', '/'),
   ].filter(Boolean);
   const foundLiteral = forbiddenValues.find((value) => text.includes(value));
   if (foundLiteral) throw new Error(`${destination}: 脱敏后仍含本机标识`);
@@ -168,9 +171,11 @@ for (const path of [
   resolve('docs/adr/raw/e4-settings-concurrency.raw.log'),
   resolve('docs/adr/raw/e9-version.raw.log'),
 ]) {
-  const text = sanitize(await readText(path));
-  assertSanitized(text, path);
-  await writeFile(path, text.endsWith('\n') ? text : `${text}\n`, 'utf8');
+  const original = await readText(path);
+  const sanitized = sanitize(original);
+  assertSanitized(sanitized, path);
+  const normalized = sanitized.endsWith('\n') ? sanitized : `${sanitized}\n`;
+  if (original !== normalized) await writeFile(path, normalized, 'utf8');
 }
 
 console.log(`fixtures_collected=${fixtures.length}`);

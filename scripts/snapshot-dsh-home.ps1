@@ -13,11 +13,13 @@ $rootPrefix = $resolvedRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) +
 
 $entries = Get-ChildItem -LiteralPath $resolvedRoot -File -Force -Recurse |
   ForEach-Object {
-    [ordered]@{
-      path = $_.FullName.Substring($rootPrefix.Length).Replace('\', '/')
-      size = $_.Length
-      mtimeUtc = $_.LastWriteTimeUtc.ToString('o')
+    $relativePath = $_.FullName.Substring($rootPrefix.Length).Replace('\', '/')
+    $entry = [ordered]@{ path = $relativePath }
+    if (-not $relativePath.StartsWith('sessions/', [StringComparison]::OrdinalIgnoreCase)) {
+      $entry.size = $_.Length
+      $entry.mtimeUtc = $_.LastWriteTimeUtc.ToString('o')
     }
+    $entry
   } |
   Sort-Object -Property path
 

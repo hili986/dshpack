@@ -1,4 +1,4 @@
-node.exe : file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai/d
+node.exe : file:///<PROBE_ROOT>/dsh-cli/node_modules/@deepseek-ai/d
 sh-app-boot/lib/index.js:1186
 At line:2 char:320
 + ...  $env:PATH; & node $dshJs --profile e5-mcp 1> (Join-Path $probeRoot ' ...
@@ -18,63 +18,63 @@ Error: bad port
     at fetch (node:internal/deps/undici/undici:11934:20)
     at fetch (node:internal/deps/undici/undici:16414:10)
     at fetch (node:internal/bootstrap/web/exposed-window-or-worker:83:12)
-    at StreamableHTTPClientTransport.send (file:///<WORKSPACE>/dsh
+    at StreamableHTTPClientTransport.send (file:///<PROBE_ROOT>/dsh
 -cli/node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js:307:58)
-    at boot (file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai
+    at boot (file:///<PROBE_ROOT>/dsh-cli/node_modules/@deepseek-ai
 /dsh-app-boot/lib/index.js:1186:9)
-    at async runProfile (file:///<WORKSPACE>/dsh-cli/node_modules/
+    at async runProfile (file:///<PROBE_ROOT>/dsh-cli/node_modules/
 @deepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:247:14)
-    at async file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-ai
+    at async file:///<PROBE_ROOT>/dsh-cli/node_modules/@deepseek-ai
 /dsh/lib/bin.js:133:3 {
   [cause]: Error: failed to apply loader entry include (cordis:include): failed to apply loader entry mcp-e5-probe (@de
 epseek-ai/dsh-mcp-client): mcp-client(e5probe): initial connection or tool synchronization failed
-      at updateError (file:///<WORKSPACE>/dsh-cli/node_modules/@de
+      at updateError (file:///<PROBE_ROOT>/dsh-cli/node_modules/@de
 epseek-ai/cordis-plugin-loader/lib/index.js:299:9)
       ... 3 lines matching cause stack trace ...
-      at async EntryGroup.create (file:///<WORKSPACE>/dsh-cli/node
+      at async EntryGroup.create (file:///<PROBE_ROOT>/dsh-cli/node
 _modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:55:4)
-      at async Proxy.create (file:///<WORKSPACE>/dsh-cli/node_modu
+      at async Proxy.create (file:///<PROBE_ROOT>/dsh-cli/node_modu
 les/@deepseek-ai/cordis-plugin-loader/lib/index.js:217:14)
-      at async mountRootInclude (file:///<WORKSPACE>/dsh-cli/node_
+      at async mountRootInclude (file:///<PROBE_ROOT>/dsh-cli/node_
 modules/@deepseek-ai/dsh-app-boot/lib/index.js:984:20)
-      at async boot (file:///<WORKSPACE>/dsh-cli/node_modules/@dee
+      at async boot (file:///<PROBE_ROOT>/dsh-cli/node_modules/@dee
 pseek-ai/dsh-app-boot/lib/index.js:1175:3)
-      at async runProfile (file:///<WORKSPACE>/dsh-cli/node_module
+      at async runProfile (file:///<PROBE_ROOT>/dsh-cli/node_module
 s/@deepseek-ai/dsh/lib/profile-boot-DG5t9aNs.js:247:14)
-      at async file:///<WORKSPACE>/dsh-cli/node_modules/@deepseek-
+      at async file:///<PROBE_ROOT>/dsh-cli/node_modules/@deepseek-
 ai/dsh/lib/bin.js:133:3 {
     [cause]: Error: failed to apply loader entry mcp-e5-probe (@deepseek-ai/dsh-mcp-client): mcp-client(e5probe): initi
 al connection or tool synchronization failed
-        at updateError (file:///<WORKSPACE>/dsh-cli/node_modules/@
+        at updateError (file:///<PROBE_ROOT>/dsh-cli/node_modules/@
 deepseek-ai/cordis-plugin-loader/lib/index.js:299:9)
-        at Entry._init (file:///<WORKSPACE>/dsh-cli/node_modules/@
+        at Entry._init (file:///<PROBE_ROOT>/dsh-cli/node_modules/@
 deepseek-ai/cordis-plugin-loader/lib/index.js:519:10)
-        at async Entry.init (file:///<WORKSPACE>/dsh-cli/node_modu
+        at async Entry.init (file:///<PROBE_ROOT>/dsh-cli/node_modu
 les/@deepseek-ai/cordis-plugin-loader/lib/index.js:495:4)
         ... 3 lines matching cause stack trace ...
-        at async EntryGroup.update (file:///<WORKSPACE>/dsh-cli/no
+        at async EntryGroup.update (file:///<PROBE_ROOT>/dsh-cli/no
 de_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:87:21)
-        at async Include._apply (file:///<WORKSPACE>/dsh-cli/node_
+        at async Include._apply (file:///<PROBE_ROOT>/dsh-cli/node_
 modules/@deepseek-ai/dsh-app-boot/lib/index.js:238:3) {
       [cause]: Error: mcp-client(e5probe): initial connection or tool synchronization failed
-          at Object.apply [as callback] (file:///<WORKSPACE>/dsh-c
+          at Object.apply [as callback] (file:///<PROBE_ROOT>/dsh-c
 li/node_modules/@deepseek-ai/dsh-mcp-client/lib/index.js:607:67)
-          at async Fiber._reload (file:///<WORKSPACE>/dsh-cli/node
+          at async Fiber._reload (file:///<PROBE_ROOT>/dsh-cli/node
 _modules/@deepseek-ai/cordis/lib/index.js:1355:5)
-          at async Fiber.await (file:///<WORKSPACE>/dsh-cli/node_m
+          at async Fiber.await (file:///<PROBE_ROOT>/dsh-cli/node_m
 odules/@deepseek-ai/cordis/lib/index.js:1399:24)
-          at async Entry._start (file:///<WORKSPACE>/dsh-cli/node_
+          at async Entry._start (file:///<PROBE_ROOT>/dsh-cli/node_
 modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:528:4)
-          at async Entry._init (file:///<WORKSPACE>/dsh-cli/node_m
+          at async Entry._init (file:///<PROBE_ROOT>/dsh-cli/node_m
 odules/@deepseek-ai/cordis-plugin-loader/lib/index.js:517:4)
-          at async Entry.init (file:///<WORKSPACE>/dsh-cli/node_mo
+          at async Entry.init (file:///<PROBE_ROOT>/dsh-cli/node_mo
 dules/@deepseek-ai/cordis-plugin-loader/lib/index.js:495:4)
-          at async Entry.update (file:///<WORKSPACE>/dsh-cli/node_
+          at async Entry.update (file:///<PROBE_ROOT>/dsh-cli/node_
 modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:416:37)
-          at async EntryGroup.create (file:///<WORKSPACE>/dsh-cli/
+          at async EntryGroup.create (file:///<PROBE_ROOT>/dsh-cli/
 node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:55:4)
           at async Promise.allSettled (index 78)
-          at async EntryGroup.update (file:///<WORKSPACE>/dsh-cli/
+          at async EntryGroup.update (file:///<PROBE_ROOT>/dsh-cli/
 node_modules/@deepseek-ai/cordis-plugin-loader/lib/index.js:87:21) {
         [cause]: TypeError: fetch failed
             at node:internal/deps/undici/undici:16416:13

@@ -8,12 +8,12 @@
 ## 证据方法与安全边界
 
 每项先读固定 commit 的官方源码，再运行 npm 发布物。所有 DSH 子进程均显式设置全新
-`DSH_HOME=<TEMP>/dsh-home`；调用 `dsh plugin` 时把仓库内 Corepack shim 放在 `PATH`
-首位，以保证子进程实际使用 pnpm 11.7.0。未读取或写入用户真实 DSH_HOME。
-
-仓库只保存脱敏日志与 fixture。原始日志位于测试临时目录，可能含临时绝对路径，因此不入库；
-`docs/adr/raw/*.sanitized.log` 和 `packages/core/test/fixtures/real-dsh/` 已替换用户名、机器名、
-工作区/临时绝对路径和 anonymous-user-id，并扫描常见 token 前缀。
+`DSH_HOME=<TEMP>/dsh-home`；`dsh plugin` 的 `PATH` 首位是 pnpm 11.7.0 Corepack shim。
+除红线要求的递归元数据快照外，未读取用户真实 DSH_HOME 内容，且从未向其写入。
+首个 40 分钟窗口遇到一个外部 5 分钟周期 mtime 差异，未当作绿灯；修正 sessions 只记文件名后，
+在 38 秒新窗口完整重跑 E1–E5/E9 的 15 个进程结果，前后均为 8260 文件且 `diff_count=0`。
+仓库日志与 fixture 已替换用户名、机器名、工作区/临时路径和 anonymous-user-id，并扫描常见
+token 前缀；未脱敏原始日志留在隔离临时目录，不入库。
 
 固定源码的 `apps/cli/package.json:4` 仍写 `0.1.0-rc.5`，而 npm 实测发布物是 rc.6。
 因此源码用于解释机制，发布物输出用于裁决运行时事实。两者在本 ADR 涉及的代码路径上未发现行为冲突。
