@@ -32,7 +32,10 @@ export function registerDoctorCommand(program: Command): void {
           ...(options.strict === undefined ? {} : { strict: options.strict }),
           ...(options.yes === undefined ? {} : { yes: options.yes }),
         });
-        writeReport(report, options.json === true);
+        writeReport(
+          report,
+          options.json === true || program.opts<{ json?: boolean }>().json === true,
+        );
       },
     );
 }
