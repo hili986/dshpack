@@ -19,6 +19,7 @@ import type {
   InstallSubprocessResult,
 } from '../src/install/runtime-types.js';
 import { createNodeTransactionAdapter } from '../src/transaction-node-adapter.js';
+import { fakeInstallResolution } from './install-engine-resolution-fixture.js';
 
 const sha512 = (content: string): string =>
   `sha512-${createHash('sha512').update(content).digest('base64')}`;
@@ -213,10 +214,15 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
         },
       };
     },
-    readValidatedPack,
+    readValidatedPack: (directory, options) =>
+      readValidatedPack(directory, { frozen: options?.frozen === true }),
     async probe() {
       calls.push('probe');
       return { dshVersion: '0.1.0-rc.6', pnpmVersion: '11.7.0' };
+    },
+    async resolvePlugins(material, options) {
+      calls.push(`resolve:${options.frozen ? 'frozen' : 'manifest'}`);
+      return fakeInstallResolution(material, options.frozen);
     },
     pathExists: exists,
     async captureTargetState(input) {
@@ -305,8 +311,9 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
       calls.push(`verify-plugin:${plugin.name}`);
       return {
         name: plugin.name,
-        packageJsonSha512: locked.packageJsonSha512,
-        bundlePatch: locked.bundlePatch,
+        packageJsonSha512:
+          locked.expectedInstalledFacts?.packageJsonSha512 ?? sha512('example-bundle-package-json'),
+        bundlePatch: locked.expectedInstalledFacts?.bundlePatch ?? 'lib/index.yml',
         actualResolved: locked.resolved,
         actualIntegrity:
           locked.integrity.kind === 'unverified'

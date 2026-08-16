@@ -91,7 +91,7 @@ describe('production install runtime composition', () => {
     await runtime.probe();
     await runtime.captureTargetState({ dshHome: home, profile: 'demo', skills: [], presets: [] });
     expect(materializeSource).toHaveBeenCalledWith('fixture');
-    expect(readValidatedPack).toHaveBeenCalledWith('snapshot');
+    expect(readValidatedPack).toHaveBeenCalledWith('snapshot', { frozen: false });
     expect(captureInstallTargetState).toHaveBeenCalledOnce();
 
     const textPath = join(home, 'fact.txt');

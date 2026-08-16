@@ -24,6 +24,8 @@ import {
 
 export interface ValidateOptions {
   strict?: boolean;
+  /** Install default mode validates manifest/payload bytes but deliberately ignores stale locks. */
+  lockPolicy?: 'required' | 'ignored';
 }
 
 export interface ValidateMetadata {
@@ -42,7 +44,6 @@ interface TreeInspection {
   entries: PackTreeEntry[];
   files: FileEntry[];
 }
-
 function posixRelative(root: string, candidate: string): string {
   return relative(root, candidate).split(sep).join('/');
 }
@@ -55,7 +56,6 @@ function statKind(stat: Awaited<ReturnType<typeof lstat>>): PackTreeEntry['stat'
   if (stat.isBlockDevice()) return 'block-device';
   return 'character-device';
 }
-
 async function inspectTree(root: string): Promise<TreeInspection> {
   const diagnostics: Diagnostic[] = [];
   const entries: PackTreeEntry[] = [];
@@ -93,7 +93,6 @@ async function inspectTree(root: string): Promise<TreeInspection> {
       files,
     };
   }
-
   const visit = async (directory: string): Promise<void> => {
     const names = await readdir(directory);
     for (const name of names) {
@@ -123,7 +122,6 @@ async function inspectTree(root: string): Promise<TreeInspection> {
   diagnostics.push(...tree.diagnostics);
   return { diagnostics, entries, files };
 }
-
 function sha512(content: Uint8Array): string {
   return `sha512-${createHash('sha512').update(content).digest('base64')}`;
 }
@@ -139,7 +137,6 @@ function isAllowedPath(path: string): boolean {
     return true;
   return path === 'settings/agent-presets.yml' || path.startsWith('agents-md/');
 }
-
 function contentDiagnostics(path: string, content: string): readonly Diagnostic[] {
   const namespace = path === 'settings/agent-presets.yml' ? 'agent-presets' : undefined;
   const diagnostics = scanSecrets({
@@ -153,7 +150,10 @@ function contentDiagnostics(path: string, content: string): readonly Diagnostic[
     ? diagnostics.filter(({ code }) => code !== 'E_SECRET_HIGH_ENTROPY')
     : diagnostics;
 }
-function layoutDiagnostics(paths: ReadonlySet<string>): Diagnostic[] {
+function layoutDiagnostics(
+  paths: ReadonlySet<string>,
+  lockPolicy: 'required' | 'ignored',
+): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   for (const path of paths) {
     if (path === 'overrides' || path.startsWith('overrides/')) {
@@ -178,7 +178,11 @@ function layoutDiagnostics(paths: ReadonlySet<string>): Diagnostic[] {
       );
     }
   }
-  for (const required of ['pack.yml', 'pack.lock.yml', 'patch/cordis.patch.yml']) {
+  const requiredPaths =
+    lockPolicy === 'required'
+      ? ['pack.yml', 'pack.lock.yml', 'patch/cordis.patch.yml']
+      : ['pack.yml', 'patch/cordis.patch.yml'];
+  for (const required of requiredPaths) {
     if (!paths.has(required))
       diagnostics.push(
         diagnostic(
@@ -207,7 +211,6 @@ function layoutDiagnostics(paths: ReadonlySet<string>): Diagnostic[] {
   }
   return diagnostics;
 }
-
 function lockDiagnostics(
   lock: PackLock,
   manifest: PackManifest,
@@ -267,7 +270,6 @@ function lockDiagnostics(
   }
   return diagnostics;
 }
-
 export function manifestDiagnostics(manifest: PackManifest): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
   for (const plugin of manifest.plugins) {
@@ -309,7 +311,6 @@ export function manifestDiagnostics(manifest: PackManifest): Diagnostic[] {
   }
   return diagnostics;
 }
-
 /** Validate a local v0 pack without spawning dsh or mutating any path. */
 export async function validateLocalPack(
   source: string,
@@ -332,7 +333,8 @@ export async function validateLocalPack(
   diagnostics.push(...inspected.diagnostics);
   const paths = new Set(inspected.entries.map(({ path }) => path));
   const filePaths = new Set(inspected.files.map(({ path }) => path));
-  diagnostics.push(...layoutDiagnostics(filePaths));
+  const lockPolicy = options.lockPolicy ?? 'required';
+  diagnostics.push(...layoutDiagnostics(filePaths, lockPolicy));
   if (paths.has('overrides') && !filePaths.has('overrides')) {
     diagnostics.push(
       diagnostic(
@@ -344,7 +346,6 @@ export async function validateLocalPack(
       ),
     );
   }
-
   const contents = new Map<string, Uint8Array>();
   for (const file of inspected.files) {
     try {
@@ -361,14 +362,13 @@ export async function validateLocalPack(
       );
     }
   }
-
   const packBytes = contents.get('pack.yml');
   const lockBytes = contents.get('pack.lock.yml');
   if (packBytes !== undefined) {
     const parsed = parsePack(Buffer.from(packBytes).toString('utf8'));
     diagnostics.push(...parsed.diagnostics);
     if (parsed.value !== undefined) diagnostics.push(...manifestDiagnostics(parsed.value));
-    if (lockBytes !== undefined && parsed.value !== undefined) {
+    if (lockPolicy === 'required' && lockBytes !== undefined && parsed.value !== undefined) {
       const lock = parseLock(Buffer.from(lockBytes).toString('utf8'));
       diagnostics.push(...lock.diagnostics);
       if (lock.value !== undefined)

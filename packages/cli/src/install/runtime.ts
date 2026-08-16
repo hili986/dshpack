@@ -13,6 +13,7 @@ import { auditInstalledBuildScripts } from './profile-builds.js';
 import { validateOfficialProfileInit } from './profile-init.js';
 import { verifyInstalledPlugin } from './profile-plugin.js';
 import { readValidatedPack } from './read.js';
+import { resolveInstallPlugins } from './resolver.js';
 import { authorizeWorkspaceBuild, writeMaterialAssetSnapshot } from './runtime-assets.js';
 import { createPathProcessRuntime, type PathProcessRuntime } from './runtime-process.js';
 import { captureInstallTargetState } from './runtime-state.js';
@@ -59,8 +60,14 @@ export function createNodeInstallRuntime(
   return {
     transactionAdapter: createNodeTransactionAdapter(),
     materializeSource,
-    readValidatedPack,
+    readValidatedPack: (directory, readOptions) =>
+      readValidatedPack(directory, { frozen: readOptions?.frozen === true }),
     probe: () => processRuntime.probe(dshHome),
+    resolvePlugins: (material, resolutionOptions) =>
+      resolveInstallPlugins(material, resolutionOptions, {
+        process: processRuntime,
+        ...(options.network === undefined ? {} : { network: options.network }),
+      }),
     captureTargetState: captureInstallTargetState,
     pathExists: exists,
     readText: (path) => readFile(path, 'utf8'),

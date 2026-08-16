@@ -58,7 +58,7 @@ afterAll(async () => {
 describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
   it('installs a local pack, lists it as tracked, and passes doctor --strict', async () => {
     const { env, home, log } = await fixture();
-    const source = await enginePack({ assets: true, mcp: true });
+    const source = await enginePack({ assets: true, mcp: true, plugin: {} });
     const installed = run(home, env, ['install', source, '--yes']);
     expect(installed.status).toBe(0);
     expect(installed.stderr).toContain('rollback snapshot: enabled=true');
@@ -105,15 +105,43 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
     const calls = (await readFile(log, 'utf8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as { dshHome: string; tool: string });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            argv: string[];
+            cwd: string;
+            dshHome: string;
+            ignoreScripts: string;
+            tool: string;
+          },
+      );
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every(({ dshHome }) => dshHome === home)).toBe(true);
     expect(calls.every(({ tool }) => tool === 'dsh' || tool === 'pnpm')).toBe(true);
+    const resolver = calls.find(({ argv, tool }) => tool === 'pnpm' && argv[0] === 'add');
+    expect(resolver).toBeDefined();
+    expect(resolver?.argv).toEqual(
+      expect.arrayContaining([
+        '--store-dir',
+        '--cache-dir',
+        '--state-dir',
+        'example-bundle@^1.0.0',
+      ]),
+    );
+    expect(resolver?.cwd.startsWith(home)).toBe(false);
+    expect(resolver?.cwd.startsWith(source)).toBe(false);
+    expect(resolver?.ignoreScripts).toBe('true');
+    const pluginAdd = calls.filter(
+      ({ argv, tool }) =>
+        tool === 'dsh' && argv.includes('add') && argv.includes('example-bundle@1.0.0'),
+    );
+    expect(pluginAdd).toHaveLength(1);
+    expect(pluginAdd[0]?.ignoreScripts).toBe('true');
   });
 
   it('emits a complete dry-run JSON plan and leaves DSH_HOME byte-empty', async () => {
     const { env, home } = await fixture();
-    const source = await enginePack({ assets: true, mcp: true });
+    const source = await enginePack({ assets: true, mcp: true, plugin: {} });
     expect(await emptyHome(home)).toBe(true);
     const result = run(home, env, ['--json', 'install', source, '--dry-run']);
     expect(result.status).toBe(0);
@@ -126,6 +154,12 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
         targetProfile: 'engine-pack',
         rollbackSnapshot: { enabled: true },
         sideEffects: [{ path: 'profiles/engine-pack/cordis.yml' }],
+        plugins: [
+          expect.objectContaining({
+            exactSpec: 'example-bundle@1.0.0',
+            integrity: expect.objectContaining({ kind: 'npm-sri' }),
+          }),
+        ],
       },
     });
     expect(await emptyHome(home)).toBe(true);
@@ -151,6 +185,7 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
     const unverified = run(unverifiedFixture.home, unverifiedFixture.env, [
       'install',
       unverifiedSource,
+      '--frozen',
       '--yes',
     ]);
     expect(unverified.status).toBe(20);

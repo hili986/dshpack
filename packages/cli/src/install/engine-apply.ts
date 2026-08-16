@@ -16,7 +16,7 @@ import type {
   InstallRuntime,
   InstallTargetCapture,
 } from './runtime-types.js';
-import type { InstallPlan, InstallPlanAsset } from './types.js';
+import type { InstallPlan, InstallPlanAsset, InstallResolution } from './types.js';
 
 function materialText(material: ValidatedPackMaterial, path: string): string {
   const encoded = material.files.find((file) => file.path === path)?.contentBase64;
@@ -68,6 +68,7 @@ export interface ApplyInstallOperationInput {
   readonly plan: InstallPlan;
   readonly request: CaptureInstallTargetInput;
   readonly replay: { current?: InstallReplayCommand };
+  readonly resolution: InstallResolution;
   readonly runtime: InstallRuntime;
   readonly transaction: TransactionContext;
   readonly txid: string;
@@ -83,6 +84,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
     plan,
     replay,
     request,
+    resolution,
     runtime,
     transaction,
     txid,
@@ -106,6 +108,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
     transaction,
     plan,
     material,
+    resolution,
     approvals,
     replay,
   );
@@ -157,7 +160,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
   if (doctor.exitCode !== EXIT_CODES.SUCCESS)
     throw new TransactionFailure(EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE, doctor.diagnostics);
   await runInstallFault(runtime, 'doctor');
-  const metadata = installedMetadata(plan, facts, runtime.now(), txid);
+  const metadata = installedMetadata(plan, facts, runtime.now(), txid, material);
   await transaction.writeManagedDocument(
     join(input.dshHome, '.dshpack', 'installed', `${plan.targetProfile}.json`),
     `${JSON.stringify(metadata)}\n`,

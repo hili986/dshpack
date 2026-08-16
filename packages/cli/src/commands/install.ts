@@ -104,7 +104,7 @@ export function registerInstallCommand(
     .description(installCommand.description)
     .option('--as <profile>', '目标 profile 名称')
     .option('--replace', '显式替换已有 profile（旧目录进入事务 backup）')
-    .option('--frozen', '要求 pack.lock 与 manifest 精确一致（默认启用）')
+    .option('--frozen', '严格使用现有 pack.lock（默认从 manifest 重新解析）')
     .option('--dry-run', '仅输出 plan，确认前零写入')
     .option('--allow-build <package>', '逐项授权 exact package build', collect, [])
     .option('--allow-unverified', '显式允许 lock 中不可验证的插件')

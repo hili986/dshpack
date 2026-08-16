@@ -116,9 +116,9 @@ export function input(
   overrides: Partial<PrepareInstallPlanInput> = {},
 ): PrepareInstallPlanInput {
   const before = targetBeforeState();
+  const { options, ...remaining } = overrides;
   return {
     source: { directory, provenance: { kind: 'directory', path: directory } },
-    options: { sourceArgument: directory, yes: true },
     environment: {
       dshHome: join(tmpdir(), `absent-dsh-home-${crypto.randomUUID()}`),
       dshVersion: '0.1.0-rc.6',
@@ -128,7 +128,11 @@ export function input(
       targetBeforeState: before.state,
       targetBeforeStateDigest: before.digest,
     },
-    ...overrides,
+    ...remaining,
+    options:
+      options === undefined
+        ? { sourceArgument: directory, yes: true, frozen: true }
+        : { frozen: true, ...options },
   };
 }
 

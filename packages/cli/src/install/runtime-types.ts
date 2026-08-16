@@ -1,4 +1,4 @@
-import type { Diagnostic, PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
+import type { Diagnostic, PluginDeclaration } from '@dshpack/core';
 
 import type { MaterializedSource } from '../adapters/source.js';
 import type { CommandReport } from '../commands/shared.js';
@@ -12,6 +12,8 @@ import type {
   InstallPlan,
   InstallPlanOptions,
   InstallPromptDecision,
+  InstallResolution,
+  InstallResolvedPlugin,
   InstallTargetBeforeState,
 } from './types.js';
 
@@ -62,8 +64,12 @@ export interface StagedPluginDownload {
 export interface InstallRuntime {
   transactionAdapter: TransactionAdapter;
   materializeSource(reference: string): Promise<MaterializedSource>;
-  readValidatedPack(directory: string): Promise<ReadPackResult>;
+  readValidatedPack(directory: string, options?: { frozen: boolean }): Promise<ReadPackResult>;
   probe(): Promise<{ dshVersion: string; pnpmVersion: string }>;
+  resolvePlugins(
+    material: ValidatedPackMaterial,
+    options: { dshHome: string; frozen: boolean },
+  ): Promise<InstallResolution>;
   captureTargetState(input: CaptureInstallTargetInput): Promise<InstallTargetCapture>;
   pathExists(path: string): Promise<boolean>;
   readText(path: string): Promise<string>;
@@ -90,7 +96,7 @@ export interface InstallRuntime {
   verifyInstalledPlugin(
     profileRoot: string,
     plugin: PluginDeclaration,
-    locked: PackLockedPlugin,
+    locked: InstallResolvedPlugin,
   ): Promise<InstalledPluginFact>;
   auditInstalledBuildScripts(
     profileRoot: string,
@@ -99,7 +105,7 @@ export interface InstallRuntime {
   ): Promise<BuildScriptAudit>;
   stagePluginTarball(
     plugin: PluginDeclaration,
-    locked: PackLockedPlugin,
+    locked: InstallResolvedPlugin,
     privateParent: string,
   ): Promise<StagedPluginDownload>;
   runDoctor(input: DoctorInput): Promise<CommandReport<DoctorMetadata>>;

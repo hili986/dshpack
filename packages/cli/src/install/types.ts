@@ -1,4 +1,4 @@
-import type { Diagnostic, PackManifest } from '@dshpack/core';
+import type { Diagnostic, PackLockedPlugin, PackManifest } from '@dshpack/core';
 
 import type { SourceProvenance } from '../adapters/source.js';
 import type { ExitCode } from '../exit-codes.js';
@@ -16,9 +16,27 @@ export interface InstallPlanPlugin {
     | { kind: 'sha512'; value: string }
     | { kind: 'unverified'; reason: string };
   allowBuilds: boolean;
-  expectedPackageJsonSha512: string;
-  expectedBundlePatch: string;
+  expectedInstalledFacts?: {
+    packageJsonSha512: string;
+    bundlePatch: string;
+  };
   effectiveAt: '重启生效';
+}
+
+export interface InstallResolvedPlugin {
+  name: string;
+  resolved: PackLockedPlugin['resolved'];
+  integrity: PackLockedPlugin['integrity'];
+  expectedInstalledFacts?: {
+    packageJsonSha512: string;
+    bundlePatch: string;
+  };
+}
+
+export interface InstallResolution {
+  mode: 'frozen' | 'manifest';
+  resolutionDigest: string;
+  plugins: readonly InstallResolvedPlugin[];
 }
 
 export interface InstallPlanWrite {
@@ -92,7 +110,7 @@ export interface InstallPlan {
   pack: { name: string; version: string };
   targetProfile: string;
   replaceExistingProfile: boolean;
-  frozen: true;
+  frozen: boolean;
   dsh: {
     current: string;
     tested: readonly string[];

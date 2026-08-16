@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -170,13 +170,58 @@ describe('install PATH-only process runtime', () => {
       expect(environment).not.toHaveProperty('npm_config_allow_builds');
     }
   });
+
+  it('keeps a PATH-first lifecycle sentinel off during add and enables it only for approved rebuild', async () => {
+    const root = await temporary();
+    const shim = join(root, 'shim');
+    const sentinel = join(root, 'lifecycle-executed.txt');
+    await mkdir(shim);
+    const command = [
+      '@echo off',
+      'if /I not "%npm_config_ignore_scripts%"=="true" echo executed>"%INSTALL_SENTINEL%"',
+      'exit /b 0',
+      '',
+    ].join('\r\n');
+    await writeFile(join(shim, 'dsh.cmd'), command);
+    await writeFile(join(shim, 'pnpm.cmd'), command);
+    const posix = [
+      '#!/bin/sh',
+      'if [ "$npm_config_ignore_scripts" != "true" ]; then printf executed > "$INSTALL_SENTINEL"; fi',
+      'exit 0',
+      '',
+    ].join('\n');
+    for (const executable of ['dsh', 'pnpm']) {
+      const path = join(shim, executable);
+      await writeFile(path, posix);
+      await chmod(path, 0o700);
+    }
+    const process = createPathProcessRuntime({
+      env: {
+        PATH: shim,
+        INSTALL_SENTINEL: sentinel,
+        NpM_CoNfIg_AlLoW_BuIlDs: '*',
+        PnPm_CoNfIg_DaNgErOuSlY_AlLoW_AlL_BuIlDs: 'true',
+      },
+    });
+
+    await process.runDsh(['plugin', 'add', 'exact-package@1.0.0'], {
+      dshHome: root,
+      scriptPolicy: 'deny',
+    });
+    await expect(access(sentinel)).rejects.toMatchObject({ code: 'ENOENT' });
+    await process.runPnpm(['rebuild', 'exact-package'], {
+      dshHome: root,
+      cwd: root,
+      scriptPolicy: 'allow-approved',
+    });
+    await expect(readFile(sentinel, 'utf8')).resolves.toContain('executed');
+  });
 });
 
 function material(files: Record<string, string>): ValidatedPackMaterial {
   return {
     manifest: {} as ValidatedPackMaterial['manifest'],
-    lock: {} as ValidatedPackMaterial['lock'],
-    lockDigest: 'sha256-fixture',
+    manifestDigest: 'sha256-fixture-manifest',
     paths: Object.keys(files),
     sourceFiles: [],
     files: Object.entries(files).map(([path, contents]) => ({

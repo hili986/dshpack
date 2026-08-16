@@ -3,7 +3,6 @@ import { join } from 'node:path';
 
 import {
   type LockedPlugin,
-  type PackLockedPlugin,
   type PluginDeclaration,
   resolveIntegrityFromPnpmLock,
 } from '@dshpack/core';
@@ -17,6 +16,7 @@ import {
   requireSecureDirectory,
 } from './profile-fs.js';
 import { type StagedPluginTarball, verifyStagedPluginTarball } from './profile-tarball.js';
+import type { InstallResolvedPlugin } from './types.js';
 
 export type { StagedPluginTarball } from './profile-tarball.js';
 export { stageVerifiedPluginTarball } from './profile-tarball.js';
@@ -39,7 +39,7 @@ function sha512(bytes: Uint8Array): string {
 
 function sameResolved(
   left: LockedPlugin['resolved'],
-  right: PackLockedPlugin['resolved'],
+  right: InstallResolvedPlugin['resolved'],
 ): boolean {
   if ('version' in left) return 'version' in right && left.version === right.version;
   if ('commit' in left) return 'commit' in right && left.commit === right.commit;
@@ -48,12 +48,12 @@ function sameResolved(
 
 function sameIntegrity(
   left: LockedPlugin['integrity'],
-  right: Exclude<PackLockedPlugin['integrity'], { kind: 'unverified' }>,
+  right: Exclude<InstallResolvedPlugin['integrity'], { kind: 'unverified' }>,
 ): boolean {
   return left.kind === right.kind && left.value === right.value;
 }
 
-function assertMatchingName(plugin: PluginDeclaration, locked: PackLockedPlugin): void {
+function assertMatchingName(plugin: PluginDeclaration, locked: InstallResolvedPlugin): void {
   assertPluginDeclaration(plugin);
   if (locked.name !== plugin.name)
     throw new InstallProfileError(
@@ -116,7 +116,7 @@ function safeBundlePatch(value: unknown): string {
   return value;
 }
 
-function npmSpec(plugin: SourceKind<'npm'>, locked: PackLockedPlugin): string {
+function npmSpec(plugin: SourceKind<'npm'>, locked: InstallResolvedPlugin): string {
   if (
     !('version' in locked.resolved) ||
     locked.integrity.kind !== 'npm-sri' ||
@@ -139,7 +139,7 @@ function npmSpec(plugin: SourceKind<'npm'>, locked: PackLockedPlugin): string {
   return `${plugin.name}@${locked.resolved.version}`;
 }
 
-function githubSpec(plugin: SourceKind<'github'>, locked: PackLockedPlugin): string {
+function githubSpec(plugin: SourceKind<'github'>, locked: InstallResolvedPlugin): string {
   if (
     !('commit' in locked.resolved) ||
     locked.resolved.commit !== plugin.source.ref ||
@@ -155,7 +155,7 @@ function githubSpec(plugin: SourceKind<'github'>, locked: PackLockedPlugin): str
 
 async function tarballSpec(
   plugin: SourceKind<'tarball'>,
-  locked: PackLockedPlugin,
+  locked: InstallResolvedPlugin,
   stagedTarball: StagedPluginTarball | undefined,
   hooks: ProfileReadHooks,
 ): Promise<string> {
@@ -180,7 +180,7 @@ async function tarballSpec(
 /** Generate only exact, pinned specs; a remote tarball URL is never returned. */
 export async function exactPluginAddSpec(
   plugin: PluginDeclaration,
-  locked: PackLockedPlugin,
+  locked: InstallResolvedPlugin,
   stagedTarball?: StagedPluginTarball,
   hooks: ProfileReadHooks = {},
 ): Promise<string> {
@@ -220,7 +220,7 @@ function packageBundles(profile: Record<string, unknown>, path: string): readonl
 function reconcileLock(
   source: string,
   plugin: PluginDeclaration,
-  expected: PackLockedPlugin,
+  expected: InstallResolvedPlugin,
 ): LockedPlugin {
   const resolved = resolveIntegrityFromPnpmLock(source, plugin);
   if (!resolved.ok || resolved.value === undefined) {
@@ -249,7 +249,7 @@ function reconcileLock(
 export async function verifyInstalledPlugin(
   profileRoot: string,
   plugin: PluginDeclaration,
-  expected: PackLockedPlugin,
+  expected: InstallResolvedPlugin,
   hooks: ProfileReadHooks = {},
 ): Promise<InstalledPluginFact> {
   assertMatchingName(plugin, expected);
@@ -273,15 +273,21 @@ export async function verifyInstalledPlugin(
   if (currentPackageRoot.identity !== installed.identity)
     throw new InstallProfileError('E_PROFILE_FILE_CHANGED', '插件目录在验证期间被替换。');
   const packageJsonSha512 = sha512(packageBytes);
-  if (packageJsonSha512 !== expected.packageJsonSha512)
+  if (
+    expected.expectedInstalledFacts !== undefined &&
+    packageJsonSha512 !== expected.expectedInstalledFacts.packageJsonSha512
+  )
     throw new InstallProfileError(
       'E_PLUGIN_PACKAGE_HASH',
-      '实际 package.json sha512 与 pack lock 不一致。',
+      '实际 package.json sha512 与 frozen pack lock 不一致。',
     );
-  if (bundlePatch !== expected.bundlePatch)
+  if (
+    expected.expectedInstalledFacts !== undefined &&
+    bundlePatch !== expected.expectedInstalledFacts.bundlePatch
+  )
     throw new InstallProfileError(
       'E_PLUGIN_BUNDLE_PATCH',
-      '实际 bundle patch 与 pack lock 不一致。',
+      '实际 bundle patch 与 frozen pack lock 不一致。',
     );
 
   const profilePath = join(profileRoot, 'package.json');

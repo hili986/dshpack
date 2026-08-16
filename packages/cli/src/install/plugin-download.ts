@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, open, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
+import type { PluginDeclaration } from '@dshpack/core';
 
 import { SourceError } from '../adapters/source.js';
 import {
@@ -12,6 +13,7 @@ import {
 } from '../adapters/source-network.js';
 import { stageVerifiedPluginTarball } from './profile-tarball.js';
 import type { StagedPluginDownload } from './runtime-types.js';
+import type { InstallResolvedPlugin } from './types.js';
 
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
@@ -51,7 +53,7 @@ function safeUrl(value: string | URL): URL {
 
 function lockedFacts(
   plugin: PluginDeclaration,
-  locked: PackLockedPlugin,
+  locked: InstallResolvedPlugin,
 ): { url: URL; sri: string } {
   if (
     plugin.source.kind !== 'tarball' ||
@@ -78,9 +80,9 @@ async function writeAll(
 async function downloadVerified(
   initial: URL,
   destination: string,
-  expectedSri: string,
+  expectedSri: string | undefined,
   dependencies: NetworkDependencies,
-): Promise<void> {
+): Promise<string> {
   let current = initial;
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const address = await resolvePublicTarget(current, dependencies, failure);
@@ -112,9 +114,9 @@ async function downloadVerified(
       await handle.close();
     }
     const actual = `sha512-${hash.digest('base64')}`;
-    if (actual !== expectedSri)
+    if (expectedSri !== undefined && actual !== expectedSri)
       throw failure('E_PLUGIN_INTEGRITY', '插件 tarball sha512 与 lock 不一致。');
-    return;
+    return actual;
   }
   throw failure('E_PLUGIN_REDIRECT', '插件 tarball redirect 超过上限。');
 }
@@ -122,7 +124,7 @@ async function downloadVerified(
 /** Download into transaction-private storage, then expose only a second verified staged copy. */
 export async function stagePluginTarballDownload(
   plugin: PluginDeclaration,
-  locked: PackLockedPlugin,
+  locked: InstallResolvedPlugin,
   privateParent: string,
   dependencies: NetworkDependencies = {},
 ): Promise<StagedPluginDownload> {
@@ -148,4 +150,35 @@ export async function stagePluginTarballDownload(
     await removePrivate(workspace);
     throw error;
   }
+}
+
+/** Resolve a manifest tarball to SRI in private storage without exposing unverified bytes. */
+export async function resolvePluginTarball(
+  plugin: PluginDeclaration,
+  dependencies: NetworkDependencies = {},
+): Promise<InstallResolvedPlugin> {
+  if (plugin.source.kind !== 'tarball')
+    throw failure('E_PLUGIN_SOURCE', `${plugin.name} 不是 tarball source。`);
+  const url = safeUrl(plugin.source.url);
+  const workspace = await mkdtemp(join(tmpdir(), 'dshpack-tar-resolve-'));
+  await chmod(workspace, 0o700);
+  let integrity: string | undefined;
+  let caught: unknown;
+  try {
+    integrity = await downloadVerified(
+      url,
+      join(workspace, 'download.tgz'),
+      undefined,
+      dependencies,
+    );
+  } catch (error) {
+    caught = error;
+  }
+  await removePrivate(workspace);
+  if (caught !== undefined) throw caught;
+  return {
+    name: plugin.name,
+    resolved: { url: plugin.source.url },
+    integrity: { kind: 'sha512', value: integrity as string },
+  };
 }

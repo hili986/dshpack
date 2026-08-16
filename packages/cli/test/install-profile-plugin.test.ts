@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
+import type { PluginDeclaration } from '@dshpack/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -12,44 +12,38 @@ import {
   stageVerifiedPluginTarball,
   verifyInstalledPlugin,
 } from '../src/install/profile-plugin.js';
+import type { InstallResolvedPlugin } from '../src/install/types.js';
 
 const roots: string[] = [];
 const commit = 'b07eac099753833b29d06c614149904445739776';
-
 function sri(bytes: Uint8Array): string {
   return `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
 }
-
 async function temporary(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dshpack-profile-plugin-'));
   roots.push(root);
   return root;
 }
-
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
-
 const npmDeclaration: PluginDeclaration = {
   name: 'yocto-queue',
   source: { kind: 'npm', range: '^1.2.0' },
   allowBuilds: false,
 };
-
-function npmLock(packageJsonSha512: string): PackLockedPlugin {
+function npmLock(packageJsonSha512: string) {
   return {
     name: 'yocto-queue',
     resolved: { version: '1.2.2' },
     integrity: {
-      kind: 'npm-sri',
+      kind: 'npm-sri' as const,
       value:
         'sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ==',
     },
-    packageJsonSha512,
-    bundlePatch: './cordis.patch.yml',
+    expectedInstalledFacts: { packageJsonSha512, bundlePatch: './cordis.patch.yml' },
   };
 }
-
 function npmLockYaml(): string {
   return `lockfileVersion: '9.0'
 importers:
@@ -65,8 +59,10 @@ snapshots:
   yocto-queue@1.2.2: {}
 `;
 }
-
-async function installedNpm(root: string, packageOverride: object = {}): Promise<PackLockedPlugin> {
+async function installedNpm(
+  root: string,
+  packageOverride: object = {},
+): Promise<ReturnType<typeof npmLock>> {
   const packageSource = `${JSON.stringify({
     name: 'yocto-queue',
     version: '1.2.2',
@@ -89,27 +85,26 @@ async function installedNpm(root: string, packageOverride: object = {}): Promise
   await writeFile(join(root, 'pnpm-lock.yaml'), npmLockYaml());
   return npmLock(sri(Buffer.from(packageSource)));
 }
-
 describe('exact dsh plugin add specs', () => {
   it('uses the locked exact npm version and pinned GitHub commit', async () => {
     const npm = npmLock('sha512-AA==');
     await expect(exactPluginAddSpec(npmDeclaration, npm)).resolves.toBe('yocto-queue@1.2.2');
-
     const github: PluginDeclaration = {
       name: 'git-plugin',
       source: { kind: 'github', owner: 'owner', repo: 'repo', ref: commit },
       allowBuilds: false,
     };
-    const locked: PackLockedPlugin = {
+    const locked: InstallResolvedPlugin = {
       name: github.name,
       resolved: { commit },
       integrity: { kind: 'git-commit', value: commit },
-      packageJsonSha512: 'sha512-AA==',
-      bundlePatch: 'patch.yml',
+      expectedInstalledFacts: {
+        packageJsonSha512: 'sha512-AA==',
+        bundlePatch: 'patch.yml',
+      },
     };
     await expect(exactPluginAddSpec(github, locked)).resolves.toBe(`github:owner/repo#${commit}`);
   });
-
   it('passes only an integrity-rechecked local tgz path for tarballs', async () => {
     const root = await temporary();
     const path = join(root, 'verified.tgz');
@@ -122,26 +117,25 @@ describe('exact dsh plugin add specs', () => {
       source: { kind: 'tarball', url },
       allowBuilds: false,
     };
-    const locked: PackLockedPlugin = {
+    const locked: InstallResolvedPlugin = {
       name: declaration.name,
       resolved: { url },
       integrity: { kind: 'sha512', value: integrity },
-      packageJsonSha512: 'sha512-AA==',
-      bundlePatch: 'patch.yml',
+      expectedInstalledFacts: {
+        packageJsonSha512: 'sha512-AA==',
+        bundlePatch: 'patch.yml',
+      },
     };
-
     const staged = await stageVerifiedPluginTarball(path, root, integrity);
     await expect(exactPluginAddSpec(declaration, locked, staged)).resolves.toBe(staged.path);
     await writeFile(path, 'mutated');
     await expect(exactPluginAddSpec(declaration, locked, staged)).resolves.toBe(staged.path);
   });
-
   it('fails closed for source/lock mismatch, unpinned git, and unverified tarballs', async () => {
     const badNpm = { ...npmLock('sha512-AA=='), resolved: { version: '2.0.0' } };
     await expect(exactPluginAddSpec(npmDeclaration, badNpm)).rejects.toMatchObject({
       code: 'E_PLUGIN_LOCK_MISMATCH',
     });
-
     const git: PluginDeclaration = {
       name: 'git-plugin',
       source: { kind: 'github', owner: 'owner', repo: 'repo', ref: commit },
@@ -153,11 +147,12 @@ describe('exact dsh plugin add specs', () => {
         name: git.name,
         resolved: { commit: wrongCommit },
         integrity: { kind: 'git-commit', value: wrongCommit },
-        packageJsonSha512: 'sha512-AA==',
-        bundlePatch: 'patch.yml',
+        expectedInstalledFacts: {
+          packageJsonSha512: 'sha512-AA==',
+          bundlePatch: 'patch.yml',
+        },
       }),
     ).rejects.toMatchObject({ code: 'E_PLUGIN_LOCK_MISMATCH' });
-
     const url = 'https://example.test/p.tgz';
     const tar: PluginDeclaration = {
       name: 'tar-plugin',
@@ -169,12 +164,13 @@ describe('exact dsh plugin add specs', () => {
         name: tar.name,
         resolved: { url },
         integrity: { kind: 'unverified', reason: 'legacy' },
-        packageJsonSha512: 'sha512-AA==',
-        bundlePatch: 'patch.yml',
+        expectedInstalledFacts: {
+          packageJsonSha512: 'sha512-AA==',
+          bundlePatch: 'patch.yml',
+        },
       }),
     ).rejects.toMatchObject({ code: 'E_PLUGIN_TARBALL_UNVERIFIED' });
   });
-
   it('rejects lock name/kind drift and requires an absolute ordinary staged tgz', async () => {
     await expect(
       exactPluginAddSpec(npmDeclaration, { ...npmLock('sha512-AA=='), name: 'other' }),
@@ -185,19 +181,20 @@ describe('exact dsh plugin add specs', () => {
         integrity: { kind: 'sha512', value: 'sha512-AA==' },
       }),
     ).rejects.toMatchObject({ code: 'E_PLUGIN_LOCK_MISMATCH' });
-
     const url = 'https://example.test/p.tgz';
     const tar: PluginDeclaration = {
       name: 'tar-plugin',
       source: { kind: 'tarball', url },
       allowBuilds: false,
     };
-    const locked: PackLockedPlugin = {
+    const locked: InstallResolvedPlugin = {
       name: tar.name,
       resolved: { url },
       integrity: { kind: 'sha512', value: 'sha512-AA==' },
-      packageJsonSha512: 'sha512-AA==',
-      bundlePatch: 'patch.yml',
+      expectedInstalledFacts: {
+        packageJsonSha512: 'sha512-AA==',
+        bundlePatch: 'patch.yml',
+      },
     };
     await expect(exactPluginAddSpec(tar, locked)).rejects.toMatchObject({
       code: 'E_PLUGIN_TARBALL_PATH',
@@ -226,7 +223,6 @@ describe('exact dsh plugin add specs', () => {
     ).rejects.toMatchObject({ code: 'E_PLUGIN_LOCK_MISMATCH' });
   });
 });
-
 describe('post-add verification', () => {
   it('reads actual package bytes and reconciles all four pnpm lock facts', async () => {
     const root = await temporary();
@@ -237,24 +233,36 @@ describe('post-add verification', () => {
       actualResolved: locked.resolved,
       bundlePatch: './cordis.patch.yml',
       name: 'yocto-queue',
-      packageJsonSha512: locked.packageJsonSha512,
+      packageJsonSha512: locked.expectedInstalledFacts?.packageJsonSha512,
     });
   });
 
   it.each([
     [
       'package hash',
-      (locked: PackLockedPlugin) => ({ ...locked, packageJsonSha512: 'sha512-AA==' }),
+      (locked: ReturnType<typeof npmLock>) => ({
+        ...locked,
+        expectedInstalledFacts: {
+          ...locked.expectedInstalledFacts,
+          packageJsonSha512: 'sha512-AA==',
+        },
+      }),
       'E_PLUGIN_PACKAGE_HASH',
     ],
     [
       'bundle patch',
-      (locked: PackLockedPlugin) => ({ ...locked, bundlePatch: 'other.yml' }),
+      (locked: ReturnType<typeof npmLock>) => ({
+        ...locked,
+        expectedInstalledFacts: {
+          ...locked.expectedInstalledFacts,
+          bundlePatch: 'other.yml',
+        },
+      }),
       'E_PLUGIN_BUNDLE_PATCH',
     ],
     [
       'integrity',
-      (locked: PackLockedPlugin) => ({
+      (locked: ReturnType<typeof npmLock>) => ({
         ...locked,
         integrity: { kind: 'npm-sri' as const, value: 'sha512-AA==' },
       }),
@@ -273,7 +281,7 @@ describe('post-add verification', () => {
     const traversalLock = await installedNpm(traversal, {
       dsh: { bundle: { patch: '../outside.yml' } },
     });
-    traversalLock.bundlePatch = '../outside.yml';
+    traversalLock.expectedInstalledFacts.bundlePatch = '../outside.yml';
     await expect(
       verifyInstalledPlugin(traversal, npmDeclaration, traversalLock),
     ).rejects.toMatchObject({
@@ -305,7 +313,7 @@ describe('post-add verification', () => {
     async (patch) => {
       const root = await temporary();
       const locked = await installedNpm(root, { dsh: { bundle: { patch } } });
-      if (typeof patch === 'string') locked.bundlePatch = patch;
+      if (typeof patch === 'string') locked.expectedInstalledFacts.bundlePatch = patch;
       await expect(verifyInstalledPlugin(root, npmDeclaration, locked)).rejects.toMatchObject({
         code: expect.stringMatching(/^E_PLUGIN_BUNDLE_PATCH/u),
       });
@@ -315,7 +323,7 @@ describe('post-add verification', () => {
   it('accepts an explicitly unverified expected digest only while returning the actual lock fact', async () => {
     const root = await temporary();
     const locked = await installedNpm(root);
-    const expected: PackLockedPlugin = {
+    const expected: InstallResolvedPlugin = {
       ...locked,
       integrity: { kind: 'unverified', reason: 'explicitly allowed by engine' },
     };

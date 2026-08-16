@@ -30,11 +30,12 @@ export interface ValidatedPackFile {
 
 export interface ValidatedPackMaterial {
   manifest: PackManifest;
-  lock: PackLock;
+  lock?: PackLock;
   paths: readonly string[];
   files: readonly ValidatedPackFile[];
   sourceFiles: readonly { path: string; sha512: string }[];
-  lockDigest: string;
+  manifestDigest: string;
+  lockDigest?: string;
 }
 
 export interface ReadPackResult {
@@ -44,6 +45,7 @@ export interface ReadPackResult {
 }
 
 export interface ReadPackDependencies {
+  frozen?: boolean;
   accessFile?: typeof access;
   validate?: typeof validateLocalPack;
   readText?: (path: string) => Promise<string>;
@@ -180,20 +182,22 @@ export async function readValidatedPack(
 ): Promise<ReadPackResult> {
   const accessFile = dependencies.accessFile ?? access;
   const validate = dependencies.validate ?? validateLocalPack;
-  try {
-    await accessFile(join(directory, 'pack.lock.yml'));
-  } catch {
-    return {
-      diagnostics: [
-        error(
-          'E_NO_LOCK',
-          '缺少 pack.lock.yml；install 默认冻结 lock。',
-          '提供完整 pack.lock.yml。',
-        ),
-      ],
-      exitCode: 20,
-    };
-  }
+  const frozen = dependencies.frozen !== false;
+  if (frozen)
+    try {
+      await accessFile(join(directory, 'pack.lock.yml'));
+    } catch {
+      return {
+        diagnostics: [
+          error(
+            'E_NO_LOCK',
+            '--frozen 要求 pack.lock.yml，但 SOURCE 中缺少该文件。',
+            '提供完整 pack.lock.yml，或移除 --frozen 让 install 重新解析 manifest。',
+          ),
+        ],
+        exitCode: 20,
+      };
+    }
   let workspace: string | undefined;
   let result: ReadPackResult;
   try {
@@ -216,7 +220,9 @@ export async function readValidatedPack(
     )();
     await chmod(workspace, 0o700);
     const snapshot = await writeSnapshot(workspace, sourcePaths, sourceFiles);
-    const validation = await validate(snapshot);
+    const validation = await validate(snapshot, {
+      lockPolicy: frozen ? 'required' : 'ignored',
+    });
     const failures = validation.diagnostics.filter(({ severity }) => severity === 'error');
     if (failures.length > 0) {
       result = { diagnostics: validation.diagnostics, exitCode: validationExitCode(failures) };
@@ -240,13 +246,13 @@ export async function readValidatedPack(
         };
       } else {
         const manifestBytes = fileBytes(sourceFiles, 'pack.yml');
-        const lockBytes = fileBytes(sourceFiles, 'pack.lock.yml');
-        if (manifestBytes === undefined || lockBytes === undefined)
+        const lockBytes = frozen ? fileBytes(sourceFiles, 'pack.lock.yml') : undefined;
+        if (manifestBytes === undefined || (frozen && lockBytes === undefined))
           throw new Error('missing documents');
         const manifest = parsePack(manifestBytes.toString('utf8'));
-        const lock = parseLock(lockBytes.toString('utf8'));
-        if (manifest.value === undefined || lock.value === undefined) {
-          const diagnostics = [...manifest.diagnostics, ...lock.diagnostics];
+        const lock = lockBytes === undefined ? undefined : parseLock(lockBytes.toString('utf8'));
+        if (manifest.value === undefined || (frozen && lock?.value === undefined)) {
+          const diagnostics = [...manifest.diagnostics, ...(lock?.diagnostics ?? [])];
           result = { diagnostics, exitCode: validationExitCode(diagnostics) };
         } else {
           const frozenFiles = Object.freeze(sourceFiles.map((file) => Object.freeze({ ...file })));
@@ -254,7 +260,7 @@ export async function readValidatedPack(
           result = {
             material: {
               manifest: manifest.value,
-              lock: lock.value,
+              ...(lock?.value === undefined ? {} : { lock: lock.value }),
               paths: Object.freeze(filePaths),
               files: frozenFiles,
               sourceFiles: Object.freeze(
@@ -262,7 +268,8 @@ export async function readValidatedPack(
                   Object.freeze({ path, sha512: digest }),
                 ),
               ),
-              lockDigest: sha256(lockBytes),
+              manifestDigest: sha256(manifestBytes),
+              ...(lockBytes === undefined ? {} : { lockDigest: sha256(lockBytes) }),
             },
             diagnostics: validation.diagnostics,
             exitCode: 30,

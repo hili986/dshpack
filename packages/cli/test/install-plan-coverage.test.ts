@@ -83,7 +83,7 @@ function planInput(directory: string): PrepareInstallPlanInput {
   };
   return {
     source: { directory, provenance: { kind: 'directory', path: directory } },
-    options: { sourceArgument: 'C:/source with space/"pack"', yes: true },
+    options: { sourceArgument: 'C:/source with space/"pack"', yes: true, frozen: true },
     environment: {
       dshHome: join(tmpdir(), `dshpack-home-${crypto.randomUUID()}`),
       dshVersion: '0.1.0-rc.6',

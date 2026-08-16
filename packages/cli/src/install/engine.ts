@@ -18,7 +18,7 @@ import type {
   InstallRuntime,
   InstallTargetCapture,
 } from './runtime-types.js';
-import type { InstallPlan } from './types.js';
+import type { InstallPlan, InstallResolution } from './types.js';
 
 function report(
   exitCode: ExitCode,
@@ -155,7 +155,9 @@ export async function installPack(
   }
   let read: ReadPackResult;
   try {
-    read = await runtime.readValidatedPack(materialized.directory);
+    read = await runtime.readValidatedPack(materialized.directory, {
+      frozen: input.frozen === true,
+    });
   } catch (error) {
     const item =
       error instanceof SourceError
@@ -211,6 +213,28 @@ export async function installPack(
       ],
       'not-started',
     );
+  let resolution: InstallResolution;
+  try {
+    resolution = await runtime.resolvePlugins(material, {
+      dshHome: input.dshHome,
+      frozen: input.frozen === true,
+    });
+  } catch (error) {
+    const item =
+      error instanceof SourceError
+        ? diagnostic(error.code, 'error', error.message, error.hint ?? '修复插件来源后重试。')
+        : diagnostic(
+            'E_PLUGIN_RESOLUTION',
+            'error',
+            '无法把 manifest 解析为精确且可校验的插件来源。',
+            '检查 PATH 中的 pnpm、网络来源与完整性诊断。',
+          );
+    return report(
+      error instanceof SourceError ? error.exitCode : EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
+      [item],
+      'not-started',
+    );
+  }
   const request = captureRequest(input, material);
   let before: InstallTargetCapture;
   try {
@@ -242,7 +266,12 @@ export async function installPack(
       targetBeforeStateDigest: before.digest,
     },
   };
-  const preflight = await prepareInstallPlanFromValidated(planInput, material, read.diagnostics);
+  const preflight = await prepareInstallPlanFromValidated(
+    planInput,
+    material,
+    read.diagnostics,
+    resolution,
+  );
   if (preflight.plan === undefined)
     return report(preflight.exitCode, preflight.diagnostics, 'not-started');
   const plan = preflight.plan;
@@ -317,6 +346,7 @@ export async function installPack(
         plan,
         replay,
         request,
+        resolution,
         runtime,
         transaction: tx,
         txid,

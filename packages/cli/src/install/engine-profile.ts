@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
+import type { PluginDeclaration } from '@dshpack/core';
 
 import { EXIT_CODES } from '../exit-codes.js';
 import type { TransactionContext } from '../transaction.js';
@@ -11,7 +11,7 @@ import { exactPluginAddSpec, type InstalledPluginFact } from './profile-plugin.j
 import { buildAuthorizationKey } from './profile-workspace.js';
 import type { ValidatedPackMaterial } from './read.js';
 import type { InstallInput, InstallRuntime } from './runtime-types.js';
-import type { InstallPlan } from './types.js';
+import type { InstallPlan, InstallResolution } from './types.js';
 
 export interface InstallReplayCommand {
   argv: readonly string[];
@@ -165,6 +165,7 @@ export async function installProfile(
   transaction: TransactionContext,
   plan: InstallPlan,
   material: ValidatedPackMaterial,
+  resolution: InstallResolution,
   approvals: Set<string>,
   replay: { current?: InstallReplayCommand },
 ): Promise<InstalledPluginFact[]> {
@@ -191,7 +192,7 @@ export async function installProfile(
     );
     for (let index = 0; index < material.manifest.plugins.length; index += 1) {
       const plugin = material.manifest.plugins[index] as PluginDeclaration;
-      const locked = material.lock.plugins[index] as PackLockedPlugin;
+      const locked = resolution.plugins[index] as InstallResolution['plugins'][number];
       const planned = plan.plugins[index] as InstallPlan['plugins'][number];
       if (plugin.allowBuilds) {
         if (!approvals.has(plugin.name))
@@ -248,7 +249,7 @@ export async function installProfile(
     await auditBuilds(input, runtime, plan, material, profileRoot, approvals, replay);
     for (let index = 0; index < material.manifest.plugins.length; index += 1) {
       const plugin = material.manifest.plugins[index] as PluginDeclaration;
-      const locked = material.lock.plugins[index] as PackLockedPlugin;
+      const locked = resolution.plugins[index] as InstallResolution['plugins'][number];
       facts.push(
         await guardedInstall(
           EXIT_CODES.POST_INSTALL_OR_ROLLBACK_FAILURE,

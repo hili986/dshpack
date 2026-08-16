@@ -40,7 +40,6 @@ describe('install ten-stage engine', () => {
     expect(await snapshot(dshHome)).toEqual(before);
     expect(fake.calls).toContain('cleanup:source');
     expect(fake.calls).not.toContainEqual(expect.stringMatching(/^dsh:/u));
-
     const reviewHome = await home();
     const review = fakeRuntime();
     const human = await installPack(
@@ -73,17 +72,14 @@ describe('install ten-stage engine', () => {
     );
     expect(review.calls).not.toContainEqual(expect.stringMatching(/^confirm:|^dsh:/u));
   });
-
   it('installs an empty-plugin pack, discloses E9, and writes valid tracked metadata', async () => {
     const dshHome = await home();
     const source = await enginePack();
     const fake = fakeRuntime();
-
     const report = await installPack(
       { source, dshHome, yes: true, interactive: false },
       fake.runtime,
     );
-
     expect(report).toMatchObject({ exitCode: 0, metadata: { status: 'installed' } });
     expect(fake.calls).toContain('stage:init');
     expect(fake.calls).toContain('stage:dump');
@@ -94,7 +90,6 @@ describe('install ten-stage engine', () => {
       '[]\n',
     );
   });
-
   it('skips existing assets by default and force replaces them through journaled backups', async () => {
     const source = await enginePack({ assets: true });
     const skipHome = await home();
@@ -107,7 +102,6 @@ describe('install ten-stage engine', () => {
     expect(skipped.exitCode).toBe(0);
     expect(await readFile(join(skipHome, 'skills', 'notes', 'old'), 'utf8')).toBe('user-owned');
     expect(skipped.diagnostics).toContainEqual(expect.objectContaining({ code: 'W_ASSET_EXISTS' }));
-
     const forceHome = await home();
     await mkdir(join(forceHome, 'skills', 'notes'), { recursive: true });
     await mkdir(join(forceHome, '.agent-presets', 'custom'), { recursive: true });
@@ -264,7 +258,13 @@ describe('install ten-stage engine', () => {
 
     const unverifiedSource = await enginePack({ plugin: { unverified: true } });
     const unverified = await installPack(
-      { source: unverifiedSource, dshHome: await home(), yes: true, interactive: false },
+      {
+        source: unverifiedSource,
+        dshHome: await home(),
+        frozen: true,
+        yes: true,
+        interactive: false,
+      },
       fakeRuntime().runtime,
     );
     expect(unverified.exitCode).toBe(20);

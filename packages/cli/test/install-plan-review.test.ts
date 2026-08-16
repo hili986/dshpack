@@ -197,6 +197,7 @@ describe('install plan review mutants', () => {
     const root = await fixture({ manifest: manifest({ allowBuilds: true }) });
     const value = input(root);
     value.options = {
+      ...value.options,
       sourceArgument: "C:/pack with space/it's-safe",
       yes: true,
       allowBuilds: ['example-bundle'],
@@ -227,7 +228,7 @@ describe('install plan review mutants', () => {
     async (sourceArgument) => {
       const root = await fixture();
       const value = input(root);
-      value.options = { sourceArgument, yes: true };
+      value.options = { ...value.options, sourceArgument, yes: true };
       const result = await prepareInstallPlan(value);
       expect(result.exitCode).toBe(0);
       expect(result.decision.nonInteractiveArgv.slice(-2)).toEqual(['--', sourceArgument]);
@@ -247,7 +248,12 @@ describe('install plan review mutants', () => {
     ['profile traversal', { sourceArgument: 'pack', as: '../escape' }, 31, 'E_PROFILE_PATH'],
     ['profile grammar', { sourceArgument: 'pack', as: 'foo..bar' }, 30, 'E_PROFILE_NAME'],
     ['profile contract', { sourceArgument: 'pack', as: 'BadName' }, 30, 'E_PROFILE_NAME'],
-    ['non-frozen request', { sourceArgument: 'pack', frozen: false }, 30, 'E_FROZEN_REQUIRED'],
+    [
+      'default request without resolver seam',
+      { sourceArgument: 'pack', frozen: false },
+      20,
+      'E_RESOLUTION_REQUIRED',
+    ],
   ])('classifies %s with the narrow exit contract', async (_label, options, exitCode, code) => {
     const root = await fixture();
     const result = await prepareInstallPlan(input(root, { options: { ...options, yes: true } }));

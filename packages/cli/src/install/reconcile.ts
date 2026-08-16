@@ -6,11 +6,20 @@ import {
 } from '@dshpack/core';
 import { satisfies, validRange } from 'semver';
 
-import type { InstallPlanPlugin } from './types.js';
+import type { InstallPlanPlugin, InstallResolvedPlugin } from './types.js';
 
 export interface ReconcileResult {
   plugin?: InstallPlanPlugin;
   diagnostics: readonly Diagnostic[];
+}
+
+type ReconciledLock = InstallResolvedPlugin | PackLockedPlugin;
+
+function expectedFacts(locked: ReconciledLock): InstallResolvedPlugin['expectedInstalledFacts'] {
+  if ('expectedInstalledFacts' in locked) return locked.expectedInstalledFacts;
+  return 'packageJsonSha512' in locked && 'bundlePatch' in locked
+    ? { packageJsonSha512: locked.packageJsonSha512, bundlePatch: locked.bundlePatch }
+    : undefined;
 }
 
 function failure(code: string, message: string, hint: string): ReconcileResult {
@@ -37,10 +46,7 @@ function normalizedTarballUrl(value: string): string | undefined {
   }
 }
 
-function npmSpec(
-  declaration: PluginDeclaration,
-  locked: PackLockedPlugin,
-): ReconcileResult | string {
+function npmSpec(declaration: PluginDeclaration, locked: ReconciledLock): ReconcileResult | string {
   if (!('version' in locked.resolved)) {
     return failure(
       'E_LOCK_NPM_RESOLUTION',
@@ -75,7 +81,7 @@ function npmSpec(
 
 function githubSpec(
   declaration: PluginDeclaration,
-  locked: PackLockedPlugin,
+  locked: ReconciledLock,
 ): ReconcileResult | string {
   const source = declaration.source as Extract<PluginDeclaration['source'], { kind: 'github' }>;
   if (
@@ -95,7 +101,7 @@ function githubSpec(
 
 function tarballSpec(
   declaration: PluginDeclaration,
-  locked: PackLockedPlugin,
+  locked: ReconciledLock,
 ): ReconcileResult | string {
   const source = declaration.source as Extract<PluginDeclaration['source'], { kind: 'tarball' }>;
   const declared = normalizedTarballUrl(source.url);
@@ -123,7 +129,7 @@ function tarballSpec(
 
 export function reconcileLockedPlugin(
   declaration: PluginDeclaration,
-  locked: PackLockedPlugin,
+  locked: ReconciledLock,
 ): ReconcileResult {
   if (declaration.name !== locked.name)
     return failure(
@@ -131,7 +137,8 @@ export function reconcileLockedPlugin(
       'manifest 与 lock 的插件名不一致。',
       '按 manifest 顺序重新生成 lock。',
     );
-  if (!validatePackPath(locked.bundlePatch).ok)
+  const facts = expectedFacts(locked);
+  if (facts !== undefined && !validatePackPath(facts.bundlePatch).ok)
     return failure(
       'E_LOCK_BUNDLE_PATCH_PATH',
       `${declaration.name} 的 bundlePatch 不是安全的包内相对路径。`,
@@ -152,8 +159,7 @@ export function reconcileLockedPlugin(
       exactSpec: exact,
       integrity: locked.integrity,
       allowBuilds: declaration.allowBuilds,
-      expectedPackageJsonSha512: locked.packageJsonSha512,
-      expectedBundlePatch: locked.bundlePatch,
+      ...(facts === undefined ? {} : { expectedInstalledFacts: facts }),
       effectiveAt: '重启生效',
     },
   };

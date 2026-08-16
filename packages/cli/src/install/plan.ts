@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 
 import type { Diagnostic } from '@dshpack/core';
+import { satisfies } from 'semver';
 
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import { buildInstallPlan, digestTargetBeforeState, skillsIn } from './build-plan.js';
@@ -8,10 +9,12 @@ import { contentFailure, diagnostic } from './content-validation.js';
 import { decideInstall } from './policy.js';
 import { readValidatedPack, type ValidatedPackMaterial } from './read.js';
 import { reconcileLockedPlugin } from './reconcile.js';
+import { frozenInstallResolution } from './resolver.js';
 import type {
   InstallDecision,
   InstallPlanPlugin,
   InstallPreflightResult,
+  InstallResolution,
   PrepareInstallPlanInput,
 } from './types.js';
 
@@ -90,12 +93,12 @@ function inputFailure(input: PrepareInstallPlanInput): InstallPreflightResult | 
     return failure(EXIT_CODES.ENVIRONMENT, [
       diagnostic('E_PNPM_VERSION', '未取得 pnpm 版本。', '先完成 pnpm probe。'),
     ]);
-  if (input.options.frozen === false) {
-    return failure(EXIT_CODES.CONTRACT, [
+  if (!satisfies(pnpmVersion, '>=10.0.0')) {
+    return failure(EXIT_CODES.ENVIRONMENT, [
       diagnostic(
-        'E_FROZEN_REQUIRED',
-        'M0 install 只接受 frozen lock。',
-        '移除禁用 frozen 的请求并保留 pack.lock.yml。',
+        'E_PNPM_VERSION_UNSUPPORTED',
+        `pnpm ${pnpmVersion} 低于 install 要求的 10.0.0。`,
+        '从 PATH 提供 pnpm >=10 后重试；未执行任何目标写入。',
       ),
     ]);
   }
@@ -240,6 +243,7 @@ export async function prepareInstallPlanFromValidated(
   input: PrepareInstallPlanInput,
   material: ValidatedPackMaterial,
   validationDiagnostics: readonly Diagnostic[] = [],
+  suppliedResolution?: InstallResolution,
 ): Promise<InstallPreflightResult> {
   const invalidInput = inputFailure(input);
   if (invalidInput !== undefined) return invalidInput;
@@ -276,12 +280,48 @@ export async function prepareInstallPlanFromValidated(
   const approval = buildApprovalFailure(input.options.allowBuilds ?? []);
   if (approval !== undefined) return failure(EXIT_CODES.CONTRACT, [approval]);
 
+  const resolution =
+    suppliedResolution ??
+    (input.options.frozen === true &&
+    material.lock !== undefined &&
+    material.lockDigest !== undefined
+      ? frozenInstallResolution(material)
+      : undefined);
+  if (resolution === undefined)
+    return failure(EXIT_CODES.SOURCE_NETWORK_INTEGRITY, [
+      diagnostic(
+        'E_RESOLUTION_REQUIRED',
+        input.options.frozen === true
+          ? '--frozen 无法取得已验证的 pack.lock resolution。'
+          : '默认 install 尚未取得 manifest 的精确解析结果。',
+        input.options.frozen === true
+          ? '提供有效 pack.lock.yml。'
+          : '先在私有临时目录解析每个插件，再生成确认 plan。',
+      ),
+    ]);
+  const expectedMode = input.options.frozen === true ? 'frozen' : 'manifest';
+  if (resolution.mode !== expectedMode)
+    return failure(EXIT_CODES.SOURCE_NETWORK_INTEGRITY, [
+      diagnostic(
+        'E_RESOLUTION_MODE',
+        `插件解析模式 ${resolution.mode} 与请求 ${expectedMode} 不一致。`,
+        '丢弃旧解析结果并按当前 --frozen 选择重新解析。',
+      ),
+    ]);
   const plugins: InstallPlanPlugin[] = [];
   for (let index = 0; index < material.manifest.plugins.length; index += 1) {
     const declaration = material.manifest.plugins[
       index
     ] as (typeof material.manifest.plugins)[number];
-    const locked = material.lock.plugins[index] as (typeof material.lock.plugins)[number];
+    const locked = resolution.plugins[index];
+    if (locked === undefined)
+      return failure(EXIT_CODES.SOURCE_NETWORK_INTEGRITY, [
+        diagnostic(
+          'E_RESOLUTION_PLUGIN_MISSING',
+          `插件 ${declaration.name} 缺少精确解析结果。`,
+          '按 manifest 顺序重新解析全部插件。',
+        ),
+      ]);
     const reconciled = reconcileLockedPlugin(declaration, locked);
     if (reconciled.plugin === undefined) {
       return failure(EXIT_CODES.SOURCE_NETWORK_INTEGRITY, reconciled.diagnostics);
@@ -290,7 +330,6 @@ export async function prepareInstallPlanFromValidated(
   }
   const unverified = unverifiedFailure(plugins, input.options.allowUnverified === true);
   if (unverified !== undefined) return failure(EXIT_CODES.SOURCE_NETWORK_INTEGRITY, [unverified]);
-
   const defaultPreset = material.manifest.defaults.agentPreset;
   if (
     defaultPreset !== undefined &&
@@ -308,8 +347,9 @@ export async function prepareInstallPlanFromValidated(
   const plan = buildInstallPlan({
     provenance: input.source.provenance,
     manifest: material.manifest,
-    lock: material.lock,
-    lockDigest: material.lockDigest,
+    manifestDigest: material.manifestDigest,
+    resolutionDigest: resolution.resolutionDigest,
+    frozen: resolution.mode === 'frozen',
     sourceFiles: material.sourceFiles,
     plugins,
     paths: material.paths,
@@ -343,7 +383,9 @@ export async function prepareInstallPlan(
 ): Promise<InstallPreflightResult> {
   const invalidInput = inputFailure(input);
   if (invalidInput !== undefined) return invalidInput;
-  const read = await readValidatedPack(input.source.directory);
+  const read = await readValidatedPack(input.source.directory, {
+    frozen: input.options.frozen === true,
+  });
   if (read.material === undefined) return failure(read.exitCode, read.diagnostics);
   return prepareInstallPlanFromValidated(input, read.material, read.diagnostics);
 }

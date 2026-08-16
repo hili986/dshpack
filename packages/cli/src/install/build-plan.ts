@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import type { PackLock, PackManifest } from '@dshpack/core';
+import type { PackManifest } from '@dshpack/core';
 
 import type { SourceProvenance } from '../adapters/source.js';
 import type {
@@ -158,8 +158,9 @@ function writesFor(
 export function buildInstallPlan(input: {
   provenance: SourceProvenance;
   manifest: PackManifest;
-  lock: PackLock;
-  lockDigest: string;
+  manifestDigest: string;
+  resolutionDigest: string;
+  frozen: boolean;
   sourceFiles: readonly InstallPlanSourceFile[];
   plugins: readonly InstallPlanPlugin[];
   paths: readonly string[];
@@ -167,7 +168,7 @@ export function buildInstallPlan(input: {
   options: InstallPlanOptions;
   environment: InstallEnvironmentFacts;
 }): InstallPlan {
-  const { manifest, lock, plugins, targetProfile, options, environment } = input;
+  const { manifest, plugins, targetProfile, options, environment } = input;
   const requiredDangerousPermissions =
     manifest.defaults.permissionPreset === 'danger-full-access'
       ? (['danger-full-access'] as const)
@@ -194,8 +195,8 @@ export function buildInstallPlan(input: {
     packPreset !== undefined && assets.presets.some(({ id }) => id === packPreset);
   const draft = {
     planVersion: 0 as const,
-    manifestDigest: lock.manifestSha256,
-    lockDigest: input.lockDigest,
+    manifestDigest: input.manifestDigest,
+    lockDigest: input.resolutionDigest,
     sourceFiles: [...input.sourceFiles].sort((a, b) => a.path.localeCompare(b.path, 'en')),
     stateDigest,
     source: input.provenance,
@@ -203,7 +204,7 @@ export function buildInstallPlan(input: {
     pack: { name: manifest.name, version: manifest.version },
     targetProfile,
     replaceExistingProfile: environment.profileExists && options.replace === true,
-    frozen: true as const,
+    frozen: input.frozen,
     dsh: { current: environment.dshVersion, tested: manifest.dsh.tested, versionMismatch },
     pnpm: { current: environment.pnpmVersion },
     plugins,
