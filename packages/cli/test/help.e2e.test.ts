@@ -1,9 +1,13 @@
 import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-const binPath = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
+const binPath =
+  process.env.DSHPACK_E2E_BIN === undefined
+    ? fileURLToPath(new URL('../dist/bin.js', import.meta.url))
+    : resolve(process.env.DSHPACK_E2E_BIN);
 const commands = [
   'export',
   'install',
@@ -115,5 +119,16 @@ describe('dshpack --help', () => {
       diagnostics: [expect.objectContaining({ code: 'E_USAGE', severity: 'error' })],
     });
     expect(result.stdout.trim().split('\n')).toHaveLength(1);
+  });
+
+  it.each([
+    ['root', ['--json', '--help']],
+    ['child', ['list', '--json', '--help']],
+  ] as const)('emits one JSON help object for %s placement', (_placement, args) => {
+    const result = spawnSync(process.execPath, [binPath, ...args], { encoding: 'utf8' });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ diagnostics: [], help: expect.any(String) });
   });
 });

@@ -26,7 +26,9 @@ describe('doctor command JSON output', () => {
     const program = new Command().option('--dsh-home <path>').option('--json');
     registerDoctorCommand(program);
 
-    await program.parseAsync(['node', 'dshpack', '--json', 'doctor'], { from: 'node' });
+    await program.parseAsync(['node', 'dshpack', '--dsh-home', process.cwd(), '--json', 'doctor'], {
+      from: 'node',
+    });
 
     expect(JSON.parse(stdout)).toEqual({ diagnostics: [], sideEffects: ['profile/cordis.yml'] });
   });

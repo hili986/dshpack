@@ -34,7 +34,18 @@ describe('export command JSON output', () => {
     registerExportCommand(program);
 
     await program.parseAsync(
-      ['node', 'dshpack', '--json', 'export', '--profile', 'demo', '--output', 'C:/tmp/out'],
+      [
+        'node',
+        'dshpack',
+        '--dsh-home',
+        process.cwd(),
+        '--json',
+        'export',
+        '--profile',
+        'demo',
+        '--output',
+        'C:/tmp/out',
+      ],
       { from: 'node' },
     );
 

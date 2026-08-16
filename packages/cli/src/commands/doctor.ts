@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 
 import { runDoctor } from '../doctor/engine.js';
-import { writeReport } from './shared.js';
+import { resolveDshHome, writeReport } from './shared.js';
 
 export const doctorCommand = {
   name: 'doctor',
@@ -25,17 +25,20 @@ export function registerDoctorCommand(program: Command): void {
         strict?: boolean;
         yes?: boolean;
       }) => {
+        const json = options.json === true || program.opts<{ json?: boolean }>().json === true;
+        const home = resolveDshHome(program);
+        if (!home.ok) {
+          writeReport(home.report, json);
+          return;
+        }
         const report = await runDoctor({
-          dshHome: program.opts<{ dshHome?: string }>().dshHome ?? process.env.DSH_HOME ?? '',
+          dshHome: home.value,
           ...(options.fix === undefined ? {} : { fix: options.fix }),
           ...(options.profile === undefined ? {} : { profile: options.profile }),
           ...(options.strict === undefined ? {} : { strict: options.strict }),
           ...(options.yes === undefined ? {} : { yes: options.yes }),
         });
-        writeReport(
-          report,
-          options.json === true || program.opts<{ json?: boolean }>().json === true,
-        );
+        writeReport(report, json);
       },
     );
 }

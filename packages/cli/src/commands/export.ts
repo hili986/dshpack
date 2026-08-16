@@ -1,7 +1,8 @@
 import type { Command } from 'commander';
 
+import { EXIT_CODES } from '../exit-codes.js';
 import { exportProfile } from '../export/engine.js';
-import { writeReport } from './shared.js';
+import { diagnostic, resolveDshHome, writeReport } from './shared.js';
 
 export const exportCommand = {
   name: 'export',
@@ -46,13 +47,32 @@ export function registerExportCommand(program: Command): void {
         redact?: boolean;
         yes?: boolean;
       }) => {
+        const json = options.json === true || program.opts<{ json?: boolean }>().json === true;
         if (options.includeSettings !== undefined && options.includeSettings !== 'agent-presets') {
-          process.stderr.write('✖ E_EXPORT_SETTINGS: --include-settings 仅允许 agent-presets。\n');
-          process.exitCode = 2;
+          writeReport(
+            {
+              diagnostics: [
+                diagnostic(
+                  'E_EXPORT_SETTINGS',
+                  'error',
+                  '--include-settings 仅允许 agent-presets。',
+                  '请使用 --include-settings agent-presets，或省略该选项。',
+                ),
+              ],
+              exitCode: EXIT_CODES.USAGE,
+              metadata: {},
+            },
+            json,
+          );
+          return;
+        }
+        const home = resolveDshHome(program);
+        if (!home.ok) {
+          writeReport(home.report, json);
           return;
         }
         const report = await exportProfile({
-          dshHome: program.opts<{ dshHome?: string }>().dshHome ?? process.env.DSH_HOME ?? '',
+          dshHome: home.value,
           output: options.output,
           profile: options.profile,
           ...(options.allowUnverifiedExport === undefined
@@ -66,7 +86,6 @@ export function registerExportCommand(program: Command): void {
           ...(options.redact === undefined ? {} : { redact: options.redact }),
           ...(options.yes === undefined ? {} : { yes: options.yes }),
         });
-        const json = options.json === true || program.opts<{ json?: boolean }>().json === true;
         writeReport(report, json);
         if (report.exitCode === 0 && !json) showSuccess(report);
       },
