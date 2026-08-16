@@ -27,6 +27,8 @@ export default defineConfig({
         'packages/core/src/patch-export.ts': { branches: 90 },
         'packages/cli/src/adapters/settings.ts': { branches: 90 },
         'packages/cli/src/adapters/settings-lock.ts': { branches: 90 },
+        'packages/cli/src/adapters/source.ts': { branches: 90 },
+        'packages/cli/src/adapters/source-archive.ts': { branches: 90 },
         'packages/cli/src/transaction-journal.ts': { branches: 90 },
         'packages/cli/src/transaction-node-adapter.ts': { branches: 90 },
         'packages/cli/src/transaction-rollback.ts': { branches: 90 },
