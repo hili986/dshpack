@@ -9,7 +9,9 @@
       "!.corepack-shims",
       "!.omx",
       "!codex-goals",
-      "!docs/adr/raw"
+      "!docs/adr/raw",
+      "!docs/adr/stage8-raw",
+      "!.stage8-*"
     ]
   },
   "formatter": {
