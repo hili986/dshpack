@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type SwitchRuntime, switchProfile } from '../src/switch/engine.js';
 
 const homes: string[] = [];
+const SHA256_A = `sha256-${'a'.repeat(43)}`;
+const SHA256_B = `sha256-${'b'.repeat(43)}`;
 
 async function fixture(tracked = true): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'dshpack-switch-'));
@@ -34,11 +36,11 @@ async function fixture(tracked = true): Promise<string> {
       JSON.stringify({
         metadataVersion: 0,
         profile: 'demo',
-        pack: { name: 'demo-pack', version: '1.0.0', manifestDigest: 'sha256-m' },
-        planDigest: 'sha256-p',
+        pack: { name: 'demo-pack', version: '1.0.0', manifestDigest: SHA256_A },
+        planDigest: SHA256_B,
         installedAt: '2026-08-16T00:00:00.000Z',
         txid: 'tx',
-        source: { kind: 'directory', path: 'C:/fixture' },
+        source: { kind: 'directory', path: home },
         defaults: { agentPreset: 'demo-preset', permissionPreset: 'workspace-write' },
         plugins: [],
         sideEffects: ['profile/cordis.yml'],
@@ -152,9 +154,9 @@ describe('switchProfile', () => {
       deps,
     );
     expect(report.exitCode).toBe(21);
-    expect(report.diagnostics[0]?.hint).toBe(
-      `非交互执行：dshpack --dsh-home ${JSON.stringify(home)} switch demo --set-default-preset --yes`,
-    );
+    const hint = report.diagnostics[0]?.hint ?? '';
+    expect(hint).toContain(home);
+    expect(hint).toContain('switch demo --set-default-preset --yes');
     await expect(readFile(join(home, 'settings.yaml'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -287,7 +289,7 @@ describe('switchProfile', () => {
     const home = await fixture();
     await expect(
       switchProfile({ dshHome: home, profile: '../demo' }, runtime()),
-    ).resolves.toMatchObject({ exitCode: 30 });
+    ).resolves.toMatchObject({ exitCode: 31 });
     await writeFile(join(home, 'settings.yaml'), 'agent-presets: [bad]\n', 'utf8');
     await expect(
       switchProfile(

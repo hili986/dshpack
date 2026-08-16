@@ -3,7 +3,6 @@ import { join, resolve } from 'node:path';
 import { confirm, isCancel } from '@clack/prompts';
 import { execa } from 'execa';
 
-import { YamlSettingsAdapter } from '../adapters/settings.js';
 import { type CommandReport, diagnostic, exitCodeFor } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import {
@@ -12,7 +11,7 @@ import {
   isSafeProfileName,
   presetExists,
 } from '../list/contracts.js';
-import { updateSelectedPreset } from './settings.js';
+import { inspectCurrentAgentPresets, updateSelectedPreset } from './settings.js';
 
 export interface SwitchInput {
   dshHome: string;
@@ -36,10 +35,6 @@ export interface SwitchRuntime {
   showDiff(diff: string): void;
   confirm(options: { message: string; initialValue: false }): Promise<boolean>;
   spawnDsh(profile: string, dshHome: string): Promise<number>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function foregroundDsh(profile: string, dshHome: string): Promise<number> {
@@ -74,6 +69,10 @@ function report(
   message: string,
   hint: string,
   exitCode: ExitCode,
+  facts: { ran: boolean; settingsChanged: boolean } = {
+    ran: false,
+    settingsChanged: false,
+  },
 ): CommandReport<SwitchMetadata> {
   return {
     diagnostics: [diagnostic(code, 'error', message, hint)],
@@ -81,8 +80,9 @@ function report(
     metadata: {
       profile: input.profile,
       command: `dsh --profile ${input.profile}`,
-      ran: false,
-      settingsChanged: false,
+      ran: facts.ran,
+      settingsChanged: facts.settingsChanged,
+      ...(facts.settingsChanged ? { effect: 'new-session' as const } : {}),
     },
   };
 }
@@ -100,7 +100,29 @@ function settingsDiff(previous: unknown, preset: string): string {
 }
 
 function nonInteractiveCommand(input: SwitchInput, dshHome: string): string {
-  return `dshpack --dsh-home ${JSON.stringify(dshHome)} switch ${input.profile} --set-default-preset --yes`;
+  const quote = (value: string): string =>
+    process.platform === 'win32'
+      ? `'${value.replaceAll("'", "''")}'`
+      : `'${value.replaceAll("'", `'"'"'`)}'`;
+  const flags = [
+    ...(input.run === true ? ['--run'] : []),
+    ...(input.setDefaultPreset === true ? ['--set-default-preset'] : []),
+    ...(input.json === true ? ['--json'] : []),
+    '--yes',
+  ];
+  return `dshpack --dsh-home ${quote(dshHome)} switch ${input.profile} ${flags.join(' ')}`;
+}
+
+function isUnsafeProfileInput(profile: string): boolean {
+  return (
+    [...profile].some((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    }) ||
+    /[/\\]/u.test(profile) ||
+    profile.includes('..') ||
+    /^[A-Za-z]:/u.test(profile)
+  );
 }
 
 async function setDefaultPreset(
@@ -143,8 +165,7 @@ async function setDefaultPreset(
       EXIT_CODES.CONTRACT,
     );
 
-  const adapter = new YamlSettingsAdapter(join(dshHome, 'settings.yaml'));
-  const current = await adapter.read();
+  const current = await inspectCurrentAgentPresets(join(dshHome, 'settings.yaml'));
   if (!current.ok || current.value === undefined)
     return {
       diagnostics: current.diagnostics,
@@ -156,19 +177,9 @@ async function setDefaultPreset(
         settingsChanged: false,
       },
     };
-  const rawSection = current.value['agent-presets'];
-  if (rawSection !== undefined && !isRecord(rawSection))
-    return report(
-      input,
-      'E_SWITCH_SETTINGS',
-      'settings.yaml 的 agent-presets namespace 必须是 mapping。',
-      '修复 settings.yaml 后重试。',
-      EXIT_CODES.CONTRACT,
-    );
-  const section = rawSection ?? {};
-  runtime.showDiff(settingsDiff(section.selected, preset));
+  runtime.showDiff(settingsDiff(current.value.selected, preset));
   if (input.yes !== true) {
-    if (!runtime.isTTY)
+    if (input.json === true || !runtime.isTTY)
       return report(
         input,
         'E_SWITCH_CONFIRM_REQUIRED',
@@ -224,14 +235,16 @@ export async function switchProfile(
       '设置 --dsh-home 或 DSH_HOME 后重试。',
       EXIT_CODES.ENVIRONMENT,
     );
-  if (!isSafeProfileName(input.profile))
+  if (!isSafeProfileName(input.profile)) {
+    const unsafe = isUnsafeProfileInput(input.profile);
     return report(
       input,
-      'E_SWITCH_PROFILE_NAME',
+      unsafe ? 'E_PATH_PROFILE' : 'E_SWITCH_PROFILE_NAME',
       'profile 名称不符合安全规则。',
       '使用 3–64 字符的 kebab-case profile 名称。',
-      EXIT_CODES.CONTRACT,
+      unsafe ? EXIT_CODES.SECURITY : EXIT_CODES.CONTRACT,
     );
+  }
   const dshHome = resolve(input.dshHome);
   const profileState = await inspectProfile(dshHome, input.profile);
   if (profileState.status !== 'valid')
@@ -269,6 +282,7 @@ export async function switchProfile(
         '无法在 PATH 中前台启动 dsh。',
         '安装 dsh 并修复 PATH 后重试。',
         EXIT_CODES.ENVIRONMENT,
+        { ran: false, settingsChanged },
       );
     }
     if (childExit !== 0)
@@ -278,6 +292,7 @@ export async function switchProfile(
         `前台 dsh 以 exit ${childExit} 结束。`,
         '检查 dsh 输出后重试。',
         EXIT_CODES.DSH_SUBPROCESS_FAILURE,
+        { ran: true, settingsChanged },
       );
   }
   return {

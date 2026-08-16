@@ -11,11 +11,23 @@ export const listCommand = {
 
 export type ListRunner = (input: { dshHome: string }) => Promise<CommandReport<ListMetadata>>;
 
+function escapeTerminalText(value: string): string {
+  return [...value]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
+        ? `\\u${code.toString(16).padStart(4, '0')}`
+        : character;
+    })
+    .join('');
+}
+
 function renderProfile(profile: ListedProfile): string {
+  const name = escapeTerminalText(profile.profile);
   if (profile.status === 'tracked')
-    return `${profile.profile}  tracked  ${profile.pack.name}@${profile.pack.version}`;
-  if (profile.status === 'broken') return `${profile.profile}  broken  ${profile.reason}`;
-  return `${profile.profile}  untracked`;
+    return `${name}  tracked  ${profile.pack.name}@${profile.pack.version}`;
+  if (profile.status === 'broken') return `${name}  broken  ${profile.reason}`;
+  return `${name}  untracked`;
 }
 
 function showProfiles(profiles: readonly ListedProfile[]): void {

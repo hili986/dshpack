@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { updateSelectedPreset } from '../src/switch/settings.js';
+import { inspectCurrentAgentPresets, updateSelectedPreset } from '../src/switch/settings.js';
 
 const roots: string[] = [];
 
@@ -101,5 +101,19 @@ describe('updateSelectedPreset', () => {
       diagnostics: [expect.objectContaining({ code: 'E_SETTINGS_LOCK_TIMEOUT' })],
     });
     expect(await readFile(path, 'utf8')).toBe('agent-presets: {}\n');
+  });
+
+  it('rejects a settings directory before preflight or lock-scoped RMW', async () => {
+    const root = await temporary();
+    const path = join(root, 'settings.yaml');
+    await mkdir(path);
+    await expect(inspectCurrentAgentPresets(path)).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],
+    });
+    await expect(updateSelectedPreset(path, 'alpha')).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],
+    });
   });
 });

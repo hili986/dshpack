@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -13,6 +13,9 @@ import {
 import { listProfiles } from '../src/list/engine.js';
 
 const homes: string[] = [];
+const SHA256_A = `sha256-${'a'.repeat(43)}`;
+const SHA256_B = `sha256-${'b'.repeat(43)}`;
+const SHA512 = `sha512-${'A'.repeat(86)}==`;
 
 async function home(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dshpack-list-'));
@@ -46,11 +49,11 @@ function marker(name: string) {
   return {
     metadataVersion: 0,
     profile: name,
-    pack: { name: 'demo-pack', version: '1.2.3', manifestDigest: 'sha256-manifest' },
-    planDigest: 'sha256-plan',
+    pack: { name: 'demo-pack', version: '1.2.3', manifestDigest: SHA256_A },
+    planDigest: SHA256_B,
     installedAt: '2026-08-16T00:00:00.000Z',
     txid: 'tx-1',
-    source: { kind: 'directory', path: 'C:/fixture' },
+    source: { kind: 'directory', path: resolve('fixture') },
     defaults: { agentPreset: 'demo-preset', permissionPreset: 'workspace-write' },
     plugins: [],
     sideEffects: ['profile/cordis.yml'],
@@ -280,15 +283,15 @@ describe('profile and metadata contracts', () => {
     const write = (value: unknown) => installed(root, 'metadata', value);
     const valid = marker('metadata');
     for (const source of [
-      { kind: 'directory', path: 'C:/pack' },
-      { kind: 'archive', path: 'C:/pack.tgz' },
-      { kind: 'https', url: 'https://example.test/pack.tgz', integrity: 'sha512-x' },
+      { kind: 'directory', path: resolve('pack') },
+      { kind: 'archive', path: resolve('pack.tgz') },
+      { kind: 'https', url: 'https://example.test/pack.tgz', integrity: SHA512 },
       {
         kind: 'github',
         owner: 'owner',
         repo: 'repo',
         commit: 'a'.repeat(40),
-        url: 'https://codeload.github.com/owner/repo/tar.gz/commit',
+        url: `https://codeload.github.com/owner/repo/tar.gz/${'a'.repeat(40)}`,
       },
     ]) {
       await write({ ...valid, source });

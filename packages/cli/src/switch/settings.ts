@@ -1,4 +1,4 @@
-import { mkdir, readFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { type Diagnostic, type Result, scanSecrets } from '@dshpack/core';
@@ -11,11 +11,11 @@ import {
   type YamlSettingsAdapterOptions,
 } from '../adapters/settings-lock.js';
 
-function success(): Result<void> {
-  return { ok: true, value: undefined, diagnostics: [] };
+function success<T>(value: T): Result<T> {
+  return { ok: true, value, diagnostics: [] };
 }
 
-function failure(code: string, message: string, hint: string, path: string): Result<void> {
+function failure<T>(code: string, message: string, hint: string, path: string): Result<T> {
   const item: Diagnostic = { code, severity: 'error', message, hint, path, evidence: 'local' };
   return { ok: false, diagnostics: [item] };
 }
@@ -41,23 +41,48 @@ function hasAliasOrAnchor(value: unknown): boolean {
   return found;
 }
 
-async function source(path: string): Promise<string> {
+async function ordinarySource(path: string): Promise<Result<string>> {
+  let metadata: Awaited<ReturnType<typeof lstat>>;
   try {
-    return await readFile(path, 'utf8');
+    metadata = await lstat(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
-    throw error;
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? success('')
+      : settingsIoFailure(path);
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink())
+    return failure(
+      'E_PATH_SETTINGS',
+      'settings.yaml 不是普通文件，已拒绝读取或覆盖。',
+      '移除 symlink、junction 或同名目录后重试。',
+      path,
+    );
+  try {
+    return success(await readFile(path, 'utf8'));
+  } catch {
+    return settingsIoFailure(path);
   }
 }
 
-async function updateUnderLock(path: string, preset: string): Promise<Result<void>> {
-  const current = await source(path);
+interface ParsedAgentPresets {
+  document: Document;
+  section: Record<string, unknown>;
+}
+
+function parseAgentPresets(current: string, path: string): Result<ParsedAgentPresets> {
   const document = parseDocument(current.trim() === '' ? '{}\n' : current, { prettyErrors: true });
   if (document.errors.length > 0)
     return failure(
       'E_SETTINGS_INVALID_YAML',
       'settings.yaml 不是有效 YAML，已拒绝覆盖。',
       '先修复 YAML 语法再重试。',
+      path,
+    );
+  if (hasAliasOrAnchor(document.getIn(['agent-presets'], true)))
+    return failure(
+      'E_SETTINGS_ALIAS',
+      'agent-presets 含 YAML alias 或 anchor，已拒绝覆盖。',
+      '先展开该 namespace 的 alias/anchor，避免修改联动到其他 namespace。',
       path,
     );
   const root: unknown = document.toJS() ?? {};
@@ -68,21 +93,45 @@ async function updateUnderLock(path: string, preset: string): Promise<Result<voi
       '将顶层改为 YAML map 后重试。',
       path,
     );
-  const section = root['agent-presets'];
-  if (section !== undefined && !isRecord(section))
+  const rawSection = root['agent-presets'];
+  if (rawSection !== undefined && !isRecord(rawSection))
     return failure(
       'E_SWITCH_SETTINGS',
       'settings.yaml 的 agent-presets namespace 必须是 mapping。',
       '修复 settings.yaml 后重试。',
       path,
     );
-  if (hasAliasOrAnchor(document.getIn(['agent-presets'], true)))
-    return failure(
-      'E_SETTINGS_ALIAS',
-      'agent-presets 含 YAML alias 或 anchor，已拒绝覆盖。',
-      '先展开该 namespace 的 alias/anchor，避免修改联动到其他 namespace。',
-      path,
-    );
+  const section = rawSection ?? {};
+  const currentCandidate = new Document({ 'agent-presets': section }).toString();
+  const currentSecrets = scanSecrets({
+    path: `${path}#agent-presets`,
+    content: currentCandidate,
+    settingsNamespace: 'agent-presets',
+  });
+  if (currentSecrets.length > 0) return { ok: false, diagnostics: currentSecrets };
+  return success({ document, section });
+}
+
+export async function inspectCurrentAgentPresets(
+  path: string,
+): Promise<Result<{ selected: unknown }>> {
+  const current = await ordinarySource(path);
+  if (!current.ok || current.value === undefined)
+    return { ok: false, diagnostics: current.diagnostics };
+  const parsed = parseAgentPresets(current.value, path);
+  if (!parsed.ok || parsed.value === undefined)
+    return { ok: false, diagnostics: parsed.diagnostics };
+  return success({ selected: parsed.value.section.selected });
+}
+
+async function updateUnderLock(path: string, preset: string): Promise<Result<void>> {
+  const current = await ordinarySource(path);
+  if (!current.ok || current.value === undefined)
+    return { ok: false, diagnostics: current.diagnostics };
+  const parsed = parseAgentPresets(current.value, path);
+  if (!parsed.ok || parsed.value === undefined)
+    return { ok: false, diagnostics: parsed.diagnostics };
+  const { document, section } = parsed.value;
   document.setIn(['agent-presets', 'selected'], preset);
   const candidate = new Document({
     'agent-presets': Object.assign(Object.create(null) as Record<string, unknown>, section, {
@@ -96,7 +145,7 @@ async function updateUnderLock(path: string, preset: string): Promise<Result<voi
   });
   if (secretDiagnostics.length > 0) return { ok: false, diagnostics: secretDiagnostics };
   await writeFileAtomic(path, document.toString(), { mode: 0o600, dirMode: 0o700 });
-  return success();
+  return success(undefined);
 }
 
 /** Lock-scoped leaf RMW: a concurrent writer can never be erased by a stale pre-confirm snapshot. */
