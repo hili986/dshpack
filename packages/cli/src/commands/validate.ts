@@ -17,6 +17,9 @@ export function registerValidateCommand(program: Command): void {
       const report = await validateLocalPack(source, {
         ...(options.strict === undefined ? {} : { strict: options.strict }),
       });
-      writeReport(report, options.json === true);
+      writeReport(
+        report,
+        options.json === true || program.opts<{ json?: boolean }>().json === true,
+      );
     });
 }

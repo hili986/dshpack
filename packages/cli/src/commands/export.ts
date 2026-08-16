@@ -66,8 +66,9 @@ export function registerExportCommand(program: Command): void {
           ...(options.redact === undefined ? {} : { redact: options.redact }),
           ...(options.yes === undefined ? {} : { yes: options.yes }),
         });
-        writeReport(report, options.json === true);
-        if (report.exitCode === 0 && options.json !== true) showSuccess(report);
+        const json = options.json === true || program.opts<{ json?: boolean }>().json === true;
+        writeReport(report, json);
+        if (report.exitCode === 0 && !json) showSuccess(report);
       },
     );
 }
