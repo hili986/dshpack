@@ -22,7 +22,7 @@
     "verify:release-pack": "node scripts/verify-release-pack.mjs",
     "pack:dry-run": "pnpm --filter @dshpack/core pack --dry-run && pnpm --filter dshpack pack --dry-run",
     "publint": "publint packages/core && publint packages/cli",
-    "check": "pnpm typecheck && pnpm lint && pnpm verify:pack-schema && pnpm verify:adr-text-encoding && pnpm test && pnpm test:e2e && pnpm pack:validate",
+    "check": "pnpm --recursive build && pnpm typecheck && pnpm lint && pnpm verify:pack-schema && pnpm verify:adr-text-encoding && pnpm test && pnpm test:e2e && pnpm pack:validate",
     "release:check": "pnpm check && pnpm pack:dry-run && pnpm verify:release-pack && pnpm publint"
   },
   "devDependencies": {
