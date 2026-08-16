@@ -15,6 +15,7 @@ const commands = [
   'switch',
   'doctor',
   'validate',
+  'lock',
   'init',
   'pack',
 ] as const;
@@ -45,7 +46,7 @@ describe('dshpack --help', () => {
     });
   }
 
-  it.each(['validate', 'doctor', 'export', 'install', 'list', 'switch'])(
+  it.each(['validate', 'doctor', 'export', 'install', 'list', 'switch', 'lock'])(
     '%s exposes implemented help instead of the W10 placeholder',
     (command) => {
       const result = spawnSync(process.execPath, [binPath, command, '--help'], {
