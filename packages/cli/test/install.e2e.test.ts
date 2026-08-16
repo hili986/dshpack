@@ -21,11 +21,16 @@ async function fixture(): Promise<{ home: string; env: NodeJS.ProcessEnv; log: s
   roots.push(root);
   const home = join(root, 'home');
   await mkdir(home);
+  const childEnvironment = { ...process.env };
+  // This built CLI recursively spawns the PATH-first dsh/pnpm shims. They are
+  // outside Vitest's source instrumentation and must not contend for its V8
+  // coverage scratch directory.
+  delete childEnvironment.NODE_V8_COVERAGE;
   return {
     home,
     log: join(root, 'shim.jsonl'),
     env: {
-      ...process.env,
+      ...childEnvironment,
       DSH_HOME: home,
       PATH: [shimDirectory, dirname(process.execPath)].join(delimiter),
       DSHPACK_NODE_EXE: process.execPath,
