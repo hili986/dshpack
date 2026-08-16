@@ -44,6 +44,46 @@ interface TreeInspection {
   entries: PackTreeEntry[];
   files: FileEntry[];
 }
+
+export type PackPathClass = 'semantic' | 'repository' | 'ignored';
+
+/** §3.1 semantic payload table. This deliberately does not match repository metadata. */
+export function isSemanticPackPath(path: string): boolean {
+  if (['pack.yml', 'pack.lock.yml', 'export-report.json', 'patch/cordis.patch.yml'].includes(path))
+    return true;
+  if (/^skills\/[a-z0-9][a-z0-9-]*(?:\.md|\/SKILL\.md)$/u.test(path)) return true;
+  if (/^presets\/[a-z0-9][a-z0-9-]*\/(?:agent\.cordis\.yml|preset\.yml)$/u.test(path)) return true;
+  if (/^presets\/[a-z0-9][a-z0-9-]*\/skills\/[a-z0-9][a-z0-9-]*(?:\.md|\/SKILL\.md)$/u.test(path))
+    return true;
+  return path === 'settings/agent-presets.yml' || path.startsWith('agents-md/');
+}
+
+/** §3.1 repository regular files are scanned but never installed, archived, or locked. */
+export function isRepositoryRegularPath(path: string): boolean {
+  if (path.startsWith('.github/')) return true;
+  if (['.gitignore', '.gitattributes', '.editorconfig'].includes(path)) return true;
+  return /^(?:README|LICENSE|CHANGELOG|CONTRIBUTING)[^/]*$/u.test(path);
+}
+
+/** §3.1 ignored trees are excluded before lstat/readdir so their contents are never inspected. */
+export function isIgnoredPackPath(path: string): boolean {
+  return (
+    path === '.git' ||
+    path.startsWith('.git/') ||
+    path === 'node_modules' ||
+    path.startsWith('node_modules/') ||
+    path === '.DS_Store' ||
+    path === 'Thumbs.db'
+  );
+}
+
+export function classifyPackPath(path: string): PackPathClass | undefined {
+  if (isIgnoredPackPath(path)) return 'ignored';
+  if (isSemanticPackPath(path)) return 'semantic';
+  if (isRepositoryRegularPath(path)) return 'repository';
+  return undefined;
+}
+
 function posixRelative(root: string, candidate: string): string {
   return relative(root, candidate).split(sep).join('/');
 }
@@ -97,8 +137,10 @@ async function inspectTree(root: string): Promise<TreeInspection> {
     const names = await readdir(directory);
     for (const name of names) {
       const absolute = join(directory, name);
-      const stat = await lstat(absolute);
       const path = posixRelative(root, absolute);
+      // Do not even lstat ignored entries: .git and node_modules can contain huge binary trees.
+      if (isIgnoredPackPath(path)) continue;
+      const stat = await lstat(absolute);
       const kind = statKind(stat);
       entries.push({ path, stat: { kind, size: stat.size } });
       if (kind === 'directory') await visit(absolute);
@@ -127,15 +169,6 @@ function sha512(content: Uint8Array): string {
 }
 function manifestSha256(content: Uint8Array): string {
   return `sha256-${createHash('sha256').update(content).digest('base64url')}`;
-}
-function isAllowedPath(path: string): boolean {
-  if (['pack.yml', 'pack.lock.yml', 'export-report.json', 'patch/cordis.patch.yml'].includes(path))
-    return true;
-  if (/^skills\/[a-z0-9][a-z0-9-]*(?:\.md|\/SKILL\.md)$/u.test(path)) return true;
-  if (/^presets\/[a-z0-9][a-z0-9-]*\/(?:agent\.cordis\.yml|preset\.yml)$/u.test(path)) return true;
-  if (/^presets\/[a-z0-9][a-z0-9-]*\/skills\/[a-z0-9][a-z0-9-]*(?:\.md|\/SKILL\.md)$/u.test(path))
-    return true;
-  return path === 'settings/agent-presets.yml' || path.startsWith('agents-md/');
 }
 function contentDiagnostics(path: string, content: string): readonly Diagnostic[] {
   const namespace = path === 'settings/agent-presets.yml' ? 'agent-presets' : undefined;
@@ -166,7 +199,7 @@ function layoutDiagnostics(
           path,
         ),
       );
-    } else if (!isAllowedPath(path) && !path.endsWith('/')) {
+    } else if (classifyPackPath(path) === undefined && !path.endsWith('/')) {
       diagnostics.push(
         diagnostic(
           'E_LAYOUT_UNKNOWN',
@@ -350,12 +383,12 @@ export async function validateLocalPack(
   for (const file of inspected.files) {
     try {
       const bytes = await readFile(file.absolute);
-      contents.set(file.path, bytes);
       const text = Buffer.from(bytes).toString('utf8');
       diagnostics.push(...contentDiagnostics(file.path, text));
       if (basename(file.path) === 'SKILL.md' || /^skills\/[^/]+\.md$/u.test(file.path)) {
         diagnostics.push(...inspectSkill(text, file.path));
       }
+      if (classifyPackPath(file.path) === 'semantic') contents.set(file.path, bytes);
     } catch {
       diagnostics.push(
         diagnostic('E_SOURCE_READ', 'error', '无法读取 pack 文件。', '检查文件权限。', file.path),

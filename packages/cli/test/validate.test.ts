@@ -85,6 +85,61 @@ describe('validateLocalPack', () => {
     );
   });
 
+  it('allows repository regular files without putting them into the semantic lock payload', async () => {
+    const root = await makePack();
+    for (const path of [
+      'README.md',
+      'LICENSE',
+      'CHANGELOG.md',
+      'CONTRIBUTING.md',
+      '.gitignore',
+      '.gitattributes',
+      '.editorconfig',
+      '.github/workflows/ci.yml',
+    ]) {
+      const target = join(root, ...path.split('/'));
+      await mkdir(join(target, '..'), { recursive: true });
+      await writeFile(target, 'repository metadata\n', 'utf8');
+    }
+
+    const result = await validateLocalPack(root, { strict: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: 'E_LAYOUT_UNKNOWN' }),
+    );
+  });
+
+  it('scans repository regular files for secrets without echoing the synthetic token', async () => {
+    const root = await makePack();
+    const token = 'sk-README-TESTONLY-012345678901234567890123456789';
+    await writeFile(join(root, 'README.md'), `token: ${token}\n`, 'utf8');
+
+    const result = await validateLocalPack(root, { strict: true });
+
+    expect(result.exitCode).toBe(31);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SECRET_KEY' }));
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: 'E_LAYOUT_UNKNOWN' }),
+    );
+    expect(JSON.stringify(result.diagnostics)).not.toContain(token.slice(0, 8));
+  });
+
+  it('does not traverse ignored git content', async () => {
+    const root = await makePack();
+    const token = 'sk-GIT-TESTONLY-012345678901234567890123456789';
+    await mkdir(join(root, '.git'), { recursive: true });
+    await writeFile(join(root, '.git', 'credential'), `token: ${token}\n`, 'utf8');
+
+    const result = await validateLocalPack(root, { strict: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.stringify(result.diagnostics)).not.toContain(token.slice(0, 8));
+    expect(result.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: 'E_LAYOUT_UNKNOWN' }),
+    );
+  });
+
   it('rejects the M0 overrides reserved directory', async () => {
     const result = await validateLocalPack(await makePack({ 'overrides/patch.yml': '[]\n' }));
 
