@@ -62,13 +62,19 @@ describe('updateSelectedPreset', () => {
     let swapped = false;
 
     await expect(
-      updateSelectedPreset(path, 'new', { writeLockContents }, root.value, {
-        afterPreLockRevalidate: async () => {
-          await rename(container, moved);
-          await symlink(moved, container, 'junction');
-          swapped = true;
+      updateSelectedPreset(
+        path,
+        'new',
+        { writeLockContents },
+        { root: root.value, selected: 'old' },
+        {
+          afterPreLockRevalidate: async () => {
+            await rename(container, moved);
+            await symlink(moved, container, 'junction');
+            swapped = true;
+          },
         },
-      }),
+      ),
     ).resolves.toMatchObject({
       ok: false,
       diagnostics: [expect.objectContaining({ code: 'E_PATH_SETTINGS' })],

@@ -193,7 +193,7 @@ describe('switchProfile', () => {
     expect(deps.spawnDsh).not.toHaveBeenCalled();
   });
 
-  it('re-reads under the settings lock and preserves a post-diff concurrent mutation', async () => {
+  it('preserves post-diff concurrent leaves when the reviewed selected value is unchanged', async () => {
     const home = await fixture();
     const path = join(home, 'settings.yaml');
     await writeFile(path, 'agent-presets:\n  selected: old\nother: before\n', 'utf8');
@@ -202,7 +202,7 @@ describe('switchProfile', () => {
       confirm: vi.fn(async () => {
         await writeFile(
           path,
-          'agent-presets:\n  selected: concurrent\n  concurrent-leaf: keep\nother: after\n',
+          'agent-presets:\n  selected: old\n  concurrent-leaf: keep\nother: after\n',
           'utf8',
         );
         return true;
@@ -221,21 +221,17 @@ describe('switchProfile', () => {
     expect(changed).toContain('other: after');
   });
 
-  it('reports a confirmed concurrent no-op without rewriting settings or claiming an effect', async () => {
+  it('reports a confirmed no-op without rewriting settings or claiming an effect', async () => {
     const home = await fixture();
     const path = join(home, 'settings.yaml');
-    await writeFile(path, 'agent-presets:\n  selected: old\n', 'utf8');
     const concurrent = '# concurrent\nagent-presets:\n  selected: demo-preset\n  keep: true\n';
-    let lockedMtime = 0;
+    await writeFile(path, concurrent, 'utf8');
+    const oldTime = new Date('2001-02-03T04:05:06.000Z');
+    await utimes(path, oldTime, oldTime);
+    const lockedMtime = (await stat(path)).mtimeMs;
     const deps = runtime({
       isTTY: true,
-      confirm: vi.fn(async () => {
-        await writeFile(path, concurrent, 'utf8');
-        const oldTime = new Date('2001-02-03T04:05:06.000Z');
-        await utimes(path, oldTime, oldTime);
-        lockedMtime = (await stat(path)).mtimeMs;
-        return true;
-      }),
+      confirm: vi.fn(async () => true),
     });
 
     const report = await switchProfile(

@@ -242,7 +242,7 @@ async function setDefaultPreset(
     join(dshHome, 'settings.yaml'),
     preset,
     {},
-    current.value.root,
+    current.value,
   );
   if (!updated.ok)
     return {

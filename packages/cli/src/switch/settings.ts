@@ -1,4 +1,5 @@
 import { basename, dirname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { type Diagnostic, type Result, scanSecrets } from '@dshpack/core';
 import { Document, isMap, isNode, parseDocument, visit } from 'yaml';
@@ -50,6 +51,11 @@ function hasAliasOrAnchor(value: unknown): boolean {
 interface SettingsSource {
   text: string;
   root: DirectoryBinding;
+}
+
+export interface ReviewedAgentPresets {
+  root: DirectoryBinding;
+  selected: unknown;
 }
 
 export interface SelectedPresetUpdateHooks extends SafePathHooks {
@@ -152,7 +158,7 @@ function parseAgentPresets(current: string, path: string): Result<ParsedAgentPre
 export async function inspectCurrentAgentPresets(
   path: string,
   hooks: SafePathHooks = {},
-): Promise<Result<{ selected: unknown; root: DirectoryBinding }>> {
+): Promise<Result<ReviewedAgentPresets>> {
   const current = await ordinarySource(path, hooks);
   if (!current.ok || current.value === undefined)
     return { ok: false, diagnostics: current.diagnostics };
@@ -166,6 +172,7 @@ async function updateUnderLock(
   path: string,
   preset: string,
   hooks: SafePathHooks,
+  reviewed?: ReviewedAgentPresets,
 ): Promise<Result<boolean>> {
   const current = await ordinarySource(path, hooks);
   if (!current.ok || current.value === undefined)
@@ -174,6 +181,13 @@ async function updateUnderLock(
   if (!parsed.ok || parsed.value === undefined)
     return { ok: false, diagnostics: parsed.diagnostics };
   const { document, section } = parsed.value;
+  if (reviewed !== undefined && !isDeepStrictEqual(section.selected, reviewed.selected))
+    return failure(
+      'E_SWITCH_SETTINGS_CHANGED',
+      '确认后 agent-presets.selected 已变化，已拒绝覆盖。',
+      '重新运行 switch，审阅最新 settings diff 后再确认。',
+      path,
+    );
   if (section.selected === preset) return success(false);
   document.setIn(['agent-presets', 'selected'], preset);
   const candidate = new Document({
@@ -204,11 +218,11 @@ export async function updateSelectedPreset(
   path: string,
   preset: string,
   options: YamlSettingsAdapterOptions = {},
-  expectedRoot?: DirectoryBinding,
+  reviewed?: ReviewedAgentPresets,
   hooks: SelectedPresetUpdateHooks = {},
 ): Promise<Result<boolean>> {
-  if (expectedRoot !== undefined) {
-    const stable = await revalidateDirectory(expectedRoot, hooks);
+  if (reviewed !== undefined) {
+    const stable = await revalidateDirectory(reviewed.root, hooks);
     if (!stable.ok)
       return failure(
         'E_PATH_SETTINGS',
@@ -223,14 +237,14 @@ export async function updateSelectedPreset(
     return settingsIoFailure(path);
   }
   const lockOptions: YamlSettingsAdapterOptions =
-    expectedRoot === undefined
+    reviewed === undefined
       ? options
       : {
           ...options,
           beforeLockAcquire: async () => {
             const callerGuard = await options.beforeLockAcquire?.();
             if (callerGuard !== undefined && !callerGuard.ok) return callerGuard;
-            const stable = await revalidateDirectory(expectedRoot, hooks);
+            const stable = await revalidateDirectory(reviewed.root, hooks);
             return stable.ok
               ? success(undefined)
               : failure(
@@ -243,7 +257,7 @@ export async function updateSelectedPreset(
         };
   const locked = await withSettingsFileLock(
     path,
-    () => updateUnderLock(path, preset, hooks),
+    () => updateUnderLock(path, preset, hooks, reviewed),
     lockOptions,
   );
   if (!locked.ok) return { ok: false, diagnostics: locked.diagnostics };
