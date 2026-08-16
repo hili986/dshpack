@@ -25,5 +25,30 @@ export {
 } from './adapters/settings.js';
 export type { SourceAdapter } from './adapters/source.js';
 export { COMMAND_NAMES, createProgram, runCli } from './cli.js';
+export {
+  type InstallRunner,
+  type InstallRuntimeFactory,
+  installCommand,
+  registerInstallCommand,
+} from './commands/install.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
+export { installPack } from './install/engine.js';
+export {
+  createNodeInstallRuntime,
+  type NodeInstallRuntimeOptions,
+} from './install/runtime.js';
+export type {
+  InstallInput,
+  InstallReport,
+  InstallReportMetadata,
+  InstallRuntime,
+} from './install/runtime-types.js';
+export type {
+  InstallDecision,
+  InstallPlan,
+  InstallPlanAsset,
+  InstallPlanPlugin,
+  InstallPlanWrite,
+  InstallPreflightResult,
+} from './install/types.js';
 export * from './transaction.js';
