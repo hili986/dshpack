@@ -47,6 +47,7 @@ export interface InstallTargetBeforeState {
   skills: readonly InstallPathBeforeState[];
   presets: readonly InstallPathBeforeState[];
   settings: InstallPathBeforeState;
+  externalDefaultPreset?: InstallPathBeforeState;
 }
 
 export interface InstallPlanAsset {
@@ -142,7 +143,6 @@ export interface InstallEnvironmentFacts {
   interactive: boolean;
   targetBeforeState: InstallTargetBeforeState;
   targetBeforeStateDigest: string;
-  availableAgentPresets?: readonly string[];
 }
 
 export interface PrepareInstallPlanInput {

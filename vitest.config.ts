@@ -35,6 +35,8 @@ export default defineConfig({
         'packages/cli/src/install/policy.ts': { branches: 90 },
         'packages/cli/src/install/read.ts': { branches: 90 },
         'packages/cli/src/install/reconcile.ts': { branches: 90 },
+        'packages/cli/src/install/snapshot-capture.ts': { branches: 90 },
+        'packages/cli/src/install/snapshot-path.ts': { branches: 90 },
         'packages/cli/src/install/profile-builds.ts': { branches: 90 },
         'packages/cli/src/install/profile-common.ts': { branches: 90 },
         'packages/cli/src/install/profile-fs.ts': { branches: 90 },

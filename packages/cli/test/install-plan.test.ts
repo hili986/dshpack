@@ -226,8 +226,8 @@ describe('prepareInstallPlan', () => {
       status: 'rejected',
       missingAllowBuilds: ['example-bundle', 'second-bundle'],
     });
-    expect(rejected.decision.nonInteractiveCommand).toContain('--allow-build example-bundle');
-    expect(rejected.decision.nonInteractiveCommand).toContain('--allow-build second-bundle');
+    expect(rejected.decision.nonInteractiveCommand).toContain("--allow-build 'example-bundle'");
+    expect(rejected.decision.nonInteractiveCommand).toContain("--allow-build 'second-bundle'");
 
     const allowed = await prepareInstallPlan(
       input(root, {

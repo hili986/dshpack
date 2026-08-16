@@ -19,7 +19,6 @@ export function nonInteractiveInstallArgv(
 ): string[] {
   const args = [
     'install',
-    options.sourceArgument,
     '--as',
     plan.targetProfile,
     '--dsh-home',
@@ -34,7 +33,7 @@ export function nonInteractiveInstallArgv(
   if (plan.requiredDangerousPermissions.length > 0) args.push('--allow-danger-full-access');
   if (plan.dsh.versionMismatch) args.push('--allow-version-mismatch');
   if (options.force === true) args.push('--force');
-  args.push('--yes');
+  args.push('--yes', '--', options.sourceArgument);
   return args;
 }
 
@@ -46,9 +45,10 @@ export function nonInteractiveInstallCommand(
   const argv = nonInteractiveInstallArgv(options, plan, environment);
   const rendered = argv.map((value, index) => {
     const previous = argv[index - 1];
-    if (value === 'install' || value.startsWith('--')) return value;
-    if (index === 1 || previous === '--dsh-home') return quotePowerShell(value);
-    return /^[A-Za-z0-9_@.-]+$/u.test(value) ? value : quotePowerShell(value);
+    const isSource = index === argv.length - 1;
+    const isData =
+      isSource || previous === '--as' || previous === '--dsh-home' || previous === '--allow-build';
+    return isData ? quotePowerShell(value) : value;
   });
   return ['dshpack', ...rendered].join(' ');
 }

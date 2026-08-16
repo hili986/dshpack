@@ -28,6 +28,9 @@ export function normalizeTargetBeforeState(
     skills: [...value.skills].sort((a, b) => a.path.localeCompare(b.path, 'en')),
     presets: [...value.presets].sort((a, b) => a.path.localeCompare(b.path, 'en')),
     settings: value.settings,
+    ...(value.externalDefaultPreset === undefined
+      ? {}
+      : { externalDefaultPreset: value.externalDefaultPreset }),
   };
 }
 

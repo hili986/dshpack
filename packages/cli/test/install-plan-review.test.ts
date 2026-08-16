@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { copyFile, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { digestTargetBeforeState } from '../src/install/build-plan.js';
 import { prepareInstallPlan } from '../src/install/plan.js';
-import { readValidatedPack } from '../src/install/read.js';
+import { readValidatedPack, validationExitCode } from '../src/install/read.js';
 import { fixture, input, manifest, targetBeforeState } from './install-plan-fixture.js';
 
 const sha256 = (value: unknown): string =>
@@ -221,7 +221,6 @@ describe('install plan review mutants', () => {
     expect(result.plan?.dshHome).toBe(value.environment.dshHome);
     expect(result.decision.nonInteractiveArgv).toEqual([
       'install',
-      "C:/pack with space/it's-safe",
       '--as',
       'research-pack',
       '--dsh-home',
@@ -230,10 +229,27 @@ describe('install plan review mutants', () => {
       '--allow-build',
       'example-bundle',
       '--yes',
+      '--',
+      "C:/pack with space/it's-safe",
     ]);
     expect(result.decision.nonInteractiveCommand).toContain("'C:/pack with space/it''s-safe'");
     expect(result.decision.nonInteractiveCommand).toContain("--dsh-home '");
   });
+
+  it.each(['--bad;Write-Output PWNED', '%PATH%', '$(Write-Output PWNED)', "quote'and space"])(
+    'keeps flag-like or shell-active SOURCE as data: %s',
+    async (sourceArgument) => {
+      const root = await fixture();
+      const value = input(root);
+      value.options = { sourceArgument, yes: true };
+      const result = await prepareInstallPlan(value);
+      expect(result.exitCode).toBe(0);
+      expect(result.decision.nonInteractiveArgv.slice(-2)).toEqual(['--', sourceArgument]);
+      expect(result.decision.nonInteractiveCommand).toContain(
+        `-- '${sourceArgument.replaceAll("'", "''")}'`,
+      );
+    },
+  );
 
   it.each([
     [
@@ -243,6 +259,7 @@ describe('install plan review mutants', () => {
       'E_COMMAND_CONTROL',
     ],
     ['profile traversal', { sourceArgument: 'pack', as: '../escape' }, 31, 'E_PROFILE_PATH'],
+    ['profile grammar', { sourceArgument: 'pack', as: 'foo..bar' }, 30, 'E_PROFILE_NAME'],
     ['profile contract', { sourceArgument: 'pack', as: 'BadName' }, 30, 'E_PROFILE_NAME'],
     ['non-frozen request', { sourceArgument: 'pack', frozen: false }, 30, 'E_FROZEN_REQUIRED'],
   ])('classifies %s with the narrow exit contract', async (_label, options, exitCode, code) => {
@@ -250,6 +267,46 @@ describe('install plan review mutants', () => {
     const result = await prepareInstallPlan(input(root, { options: { ...options, yes: true } }));
     expect(result).toMatchObject({ exitCode });
     expect(result.diagnostics[0]).toMatchObject({ code });
+  });
+
+  it('rejects a junction in a SOURCE ancestor before validator execution', async () => {
+    const target = await fixture();
+    const parent = await mkdtemp(join(target, '..', 'dshpack-junction-parent-'));
+    const junction = join(parent, 'ancestor-link');
+    const sourceThroughJunction = join(junction, basename(target));
+    try {
+      await symlink(dirname(target), junction, 'junction');
+      let validated = false;
+      const result = await readValidatedPack(sourceThroughJunction, {
+        validate: async () => {
+          validated = true;
+          return {
+            diagnostics: [],
+            exitCode: 0,
+            metadata: { source: sourceThroughJunction, valid: true },
+          };
+        },
+      });
+      expect(result).toMatchObject({ exitCode: 31 });
+      expect(result.diagnostics[0]).toMatchObject({ code: 'E_SOURCE_SNAPSHOT_ENTRY' });
+      expect(validated).toBe(false);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies MCP credential diagnostics as security failures', () => {
+    expect(
+      validationExitCode([
+        {
+          code: 'E_MCP_CREDENTIAL',
+          severity: 'error',
+          message: 'credential',
+          hint: 'remove',
+          evidence: 'local',
+        },
+      ]),
+    ).toBe(31);
   });
 
   it('validates settings aliases, preset YAML, and the default preset source during preflight', async () => {

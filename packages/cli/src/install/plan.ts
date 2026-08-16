@@ -65,7 +65,8 @@ function profilePathRisk(value: string): boolean {
     hasControl(value) ||
     value.includes('/') ||
     value.includes('\\') ||
-    value.includes('..') ||
+    value === '.' ||
+    value === '..' ||
     /^[A-Za-z]:/u.test(value) ||
     isAbsolute(value)
   );
@@ -255,6 +256,26 @@ function beforeStateFailure(
       '为 plan 中每个目标采集 absent 或内容摘要。',
     );
   }
+  const defaultPreset = material.manifest.defaults.agentPreset;
+  const bundledDefault =
+    defaultPreset !== undefined &&
+    material.paths.includes(`presets/${defaultPreset}/agent.cordis.yml`);
+  const external = state.externalDefaultPreset;
+  if (
+    defaultPreset !== undefined &&
+    !bundledDefault &&
+    external !== undefined &&
+    (external.path !== `.agent-presets/${defaultPreset}` ||
+      external.state !== 'present' ||
+      !/^sha256-[A-Za-z0-9_-]+$/u.test(external.sha256))
+  ) {
+    return diagnostic(
+      'E_DEFAULT_PRESET_STATE',
+      '外部默认 preset 的路径、存在性或摘要无效。',
+      '重新采集精确 .agent-presets/<id> 目录摘要。',
+      external.path,
+    );
+  }
   return undefined;
 }
 
@@ -332,7 +353,7 @@ export async function prepareInstallPlanFromValidated(
   if (
     defaultPreset !== undefined &&
     !material.paths.includes(`presets/${defaultPreset}/agent.cordis.yml`) &&
-    !input.environment.availableAgentPresets?.includes(defaultPreset)
+    input.environment.targetBeforeState.externalDefaultPreset === undefined
   ) {
     return failure(EXIT_CODES.CONTRACT, [
       diagnostic(
