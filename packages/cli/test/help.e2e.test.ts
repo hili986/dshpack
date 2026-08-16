@@ -91,4 +91,29 @@ describe('dshpack --help', () => {
     });
     expect(result.stdout.trim().split('\n')).toHaveLength(1);
   });
+
+  it.each([['switch'], ['list', 'extra']])(
+    'maps child-command schema failure to exit 2: %j',
+    (...args) => {
+      const result = spawnSync(process.execPath, [binPath, ...args], { encoding: 'utf8' });
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('error:');
+      expect(result.stderr).not.toContain('CommanderError');
+    },
+  );
+
+  it('keeps child-command JSON schema failure to one stdout object', () => {
+    const result = spawnSync(process.execPath, [binPath, '--json', 'switch'], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'E_USAGE', severity: 'error' })],
+    });
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+  });
 });

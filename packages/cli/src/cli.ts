@@ -59,12 +59,16 @@ export function createProgram(): Command {
   return program;
 }
 
+function configureErrorBoundary(command: Command, json: boolean): void {
+  command.exitOverride();
+  if (json) command.configureOutput({ writeErr: () => undefined });
+  for (const child of command.commands) configureErrorBoundary(child, json);
+}
+
 export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
   const json = argv.includes('--json');
-  const program = createProgram().exitOverride();
-  if (json) {
-    program.configureOutput({ writeErr: () => undefined });
-  }
+  const program = createProgram();
+  configureErrorBoundary(program, json);
   try {
     await program.parseAsync(argv);
   } catch (error) {
