@@ -37,6 +37,8 @@ export interface BoundedReadDependencies {
 export interface SnapshotCaptureDependencies extends BoundedReadDependencies {
   realpathPath?: (path: string) => Promise<string>;
   listDirectory?: (path: string) => AsyncIterable<{ name: string }>;
+  /** Skip a relative entry before lstat or descent, for ignored source trees such as .git/. */
+  skipPath?: (path: string) => boolean;
 }
 
 export interface CapturedSnapshotFile {
@@ -184,6 +186,7 @@ export async function captureSourceDirectory(
   const lstatPath = dependencies.lstatPath ?? defaultLstat;
   const realpathPath = dependencies.realpathPath ?? realpath;
   const listDirectory = dependencies.listDirectory ?? defaultListDirectory;
+  const skipPath = dependencies.skipPath ?? (() => false);
   const logicalRoot = resolve(root);
   const rootBefore = await lstatPath(logicalRoot);
   if (rootBefore.kind !== 'directory') {
@@ -217,6 +220,7 @@ export async function captureSourceDirectory(
       const absolute = resolve(directory, item.name);
       const path = relative(logicalRoot, absolute).split(sep).join('/');
       assertPortableSnapshotPath(path);
+      if (skipPath(path)) continue;
       const metadata = await lstatPath(absolute);
       if (metadata.kind === 'directory') {
         entries.push({ path, kind: 'directory' });

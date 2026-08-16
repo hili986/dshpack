@@ -11,7 +11,11 @@ import {
   parsePack,
 } from '@dshpack/core';
 
-import { validateLocalPack } from '../validation/validate-pack.js';
+import {
+  isIgnoredPackPath,
+  isSemanticPackPath,
+  validateLocalPack,
+} from '../validation/validate-pack.js';
 import {
   captureSourceDirectory,
   MAX_SOURCE_FILE_BYTES,
@@ -204,15 +208,15 @@ export async function readValidatedPack(
     let sourcePaths: string[];
     let sourceFiles: ValidatedPackFile[];
     if (dependencies.listPaths === undefined) {
-      const captured = await captureSourceDirectory(directory);
+      const captured = await captureSourceDirectory(directory, { skipPath: isIgnoredPackPath });
       sourcePaths = captured.entries.map(({ path, kind }) =>
         kind === 'directory' ? `${path}/` : path,
       );
       sourceFiles = encodeCapturedFiles(captured.files);
     } else {
-      sourcePaths = [...(await dependencies.listPaths(directory))].sort((left, right) =>
-        left.localeCompare(right, 'en'),
-      );
+      sourcePaths = [...(await dependencies.listPaths(directory))]
+        .filter((path) => !isIgnoredPackPath(path))
+        .sort((left, right) => left.localeCompare(right, 'en'));
       sourceFiles = await capture(directory, sourcePaths, dependencies);
     }
     workspace = await (
@@ -227,7 +231,7 @@ export async function readValidatedPack(
     if (failures.length > 0) {
       result = { diagnostics: validation.diagnostics, exitCode: validationExitCode(failures) };
     } else {
-      const validated = await captureSourceDirectory(snapshot);
+      const validated = await captureSourceDirectory(snapshot, { skipPath: isIgnoredPackPath });
       const validatedFiles = encodeCapturedFiles(validated.files);
       const validatedPaths = validated.entries.map(({ path, kind }) =>
         kind === 'directory' ? `${path}/` : path,
@@ -255,7 +259,11 @@ export async function readValidatedPack(
           const diagnostics = [...manifest.diagnostics, ...(lock?.diagnostics ?? [])];
           result = { diagnostics, exitCode: validationExitCode(diagnostics) };
         } else {
-          const frozenFiles = Object.freeze(sourceFiles.map((file) => Object.freeze({ ...file })));
+          const frozenFiles = Object.freeze(
+            sourceFiles
+              .filter((file) => isSemanticPackPath(file.path))
+              .map((file) => Object.freeze({ ...file })),
+          );
           const filePaths = frozenFiles.map(({ path }) => path);
           result = {
             material: {

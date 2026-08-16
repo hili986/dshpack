@@ -173,6 +173,28 @@ describe('install source snapshot safety', () => {
     ).rejects.toMatchObject({ kind: 'security' });
   });
 
+  it('skips ignored entries before lstat or recursive traversal', async () => {
+    const directory = { ...fileStat(0), kind: 'directory' as const };
+    const lstatPaths: string[] = [];
+    async function* gitDirectory() {
+      yield { name: '.git' };
+    }
+
+    const captured = await captureSourceDirectory('C:/pack', {
+      skipPath: (path: string) => path === '.git',
+      lstatPath: async (path) => {
+        lstatPaths.push(path);
+        if (path.endsWith('.git')) throw new Error('ignored entry was inspected');
+        return directory;
+      },
+      realpathPath: async (path) => path,
+      listDirectory: gitDirectory,
+    });
+
+    expect(captured).toEqual({ entries: [], files: [] });
+    expect(lstatPaths.some((path) => path.endsWith('.git'))).toBe(false);
+  });
+
   it('rejects the 1001st streamed file entry before opening that entry', async () => {
     const directory = { ...fileStat(0), kind: 'directory' as const };
     let opens = 0;

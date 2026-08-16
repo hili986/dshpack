@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -118,6 +118,50 @@ describe('install plan review mutants', () => {
       'pack.yml',
       'patch/cordis.patch.yml',
     ]);
+  });
+
+  it('scans but excludes repository regular files from installation material', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.github', 'workflows'), { recursive: true });
+    await writeFile(join(root, 'README.md'), '# repository documentation\n');
+    await writeFile(join(root, '.github', 'workflows', 'ci.yml'), 'name: ci\n');
+
+    const result = await readValidatedPack(root);
+
+    expect(result.material).toBeDefined();
+    expect(result.material?.paths).not.toContain('README.md');
+    expect(result.material?.paths).not.toContain('.github/workflows/ci.yml');
+    expect(result.material?.sourceFiles).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'README.md' }),
+        expect.objectContaining({ path: '.github/workflows/ci.yml' }),
+      ]),
+    );
+  });
+
+  it('fails closed for a README secret while never echoing its synthetic token', async () => {
+    const root = await fixture();
+    const token = 'sk-README-READ-TESTONLY-012345678901234567890123';
+    await writeFile(join(root, 'README.md'), `token: ${token}\n`);
+
+    const result = await readValidatedPack(root);
+
+    expect(result).toMatchObject({ exitCode: 31, material: undefined });
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SECRET_KEY' }));
+    expect(JSON.stringify(result.diagnostics)).not.toContain(token.slice(0, 8));
+  });
+
+  it('does not scan ignored git credentials into the validation snapshot', async () => {
+    const root = await fixture();
+    const token = 'sk-GIT-READ-TESTONLY-012345678901234567890123456';
+    await mkdir(join(root, '.git'), { recursive: true });
+    await writeFile(join(root, '.git', 'credential'), `token: ${token}\n`);
+
+    const result = await readValidatedPack(root);
+
+    expect(result.exitCode).toBe(30);
+    expect(result.material).toBeDefined();
+    expect(JSON.stringify(result.diagnostics)).not.toContain(token.slice(0, 8));
   });
 
   it('binds the complete lock document and ordered source file digests into planDigest', async () => {
