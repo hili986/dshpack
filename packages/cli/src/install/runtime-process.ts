@@ -63,7 +63,11 @@ class InstallPathVersionError extends Error {
 }
 
 const defaultSpawn: PathSpawn = async (command, args, options) => {
-  const result = await execa(command, [...args], options);
+  // npm packages on Windows provide both a POSIX no-extension shim and a .cmd shim.
+  // With shell:false, spawning the former can fail before Node considers PATHEXT, so choose
+  // the command shim explicitly while preserving argv-based, direct-child execution.
+  const executable = process.platform === 'win32' ? `${command}.cmd` : command;
+  const result = await execa(executable, [...args], options);
   return {
     exitCode: result.exitCode,
     stdout: result.stdout,
