@@ -3,10 +3,28 @@
   "version": "0.0.0",
   "private": false,
   "description": "Side-effect-free core contracts and operations for dshpack.",
+  "license": "MIT",
+  "author": "dsh-packs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<owner>/<repo>.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/<owner>/<repo>#readme",
+  "bugs": {
+    "url": "https://github.com/<owner>/<repo>/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "pack",
+    "plugin"
+  ],
   "type": "module",
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "schemas"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,7 +32,9 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./schemas/pack.schema.json": "./schemas/pack.schema.json",
+    "./schemas/pack-lock.schema.json": "./schemas/pack-lock.schema.json"
   },
   "publishConfig": {
     "access": "public"

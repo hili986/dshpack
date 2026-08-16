@@ -29,6 +29,9 @@ importers:
       publint:
         specifier: 0.3.23
         version: 0.3.23
+      tar:
+        specifier: 7.5.22
+        version: 7.5.22
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(publint@0.3.23)(typescript@6.0.3)

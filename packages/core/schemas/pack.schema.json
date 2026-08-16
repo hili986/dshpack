@@ -1,0 +1,230 @@
+{
+  "$id": "https://dshpack.dev/schema/pack-v0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "formatVersion",
+    "name",
+    "version",
+    "description",
+    "author",
+    "license",
+    "dsh",
+    "plugins",
+    "mcp",
+    "defaults"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 0,
+      "type": "number"
+    },
+    "name": {
+      "pattern": "^(?!web$)(?!headless$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "minLength": 3,
+      "maxLength": 64,
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "type": "string"
+    },
+    "description": {
+      "minLength": 1,
+      "maxLength": 280,
+      "type": "string"
+    },
+    "author": {
+      "minLength": 1,
+      "maxLength": 160,
+      "type": "string"
+    },
+    "license": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "homepage": {
+      "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$",
+      "type": "string"
+    },
+    "repository": {
+      "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$",
+      "type": "string"
+    },
+    "dsh": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["tested"],
+      "properties": {
+        "tested": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+            "type": "string"
+          }
+        },
+        "compatibility": {
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["name", "source", "allowBuilds"],
+        "properties": {
+          "name": {
+            "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "range"],
+                "properties": {
+                  "kind": {
+                    "const": "npm",
+                    "type": "string"
+                  },
+                  "range": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "owner", "repo", "ref"],
+                "properties": {
+                  "kind": {
+                    "const": "github",
+                    "type": "string"
+                  },
+                  "owner": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "repo": {
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "ref": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "url"],
+                "properties": {
+                  "kind": {
+                    "const": "tarball",
+                    "type": "string"
+                  },
+                  "url": {
+                    "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$",
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "allowBuilds": {
+            "type": "boolean"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "const": "bundle",
+                "type": "string"
+              },
+              {
+                "const": "mcp-client",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["serverName", "transport", "url"],
+        "properties": {
+          "serverName": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "maxLength": 63,
+            "type": "string"
+          },
+          "transport": {
+            "const": "streamable-http",
+            "type": "string"
+          },
+          "url": {
+            "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$",
+            "type": "string"
+          },
+          "description": {
+            "minLength": 1,
+            "maxLength": 280,
+            "type": "string"
+          }
+        }
+      }
+    },
+    "defaults": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["permissionPreset"],
+      "properties": {
+        "agentPreset": {
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "type": "string"
+        },
+        "permissionPreset": {
+          "anyOf": [
+            {
+              "const": "workspace-write",
+              "type": "string"
+            },
+            {
+              "const": "danger-full-access",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    "settings": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["namespaces"],
+      "properties": {
+        "namespaces": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": ["agent-presets"],
+          "properties": {
+            "agent-presets": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

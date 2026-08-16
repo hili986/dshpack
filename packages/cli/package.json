@@ -3,6 +3,23 @@
   "version": "0.0.0",
   "private": false,
   "description": "CLI for packaging and managing DSH distributions.",
+  "license": "MIT",
+  "author": "dsh-packs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/<owner>/<repo>.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/<owner>/<repo>#readme",
+  "bugs": {
+    "url": "https://github.com/<owner>/<repo>/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "pack",
+    "plugin"
+  ],
   "type": "module",
   "sideEffects": false,
   "bin": {

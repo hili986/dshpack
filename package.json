@@ -18,10 +18,11 @@
     "pack:validate": "node scripts/validate-example-pack.mjs",
     "schemas:generate": "node scripts/generate-pack-schemas.mjs",
     "verify:pack-schema": "node scripts/verify-pack-schema.mjs",
+    "verify:release-pack": "node scripts/verify-release-pack.mjs",
     "pack:dry-run": "pnpm --filter @dshpack/core pack --dry-run && pnpm --filter dshpack pack --dry-run",
     "publint": "publint packages/core && publint packages/cli",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:e2e && pnpm pack:validate && pnpm verify:pack-schema",
-    "release:check": "pnpm check && pnpm pack:dry-run && pnpm publint"
+    "release:check": "pnpm check && pnpm pack:dry-run && pnpm verify:release-pack && pnpm publint"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.8",
@@ -31,6 +32,7 @@
     "@vitest/coverage-v8": "4.1.10",
     "fast-check": "4.9.0",
     "publint": "0.3.23",
+    "tar": "7.5.22",
     "tsdown": "0.22.14",
     "typescript": "6.0.3",
     "vitest": "4.1.10",

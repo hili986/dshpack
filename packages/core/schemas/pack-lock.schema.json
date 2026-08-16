@@ -1,0 +1,185 @@
+{
+  "$id": "https://dshpack.dev/schema/pack-lock-v0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "lockVersion",
+    "manifestSha256",
+    "generatedBy",
+    "generatedAt",
+    "dsh",
+    "plugins",
+    "files"
+  ],
+  "properties": {
+    "lockVersion": {
+      "const": 0,
+      "type": "number"
+    },
+    "manifestSha256": {
+      "pattern": "^sha256-[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "generatedBy": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "generatedAt": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T",
+      "type": "string"
+    },
+    "dsh": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["exportedFrom"],
+      "properties": {
+        "exportedFrom": {
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+          "type": "string"
+        }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["name", "resolved", "integrity", "packageJsonSha512", "bundlePatch"],
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "resolved": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["version"],
+                "properties": {
+                  "version": {
+                    "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["commit"],
+                "properties": {
+                  "commit": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                  "url": {
+                    "pattern": "^https://[^/@\\s]+(?:/[^\\s]*)?$",
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "integrity": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "value"],
+                "properties": {
+                  "kind": {
+                    "const": "npm-sri",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$",
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "value"],
+                "properties": {
+                  "kind": {
+                    "const": "git-commit",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^[a-f0-9]{40}$",
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "value"],
+                "properties": {
+                  "kind": {
+                    "const": "sha512",
+                    "type": "string"
+                  },
+                  "value": {
+                    "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$",
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "additionalProperties": false,
+                "type": "object",
+                "required": ["kind", "reason"],
+                "properties": {
+                  "kind": {
+                    "const": "unverified",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "packageJsonSha512": {
+            "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$",
+            "type": "string"
+          },
+          "bundlePatch": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["path", "sha512"],
+        "properties": {
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha512": {
+            "pattern": "^sha512-[A-Za-z0-9+/]+={0,2}$",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
