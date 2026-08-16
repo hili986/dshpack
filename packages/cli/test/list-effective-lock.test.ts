@@ -87,6 +87,53 @@ describe('InstalledMetadataV0 effective lock', () => {
   });
 
   it.each([
+    [
+      'missing lockVersion',
+      (lock: PackLock) => {
+        const { lockVersion: _lockVersion, ...withoutLockVersion } = lock;
+        return withoutLockVersion;
+      },
+    ],
+    ['wrong lockVersion literal', (lock: PackLock) => ({ ...lock, lockVersion: 1 })],
+    ['top-level additional property', (lock: PackLock) => ({ ...lock, unexpected: true })],
+    [
+      'nested additional property',
+      (lock: PackLock) => ({ ...lock, dsh: { ...lock.dsh, unexpected: true } }),
+    ],
+    [
+      'plugin additional property',
+      (lock: PackLock) => ({
+        ...lock,
+        plugins: lock.plugins.map((entry, index) =>
+          index === 0 ? { ...entry, unexpected: true } : entry,
+        ),
+      }),
+    ],
+    [
+      'file additional property',
+      (lock: PackLock) => ({
+        ...lock,
+        files: lock.files.map((entry, index) =>
+          index === 0 ? { ...entry, unexpected: true } : entry,
+        ),
+      }),
+    ],
+    [
+      'invalid file sha512',
+      (lock: PackLock) => ({
+        ...lock,
+        files: lock.files.map((entry, index) =>
+          index === 0 ? { ...entry, sha512: 'md5-not-a-sha512' } : entry,
+        ),
+      }),
+    ],
+  ])('rejects core PackLock shape violation: %s', async (_label, mutate) => {
+    const { home, marker, lock } = await setup();
+    await writeMetadata(home, { ...marker, effectiveLock: mutate(lock) });
+    await expect(inspectMetadata(home, 'demo')).resolves.toMatchObject({ status: 'broken' });
+  });
+
+  it.each([
     ['manifest digest', (lock: PackLock) => ({ ...lock, manifestSha256: SHA256_B })],
     ['plugin count', (lock: PackLock) => ({ ...lock, plugins: lock.plugins.slice(0, 1) })],
     ['plugin order', (lock: PackLock) => ({ ...lock, plugins: [...lock.plugins].reverse() })],
