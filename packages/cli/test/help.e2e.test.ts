@@ -29,7 +29,7 @@ describe('dshpack --help', () => {
     }
   });
 
-  for (const command of commands) {
+  for (const command of ['install', 'list', 'switch', 'init', 'pack'] as const) {
     it(`${command} reports the placeholder contract`, () => {
       const result = spawnSync(process.execPath, [binPath, command], {
         encoding: 'utf8',
@@ -40,4 +40,17 @@ describe('dshpack --help', () => {
       expect(result.stderr).toBe('未实现（W10+）\n');
     });
   }
+
+  it.each(['validate', 'doctor', 'export'])(
+    '%s exposes implemented help instead of the W10 placeholder',
+    (command) => {
+      const result = spawnSync(process.execPath, [binPath, command, '--help'], {
+        encoding: 'utf8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).not.toContain('未实现（W10+）');
+    },
+  );
 });

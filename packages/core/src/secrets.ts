@@ -62,6 +62,13 @@ function shannonEntropy(value: string): number {
   return entropy;
 }
 
+function hasCredentialAlphabet(value: string): boolean {
+  const classes = [/[a-z]/u, /[A-Z]/u, /\d/u, /[+/_=]/u].filter((pattern) => pattern.test(value));
+  // Plain hyphenated package identifiers have high Shannon entropy too; do not turn a verified
+  // bundle name such as @deepseek-ai/dsh-mcp-client into a credential false positive.
+  return classes.length >= 3;
+}
+
 /**
  * Redact credential-shaped text before it crosses a logging boundary.
  * Detection diagnostics intentionally contain only locations; this companion
@@ -86,7 +93,7 @@ export function redactSecrets(content: string): string {
     (_match, boundary: string, prefix: string) => `${boundary}${prefix}${redaction}`,
   );
   output = output.replace(highEntropyCandidate, (candidate) =>
-    shannonEntropy(candidate) >= 3.5 ? redaction : candidate,
+    hasCredentialAlphabet(candidate) && shannonEntropy(candidate) >= 3.5 ? redaction : candidate,
   );
   return output;
 }
@@ -188,7 +195,8 @@ export function scanSecrets(input: SecretScanInput): readonly Diagnostic[] {
   for (const match of input.content.matchAll(highEntropyCandidate)) {
     const value = match[0];
     const index = match.index;
-    if (index === undefined || shannonEntropy(value) < 3.5) continue;
+    if (index === undefined || !hasCredentialAlphabet(value) || shannonEntropy(value) < 3.5)
+      continue;
     const position = lineColumn(input.content, index);
     diagnostics.push(
       error(

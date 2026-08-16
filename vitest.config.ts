@@ -10,8 +10,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/*/test/**/*.test.ts'],
-    exclude: ['packages/*/test/**/*.e2e.test.ts'],
+    include: ['packages/*/test/**/*.test.ts', 'packages/cli/test/export.e2e.test.ts'],
+    exclude: ['packages/cli/test/help.e2e.test.ts', 'packages/cli/test/process.e2e.test.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'json'],
@@ -32,6 +32,8 @@ export default defineConfig({
         'packages/cli/src/transaction-rollback.ts': { branches: 90 },
         'packages/cli/src/transaction-types.ts': { branches: 90 },
         'packages/cli/src/transaction.ts': { branches: 90 },
+        'packages/cli/src/doctor/engine.ts': { branches: 90 },
+        'packages/cli/src/export/engine.ts': { branches: 90 },
       },
     },
   },

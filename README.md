@@ -2,7 +2,7 @@
 
 `dshpack` 旨在为 DSH 提供可复现、可审计、跨平台的 pack 管理格式与 CLI。
 
-> 当前状态：M0 仓库骨架。现阶段只验证 `dshpack --help`；功能命令是占位实现并以 `exit 70` 结束，不能用于真实配置。
+> 当前状态：M0 读侧命令已提供 `validate`、`doctor` 与 `export`。`install`、`list`、`switch`、`init`、`pack` 仍是占位实现并以 `exit 70` 结束。
 
 ## 非目标
 
@@ -24,7 +24,7 @@
 
 ## 3 分钟 Quickstart
 
-M0 仅提供仓库内开发验证，不提供可工作的安装示例：
+M0 先提供只读/导出工作流，不提供安装示例：
 
 ```sh
 corepack enable pnpm
@@ -34,7 +34,7 @@ pnpm build
 node packages/cli/dist/bin.js --help
 ```
 
-`export`、`install`、`list`、`switch`、`doctor`、`validate`、`init` 和 `pack` 将从 W10+ 分阶段落地。它们当前返回 `exit 70`；不要据此判断用户配置、pack 或 DSH 存在问题。
+`validate SOURCE --strict` 只读取本地 pack，绝不调用 dsh 或写盘。`doctor` 和 `export` 为获取 dump 会调用 dsh；上游 dsh 会生成或重写目标 profile 的 `cordis.yml`。务必传入隔离的 `DSH_HOME`，并在对 untracked profile 执行 `doctor` dump 前显式给出 `--yes`。
 
 ## “Will install” 安全示例
 
@@ -58,12 +58,12 @@ Will install
 
 | 命令 | 目标职责 | M0 状态 |
 | --- | --- | --- |
-| `export` | 将受支持配置导出为 pack | 占位，`exit 70` |
+| `export` | 将受支持 profile 导出为 pack | 已实现；三重脱敏、自 validate、原子发布 |
 | `install` | 按 “Will install” 计划安装 pack | 占位，`exit 70` |
 | `list` | 列出可见 pack 或受管状态 | 占位，`exit 70` |
 | `switch` | 切换受管 pack | 占位，`exit 70` |
-| `doctor` | 检查环境和配置边界 | 占位，`exit 70` |
-| `validate` | 验证 pack 格式、来源和完整性 | 占位，`exit 70` |
+| `doctor` | 检查环境和配置边界 | 已实现；dump 具有 `profile/cordis.yml` 副作用 |
+| `validate` | 验证本地 pack 格式、来源和完整性 | 已实现；零写入且不调用 dsh |
 | `init` | 初始化新 pack | 占位，`exit 70` |
 | `pack` | 生成可分发工件 | 占位，`exit 70` |
 
@@ -123,7 +123,7 @@ Windows 是阻塞 CI 平台。开发命令应在 PowerShell 中直接工作，�
 
 ## 故障排查
 
-- `dshpack <command>` 返回 `70`：M0 功能命令仍是占位实现；先用 `dshpack --help` 验证入口。
+- `dshpack install|list|switch|init|pack` 返回 `70`：这些写侧/作者命令仍是占位实现。
 - pnpm 版本不一致：重新运行 `corepack prepare pnpm@11.7.0 --activate`，再检查 `pnpm --version`。
 - `pnpm install --frozen-lockfile` 失败：不要手改 lockfile；确认 Node/pnpm 固定版本并在依赖变更 PR 中重新生成。
 - 安装插件后当前 DSH 没有变化：插件变更不会热加载，必须完全退出并启动一个**新的 DSH 进程**。

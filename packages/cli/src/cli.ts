@@ -1,13 +1,13 @@
 import { Command } from 'commander';
 
-import { doctorCommand } from './commands/doctor.js';
-import { exportCommand } from './commands/export.js';
+import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
+import { exportCommand, registerExportCommand } from './commands/export.js';
 import { initCommand } from './commands/init.js';
 import { installCommand } from './commands/install.js';
 import { listCommand } from './commands/list.js';
 import { packCommand } from './commands/pack.js';
 import { switchCommand } from './commands/switch.js';
-import { validateCommand } from './commands/validate.js';
+import { registerValidateCommand, validateCommand } from './commands/validate.js';
 import { EXIT_CODES } from './exit-codes.js';
 
 const commandDefinitions = [
@@ -40,12 +40,16 @@ export function createProgram(): Command {
     .option('--json', '使用 JSON 输出');
 
   for (const { description, name } of commandDefinitions) {
+    if (name === 'validate' || name === 'doctor' || name === 'export') continue;
     program.command(name).description(description).action(reportNotImplemented);
   }
+  registerValidateCommand(program);
+  registerDoctorCommand(program);
+  registerExportCommand(program);
 
   return program;
 }
 
-export function runCli(argv: readonly string[] = process.argv): void {
-  createProgram().parse(argv);
+export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
+  await createProgram().parseAsync(argv);
 }
