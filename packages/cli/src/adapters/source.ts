@@ -82,7 +82,21 @@ function assertAllowedUrl(url: URL): void {
 
 function assertRawRemoteSyntax(value: string): void {
   const withoutFragment = value.split('#', 1)[0] ?? '';
-  if (withoutFragment.includes('?') || /^(?:https:)?\/\/[^/?#]*@/iu.test(withoutFragment)) {
+  const authorityStart = /^https:\/\//iu.test(withoutFragment)
+    ? 'https://'.length
+    : withoutFragment.startsWith('//')
+      ? 2
+      : undefined;
+  const authority =
+    authorityStart === undefined
+      ? undefined
+      : withoutFragment.slice(authorityStart).split(/[/?#]/u, 1)[0];
+  if (
+    withoutFragment.includes('?') ||
+    withoutFragment.includes('\\') ||
+    (/^https:/iu.test(withoutFragment) && authorityStart === undefined) ||
+    (authority !== undefined && (authority === '' || authority.includes('@')))
+  ) {
     throw sourceFailure('SOURCE_INVALID', '远程 source URL 不符合安全策略。');
   }
 }
@@ -240,8 +254,8 @@ function cleanupOnce(
   let cleaned = false;
   return async () => {
     if (cleaned) return;
+    await removeDirectory(path);
     cleaned = true;
-    await removeDirectory(path).catch(() => undefined);
   };
 }
 

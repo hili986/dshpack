@@ -121,6 +121,14 @@ describe('materializeSource', () => {
     await result.cleanup();
     await expect(access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('propagates cleanup failure and retries removal', async () => {
+    const root = await temporaryRoot(); const source = join(root, 'retry.dshpack.tgz'); const workspace = join(root, 'retry-temp'); await writeFile(source, archive());
+    const removeTempDirectory = vi.fn().mockRejectedValueOnce(new Error('busy')).mockImplementation((path: string) => rm(path, { recursive: true, force: true }));
+    const result = await materialize(source, { makeTempDirectory: async () => { await mkdir(workspace); return workspace; }, removeTempDirectory });
+    await expect(result.cleanup()).rejects.toThrow('busy');
+    await expect(result.cleanup()).resolves.toBeUndefined();
+    expect(removeTempDirectory).toHaveBeenCalledTimes(2);
+  });
   it('rejects missing, non-tarball file, and directory symlink local sources', async () => {
     const root = await temporaryRoot();
     const file = join(root, 'pack.txt');
@@ -151,11 +159,9 @@ describe('materializeSource', () => {
       expect(download).not.toHaveBeenCalled();
     },
   );
-
   it.each(['localhost.', '0.0.0.0', '[::]'])('rejects normalized or unspecified host %s', async (hostname) => {
     const bytes = archive(); await expectSourceError(materialize(`https://${hostname}/a.tgz#${sri(bytes)}`, { download: async () => ({ statusCode: 200, body: chunks(bytes) }) }), 20, 'SOURCE_HOST_REJECTED');
   });
-
   it('requires public DNS answers and binds the validated address against rebinding', async () => {
     const bytes = archive(); const publicAddress = { address: '93.184.216.34', family: 4 as const };
     await expectSourceError(materialize(`https://private.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => [{ address: '10.0.0.1', family: 4 }], download: async () => ({ statusCode: 200, body: chunks(bytes) }) }), 20, 'SOURCE_HOST_REJECTED');
@@ -166,8 +172,7 @@ describe('materializeSource', () => {
     await expectSourceError(materialize(`https://empty.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => [] }), 20, 'SOURCE_HOST_REJECTED');
     await expectSourceError(materialize(`https://failed.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => { throw new Error('dns failure'); } }), 20, 'SOURCE_HOST_REJECTED');
   });
-
-  it.each(['http://example.test/a.tgz', 'https://user@example.test/a.tgz', 'https://example.test/a.tgz?q=x', 'https://@example.test/a.tgz', 'https://example.test/a.tgz?', 'https://[']) (
+  it.each(['http://example.test/a.tgz', 'https://user@example.test/a.tgz', 'https://example.test/a.tgz?q=x', 'https://@example.test/a.tgz', 'https:////@example.test/a.tgz', 'https:\\\\@example.test/a.tgz', 'https://example.test/a.tgz?', 'https://[']) (
     'rejects URL policy violation with an otherwise valid integrity %s',
     async (base) => {
       const download = vi.fn();
@@ -175,7 +180,6 @@ describe('materializeSource', () => {
       expect(download).not.toHaveBeenCalled();
     },
   );
-
   it('applies injectable hostname policy and validates every redirect hop', async () => {
     const bytes = archive();
     const download = vi.fn(async () => ({
@@ -192,7 +196,6 @@ describe('materializeSource', () => {
     expect(download).toHaveBeenCalledTimes(1);
     expect(hostnamePolicy).toHaveBeenCalledWith('example.test');
   });
-
   it('streams a pinned HTTPS tarball through a checked public redirect', async () => {
     const bytes = archive();
     const seen: string[] = [];
@@ -211,13 +214,11 @@ describe('materializeSource', () => {
     await expect(readFile(join(result.directory, 'pack/file.txt'), 'utf8')).resolves.toBe('safe');
     await result.cleanup();
   });
-
-  it.each(['https://@cdn.example/a.tgz', 'https://cdn.example/a.tgz?'])('rejects raw redirect syntax %s before requesting the hop', async (location) => {
+  it.each(['https://@cdn.example/a.tgz', 'https:////@cdn.example/a.tgz', 'https:\\\\@cdn.example/a.tgz', 'https://cdn.example/a.tgz?'])('rejects raw redirect syntax %s before requesting the hop', async (location) => {
     const bytes = archive(); const download = vi.fn(async () => ({ statusCode: 302, location }));
     await expectSourceError(materialize(`https://example.test/a.tgz#${sri(bytes)}`, { download }), 20, 'SOURCE_INVALID');
     expect(download).toHaveBeenCalledTimes(1);
   });
-
   it('uses the default downloader with redirect handling disabled per request', async () => {
     const bytes = archive();
     vi.mocked(lookup).mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never);
@@ -232,7 +233,6 @@ describe('materializeSource', () => {
     expect(redirectBody.destroy).toHaveBeenCalledOnce();
     await result.cleanup();
   });
-
   it('rejects absent and excessive redirects', async () => {
     const bytes = archive();
     await expectSourceError(materialize(`https://example.test/a.tgz#${sri(bytes)}`, {
