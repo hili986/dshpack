@@ -169,17 +169,23 @@ export async function checkSettings(dshHome: string, diagnostics: Diagnostic[]):
       profileDiagnostic('DSH018', 'settings.yaml YAML 无法解析。', '修复 settings YAML。', path),
     );
   const values = document.toJS();
-  if (typeof values === 'object' && values !== null && !Array.isArray(values))
-    for (const key of Object.keys(values))
-      if (key !== 'agent-presets')
-        diagnostics.push(
-          profileDiagnostic(
-            'DSH018',
-            'settings 仅允许检查 agent-presets namespace。',
-            '将其他 namespace 保持为 dsh 自身管理。',
-            path,
-          ),
-        );
+  if (
+    typeof values === 'object' &&
+    values !== null &&
+    !Array.isArray(values) &&
+    Object.hasOwn(values, 'agent-presets')
+  ) {
+    const presets = (values as Record<string, unknown>)['agent-presets'];
+    if (typeof presets !== 'object' || presets === null || Array.isArray(presets))
+      diagnostics.push(
+        profileDiagnostic(
+          'DSH018',
+          'settings.yaml 的 agent-presets namespace 必须是 YAML mapping。',
+          '修复 agent-presets 的 YAML 结构；其他 dsh namespace 不由 dshpack 管理。',
+          path,
+        ),
+      );
+  }
   diagnostics.push(
     ...scanSecrets({ path, content: source, settingsNamespace: 'agent-presets' }).map((item) => ({
       ...item,

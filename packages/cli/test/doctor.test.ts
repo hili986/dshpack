@@ -43,6 +43,7 @@ async function makeDshHome(patch = '[]\n', bundlePatch = './cordis.patch.yml'): 
       `@echo off\n"%DSHPACK_NODE_EXE%" "%~dp0doctor-shim.mjs" %*\n`,
       'utf8',
     );
+    await writeFile(join(shim, 'pnpm.cmd'), '@echo off\necho 10.0.1\n', 'utf8');
   } else {
     await writeFile(
       join(shim, 'dsh'),
@@ -50,12 +51,15 @@ async function makeDshHome(patch = '[]\n', bundlePatch = './cordis.patch.yml'): 
       'utf8',
     );
     await chmod(join(shim, 'dsh'), 0o755);
+    await writeFile(join(shim, 'pnpm'), '#!/bin/sh\necho 10.0.1\n', 'utf8');
+    await chmod(join(shim, 'pnpm'), 0o755);
   }
   return root;
 }
 
 function doctorEnvironment(home: string): NodeJS.ProcessEnv {
   return {
+    ...process.env,
     DSHPACK_NODE_EXE: process.execPath,
     PATH: [join(home, 'shim'), process.env.PATH ?? dirname(process.execPath)].join(delimiter),
   };
@@ -68,6 +72,56 @@ afterEach(async () => {
 });
 
 describe('doctor', () => {
+  it('accepts healthy settings that contain dsh-owned official namespaces in strict mode', async () => {
+    const home = await makeDshHome();
+    await writeFile(
+      join(home, 'settings.yaml'),
+      [
+        'agent-loop: { enabled: true }',
+        'ui-theme: { mode: dark }',
+        'permission: { default: ask }',
+        'agent-presets: { selected: demo-preset }',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const report = await runDoctor({
+      dshHome: home,
+      profile: 'demo',
+      yes: true,
+      strict: true,
+      env: doctorEnvironment(home),
+    });
+
+    console.info(`DOCTOR_HEALTHY_SETTINGS ${JSON.stringify(report)}`);
+    expect(report.exitCode).toBe(0);
+    expect(
+      report.diagnostics.filter(({ code, severity }) => code === 'DSH018' && severity === 'error'),
+    ).toEqual([]);
+  });
+
+  it('reports an invalid agent-presets namespace without inspecting dsh-owned namespaces', async () => {
+    const home = await makeDshHome();
+    await writeFile(
+      join(home, 'settings.yaml'),
+      'agent-loop: { enabled: true }\nagent-presets: not-a-mapping\n',
+      'utf8',
+    );
+
+    const report = await runDoctor({
+      dshHome: home,
+      profile: 'demo',
+      yes: true,
+      strict: true,
+      env: doctorEnvironment(home),
+    });
+
+    expect(report.exitCode).toBe(31);
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'DSH018', severity: 'error' }),
+    );
+  });
+
   it('covers no-profile, absent-profile, deferred fix, and DSH010 repair branches', async () => {
     const home = await makeDshHome('');
     const env = doctorEnvironment(home);
