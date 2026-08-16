@@ -9,7 +9,7 @@ export interface SecretScanInput {
 const sensitiveKey =
   /api[-_]?key|token|secret|password|authorization|cookie|private[-_]?key|client[-_]?secret/iu;
 const tokenPattern =
-  /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9_-]{16,})\b/gu;
+  /\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|(?:sk_live_|pk_live_|rk_live_)[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-proj-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{16,}|npm_[A-Za-z0-9_-]{16,})\b/gu;
 const authorizationPattern = /\b(?:Bearer|Basic)\s+[^\s]+/giu;
 const urlUserinfoPattern = /https?:\/\/[^/\s:@]+:[^@/\s]+@/giu;
 const highEntropyCandidate = /[A-Za-z0-9+/_=-]{24,}/gu;

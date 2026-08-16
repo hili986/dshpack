@@ -68,6 +68,35 @@ describe('four-layer secret scanning', () => {
     ).toBe(true);
   });
 
+  it.each([
+    ['AWS access key ID', 'AKIAIOSFODNN7EXAMPLE'],
+    ['AWS session key ID', 'ASIAIOSFODNN7EXAMPLE'],
+    ['Google API key', `AIza${'a'.repeat(35)}`],
+    ['Stripe secret key', `sk_live_${'a'.repeat(24)}`],
+    ['Stripe publishable key', `pk_live_${'a'.repeat(24)}`],
+    ['Stripe restricted key', `rk_live_${'a'.repeat(24)}`],
+    ['Slack bot token', `xoxb-${'a'.repeat(24)}`],
+    ['Slack app token', `xoxa-${'a'.repeat(24)}`],
+    ['Slack user token', `xoxp-${'a'.repeat(24)}`],
+    ['Slack refresh token', `xoxr-${'a'.repeat(24)}`],
+    ['Slack socket token', `xoxs-${'a'.repeat(24)}`],
+    ['OpenAI project key', `sk-proj-${'a'.repeat(24)}`],
+  ])('detects known cloud credential shape %s even under a non-sensitive key', (_name, value) => {
+    expect(
+      scanSecrets({ path: 'settings/agent-presets.yml', content: `value: ${value}\n` }).some(
+        (diagnostic) => diagnostic.code === 'E_SECRET_TOKEN',
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ['40-character commit SHA', '0123456789abcdef0123456789abcdef01234567'],
+    ['sha512 integrity', `sha512-${'a'.repeat(86)}`],
+    ['verified package name', '@deepseek-ai/dsh-mcp-client'],
+  ])('does not mistake a %s for a credential', (_name, value) => {
+    expect(scanSecrets({ path: 'pack.yml', content: `value: ${value}\n` })).toEqual([]);
+  });
+
   it('enforces the v0 settings namespace whitelist', () => {
     expect(scanSecrets({ path: 'settings/other.yml', settingsNamespace: 'other' })).toEqual([
       expect.objectContaining({ code: 'E_SETTINGS_NAMESPACE' }),
