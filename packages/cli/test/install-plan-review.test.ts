@@ -146,7 +146,8 @@ describe('install plan review mutants', () => {
 
     const result = await readValidatedPack(root);
 
-    expect(result).toMatchObject({ exitCode: 31, material: undefined });
+    expect(result.exitCode).toBe(31);
+    expect(result.material).toBeUndefined();
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ code: 'E_SECRET_KEY' }));
     expect(JSON.stringify(result.diagnostics)).not.toContain(token.slice(0, 8));
   });
