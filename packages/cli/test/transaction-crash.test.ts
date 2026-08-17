@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -83,6 +83,216 @@ describe('transaction crash windows', () => {
         ],
       });
       await expect(stat(skillPath)).resolves.toBeDefined();
+    });
+  });
+
+  it('removes its still-empty GC backup directory when the initial journal write fails', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const txid = 'gc-initial-journal-failure';
+      const backupDirectory = join(dshHome, '.dshpack', 'backups', txid);
+      const adapter: TransactionAdapter = {
+        ...nodeTransactionAdapter,
+        async atomicWriteText(path, contents) {
+          if (path.endsWith('journal.json')) throw new Error('injected initial journal failure');
+          await nodeTransactionAdapter.atomicWriteText(path, contents);
+        },
+      };
+
+      const result = await runTransaction(
+        { adapter, dshHome, txid, purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 70, status: 'not-started', manualRecovery: [] });
+      await expect(stat(backupDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('publishes a GC backup directory only after its initial journal is durable', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const txid = 'gc-publish-after-journal';
+      const backupDirectory = join(dshHome, '.dshpack', 'backups', txid);
+      let published = false;
+      const adapter: TransactionAdapter = {
+        ...nodeTransactionAdapter,
+        async rename(from, to) {
+          if (to === backupDirectory) {
+            published = true;
+            expect(JSON.parse(await readFile(join(from, 'journal.json'), 'utf8'))).toMatchObject({
+              state: 'active',
+            });
+          }
+          await nodeTransactionAdapter.rename(from, to);
+        },
+      };
+
+      const result = await runTransaction(
+        { adapter, dshHome, txid, purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, status: 'committed', manualRecovery: [] });
+      expect(published).toBe(true);
+      expect(
+        JSON.parse(await readFile(join(backupDirectory, 'journal.json'), 'utf8')),
+      ).toMatchObject({
+        state: 'committed',
+      });
+    });
+  });
+
+  it('safely removes an unpublished active setup journal with no transaction actions on the next run', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const stale = join(
+        dshHome,
+        '.dshpack',
+        'backups',
+        '.setup-00000000-0000-4000-8000-000000000000',
+      );
+      const txid = 'gc-crashed-before-setup-publish';
+      await mkdir(stale, { recursive: true });
+      await writeFile(
+        join(stale, 'journal.json'),
+        JSON.stringify({
+          version: 0,
+          txid,
+          purpose: 'gc',
+          dshHome,
+          backupDirectory: join(dshHome, '.dshpack', 'backups', txid),
+          state: 'active',
+          actions: [],
+        }),
+      );
+
+      const result = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'gc-recover-stale-setup', purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, status: 'committed', manualRecovery: [] });
+      await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('removes the exclusive temporary journal left by a crash before provisional journal publish', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const stale = join(
+        dshHome,
+        '.dshpack',
+        'backups',
+        '.setup-11111111-1111-4111-8111-111111111111',
+      );
+      await mkdir(stale, { recursive: true });
+      await writeFile(join(stale, 'journal.json.0123456789ab.tmp'), 'partial journal');
+
+      const result = await runTransaction(
+        {
+          adapter: nodeTransactionAdapter,
+          dshHome,
+          txid: 'gc-recover-journal-temp',
+          purpose: 'gc',
+        },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, status: 'committed', manualRecovery: [] });
+      await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('recovers a provisional journal authored through an equivalent DSH_HOME alias', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const alias = join(root, 'home-alias');
+      const txid = 'gc-recover-alias-setup';
+      const stale = join(
+        dshHome,
+        '.dshpack',
+        'backups',
+        '.setup-22222222-2222-4222-8222-222222222222',
+      );
+      await mkdir(dshHome, { recursive: true });
+      await symlink(dshHome, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      await mkdir(stale, { recursive: true });
+      await writeFile(
+        join(stale, 'journal.json'),
+        JSON.stringify({
+          version: 0,
+          txid,
+          dshHome: alias,
+          backupDirectory: join(alias, '.dshpack', 'backups', txid),
+          state: 'active',
+          actions: [],
+        }),
+      );
+
+      const result = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'gc-alias-recovery-next', purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, status: 'committed', manualRecovery: [] });
+      await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('fails closed when setup directory creation may have succeeded but the adapter cannot prove cleanup', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const txid = 'gc-provisional-mkdir-sync-failure';
+      const backupDirectory = join(dshHome, '.dshpack', 'backups', txid);
+      const adapter: TransactionAdapter = {
+        ...nodeTransactionAdapter,
+        async createDirectoryExclusive(path) {
+          const created = await nodeTransactionAdapter.createDirectoryExclusive(path);
+          if (created) throw new Error('injected parent fsync failure after mkdir');
+          return created;
+        },
+      };
+      delete adapter.removeDirectoryIfEmpty;
+
+      const result = await runTransaction(
+        { adapter, dshHome, txid, purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 25, status: 'not-started' });
+      expect(result.manualRecovery).not.toEqual([]);
+      await expect(stat(backupDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('requires manual recovery when an owned empty setup backup cannot be removed', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const txid = 'gc-initial-journal-cleanup-failure';
+      const backupDirectory = join(dshHome, '.dshpack', 'backups', txid);
+      const adapter: TransactionAdapter = {
+        ...nodeTransactionAdapter,
+        async atomicWriteText(path, contents) {
+          if (path.endsWith('journal.json')) throw new Error('injected initial journal failure');
+          await nodeTransactionAdapter.atomicWriteText(path, contents);
+        },
+        async removeDirectoryIfEmpty() {
+          return false;
+        },
+      };
+
+      const result = await runTransaction(
+        { adapter, dshHome, txid, purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 25, status: 'not-started' });
+      expect(result.manualRecovery).not.toEqual([]);
+      const setup = result.manualRecovery.find((step) => step.actionId === 'setup-backup');
+      if (setup === undefined) throw new Error('missing setup recovery step');
+      await expect(stat(setup.sourcePath)).resolves.toBeDefined();
+      await expect(stat(backupDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 

@@ -18,6 +18,8 @@ import {
   type TransactionMutationKind,
   type TransactionStateDirectoryKind,
   type TransactionStateFileKind,
+  TransactionStateReadLimitError,
+  TransactionStateReadSecurityError,
 } from './transaction-types.js';
 
 interface ActionOptions {
@@ -36,6 +38,30 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return Buffer.from(left).equals(Buffer.from(right));
 }
 
+function mapStateReadFailure(error: unknown, path: string): never {
+  if (error instanceof TransactionStateReadLimitError) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_STATE_READ_LIMIT',
+        `managed state exceeds the bounded read limit: ${path}`,
+        'Inspect or remove the oversized state file before retrying.',
+        path,
+      ),
+    ]);
+  }
+  if (error instanceof TransactionStateReadSecurityError) {
+    throw new TransactionFailure(EXIT_CODES.SECURITY, [
+      diagnostic(
+        'E_TRANSACTION_STATE_READ_SECURITY',
+        `managed state is not a stable regular file: ${path}`,
+        'Inspect the state path for links, special files, hard links, or concurrent changes.',
+        path,
+      ),
+    ]);
+  }
+  throw error;
+}
+
 async function verifyWrittenState(
   adapter: TransactionAdapter,
   path: string,
@@ -51,7 +77,12 @@ async function verifyWrittenState(
       ),
     ]);
   }
-  const actual = await adapter.readBytesIfExists(path);
+  let actual: Uint8Array | undefined;
+  try {
+    actual = await adapter.readBytesIfExists(path);
+  } catch (error) {
+    mapStateReadFailure(error, path);
+  }
   if (actual === undefined || sha256(actual) !== sha256(expected) || !sameBytes(actual, expected)) {
     throw new Error(`written state content is missing or changed: ${path}`);
   }
@@ -234,6 +265,91 @@ export async function writeStateFile(
   action.phase = 'applied';
   await persist();
   return true;
+}
+
+/** Move a verified immutable state file aside so rollback can restore its exact original bytes. */
+export async function deleteStateFile(
+  options: ActionOptions,
+  kind: TransactionStateFileKind,
+  path: string,
+  expectedSha256: string,
+  expectedIdentity: string,
+): Promise<void> {
+  const { adapter, backupDirectory, journal, lock, persist } = options;
+  if (adapter.readBytesIfExists === undefined) {
+    throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+      diagnostic(
+        'E_TRANSACTION_STATE_ADAPTER',
+        'transaction adapter does not support managed binary state reads.',
+        'Use the production transaction adapter or explicitly provide safe byte reads in tests.',
+        path,
+      ),
+    ]);
+  }
+  await adapter.validateMutationPath(lock, kind, path);
+  const before = await adapter.pathIdentity(path);
+  if (before === undefined || before !== expectedIdentity) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_STATE_CHANGED',
+        'immutable transaction state changed before it could be collected.',
+        'Rebuild the garbage-collection plan and retry; no state file was removed.',
+        path,
+      ),
+    ]);
+  }
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = await adapter.readBytesIfExists(path);
+  } catch (error) {
+    mapStateReadFailure(error, path);
+  }
+  const after = await adapter.pathIdentity(path);
+  if (after !== before || bytes === undefined || sha256(bytes) !== expectedSha256) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_STATE_CHANGED',
+        'immutable transaction state changed before it could be collected.',
+        'Rebuild the garbage-collection plan and retry; no state file was removed.',
+        path,
+      ),
+    ]);
+  }
+  const id = actionId(journal.actions.length + 1);
+  const preservedAt = join(backupDirectory, 'old', id);
+  await adapter.ensureDirectory(dirname(preservedAt));
+  const action: ReplaceJournalAction = {
+    id,
+    kind: 'replace',
+    artifact: kind,
+    phase: 'planned',
+    old: { path, exists: true, identity: before, contentSha256: expectedSha256 },
+    new: { path, exists: false, preservedAt },
+  };
+  journal.actions.push(action);
+  // The durable intent is written before the only forward move.
+  await persist();
+  const moved = await adapter.moveArtifactPath(
+    lock,
+    kind,
+    path,
+    preservedAt,
+    'to-backup',
+    expectedIdentity,
+    { contentSha256: expectedSha256 },
+  );
+  if (!moved) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_STATE_CHANGED',
+        'immutable transaction state changed while it was being collected.',
+        'Rebuild the garbage-collection plan and retry; no state file was removed.',
+        path,
+      ),
+    ]);
+  }
+  action.phase = 'applied';
+  await persist();
 }
 
 export async function replaceArtifact(

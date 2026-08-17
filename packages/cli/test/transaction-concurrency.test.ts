@@ -116,6 +116,16 @@ class OwnedMemoryAdapter implements TransactionAdapter {
 
   async validateMutationPath(): Promise<void> {}
 
+  async validateTransactionBackupPath(): Promise<void> {}
+
+  async recoverTransactionSetupDirectories(): Promise<void> {}
+
+  async removeDirectoryIfEmpty(path: string): Promise<boolean> {
+    if (this.entries.get(path) !== '<directory>') return false;
+    this.entries.delete(path);
+    return true;
+  }
+
   populate(path: string, contents = '<artifact>'): void {
     if (!this.entries.has(path)) throw new Error(`not reserved: ${path}`);
     this.entries.set(path, contents);
@@ -156,7 +166,9 @@ describe('transaction ownership and serialization', () => {
       exitCode: 0,
       value: 'installed',
     });
-    expect(adapter.exclusiveCreates).toEqual([result.backupDirectory, skillPath]);
+    expect(adapter.exclusiveCreates).toHaveLength(2);
+    expect(adapter.exclusiveCreates[0]).toMatch(/\\\.setup-[0-9a-f-]+$/u);
+    expect(adapter.exclusiveCreates[1]).toBe(skillPath);
     const intent = adapter.events.findIndex(
       (event) => event.startsWith('journal:') && event.includes('"ownership": "pending"'),
     );

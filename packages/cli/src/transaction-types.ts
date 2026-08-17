@@ -26,6 +26,21 @@ export class TransactionStateReadSecurityError extends Error {
   }
 }
 
+/**
+ * A state mutation crossed an irreversible filesystem boundary but could not complete its
+ * durability acknowledgement. Callers must not report a clean failure with no recovery state.
+ */
+export class TransactionPhysicalProgressError extends Error {
+  constructor(
+    message: string,
+    readonly sourcePath?: string,
+    readonly destinationPath?: string,
+  ) {
+    super(message);
+    this.name = 'TransactionPhysicalProgressError';
+  }
+}
+
 export interface TransactionStateMoveCondition {
   contentSha256?: string;
   empty?: true;
@@ -96,7 +111,23 @@ export interface TransactionAdapter {
   writeExclusiveBytes?(path: string, bytes: Uint8Array): Promise<boolean>;
   /** Check a transaction-owned state parent before it can be removed during rollback. */
   isDirectoryEmpty?(path: string): Promise<boolean>;
+  /** Remove a transaction-owned, still-empty setup directory without touching existing content. */
+  removeDirectoryIfEmpty?(path: string): Promise<boolean>;
+  /**
+   * Permanently remove a verified file from a committed GC quarantine. This is deliberately
+   * adapter-only: transaction callbacks never receive a generic destructive purge capability.
+   */
+  purgeGcQuarantineFile?(
+    lock: TransactionArtifactLock,
+    path: string,
+    expectedSha256: string,
+    expectedIdentity: string,
+  ): Promise<boolean>;
   rename(from: string, to: string): Promise<void>;
+  /** Bind a transaction setup directory to the locked DSH_HOME backup root before each setup write. */
+  validateTransactionBackupPath(lock: TransactionArtifactLock, path: string): Promise<void>;
+  /** Remove only crash-left provisional setup directories that contain no transaction actions. */
+  recoverTransactionSetupDirectories(lock: TransactionArtifactLock): Promise<void>;
   validateMutationPath(
     lock: TransactionArtifactLock,
     kind: TransactionMutationKind,
@@ -152,7 +183,13 @@ export interface ReplaceJournalAction {
   kind: 'replace';
   artifact: TransactionArtifactKind;
   phase: TransactionPhase;
-  old: { path: string; exists: true };
+  old: {
+    path: string;
+    exists: true;
+    /** State-file deletion records the original identity and digest for a safe rollback move. */
+    identity?: string;
+    contentSha256?: string;
+  };
   new: { path: string; exists: false; preservedAt: string };
 }
 
@@ -204,6 +241,8 @@ export type TransactionJournalAction =
 export interface TransactionJournal {
   version: 0;
   txid: string;
+  /** Only GC transactions may create a quarantine eligible for permanent collection. */
+  purpose?: 'gc';
   dshHome: string;
   backupDirectory: string;
   state: TransactionState;
@@ -232,6 +271,13 @@ export interface TransactionContext {
   artifactIdentity(kind: TransactionUserArtifactKind, path: string): Promise<string>;
   readStateBytes(path: string): Promise<Uint8Array | undefined>;
   writeStateFile(kind: TransactionStateFileKind, path: string, bytes: Uint8Array): Promise<boolean>;
+  /** Remove an immutable generation or CAS block through the transaction journal. */
+  deleteStateFile(
+    kind: TransactionStateFileKind,
+    path: string,
+    expectedSha256: string,
+    expectedIdentity: string,
+  ): Promise<void>;
   readGenerationCurrent(path: string): Promise<string | undefined>;
   writeGenerationCurrent(
     path: string,
@@ -262,6 +308,7 @@ export interface RunTransactionOptions {
   adapter: TransactionAdapter;
   dshHome: string;
   txid: string;
+  purpose?: 'gc';
 }
 
 export class TransactionFailure extends Error {

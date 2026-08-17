@@ -67,3 +67,19 @@
 ## 开发与测试边界
 
 自动化测试必须使用隔离的临时目录。除显式人工授权的合约 smoke test 外，不得启动 `dsh`，也不得读取或修改用户真实 `.dsh`、上游仓库或文档仓。
+
+## GC managed-state boundary
+
+- `dshpack gc` only collects generation manifests outside the retained/current set and CAS blocks
+  unreferenced by every retained manifest. It refuses unsafe, special, hard-linked, replaced, or
+  over-limit managed state before applying a collection plan.
+- A GC transaction first quarantines candidate bytes in its journal backup so a failed transaction
+  can roll them back. Only after commit does a separate lease-protected phase verify the recorded
+  identity and SHA-256 again and purge that quarantine payload.
+- When active-state collection has committed but physical reclamation cannot finish, GC reports a
+  successful logical collection with `pendingPurge: true` and retains the sanitized state-failure
+  code/reason. It never claims those quarantine bytes were physically reclaimed. The next non-dry
+  GC run safely retries a still-verified committed GC quarantine; it never purges unrelated
+  transaction backups.
+- A durability or ownership ambiguity requiring manual recovery is never reported as a successful
+  pending purge: it returns exit 25 with explicit recovery information.

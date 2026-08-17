@@ -10,21 +10,24 @@ import {
   readFile,
   rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
-
 import { EXIT_CODES } from '../src/exit-codes.js';
 import type { BoundedReadDependencies, SnapshotStat } from '../src/install/snapshot-capture.js';
+import { casStoreShard } from '../src/metadata/state-storage.js';
 import type { TransactionContext } from '../src/transaction.js';
 import {
   createNodeTransactionAdapter,
   MAX_TRANSACTION_STATE_BYTES,
   runTransaction,
   TransactionFailure,
+  TransactionPhysicalProgressError,
+  TransactionStateReadLimitError,
   TransactionStateReadSecurityError,
 } from '../src/transaction.js';
 import { readBoundedTransactionStateFile } from '../src/transaction-node-adapter.js';
@@ -47,8 +50,7 @@ function digest(bytes: Uint8Array): string {
 
 function storePath(dshHome: string, bytes: Uint8Array): string {
   const value = digest(bytes);
-  const token = value.slice('sha256-'.length);
-  return join(dshHome, '.dshpack', 'store', token.slice(0, 2), value);
+  return join(dshHome, '.dshpack', 'store', casStoreShard(value), value);
 }
 
 function abort(): TransactionFailure {
@@ -147,6 +149,251 @@ async function lstatSnapshot(path: string): Promise<SnapshotStat> {
 }
 
 describe('transaction binary state files', () => {
+  it('permanently purges only an identity-and-digest verified GC quarantine payload', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('direct GC quarantine payload');
+    const path = join(dshHome, '.dshpack', 'backups', 'gc-direct-purge', 'old', 'action-0001');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('GC quarantine fixture identity is missing');
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(bytes), `${identity}-changed`),
+      ).resolves.toBe(false);
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(Buffer.from('wrong')), identity),
+      ).resolves.toBe(false);
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(bytes), identity),
+      ).resolves.toBe(true);
+    } finally {
+      await lock.release();
+    }
+
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a GC quarantine purge path outside the exact committed action slot', async () => {
+    const dshHome = await home();
+    const path = join(dshHome, 'outside-quarantine');
+    await writeFile(path, 'external');
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(Buffer.from('external')), '1:2:3'),
+      ).rejects.toMatchObject({
+        exitCode: 31,
+        diagnostics: [{ code: 'E_TRANSACTION_GC_QUARANTINE_SCOPE' }],
+      });
+    } finally {
+      await lock.release();
+    }
+
+    expect(await readFile(path, 'utf8')).toBe('external');
+  });
+
+  it('moves a post-rename modified GC quarantine payload back instead of deleting it', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('GC quarantine original bytes');
+    const tampered = Buffer.from('GC quarantine user replacement');
+    const path = join(
+      dshHome,
+      '.dshpack',
+      'backups',
+      'gc-post-rename-content',
+      'old',
+      'action-0001',
+    );
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter({}, {
+      afterGcQuarantineRename: async (_from: string, to: string) => writeFile(to, tampered),
+    } as never);
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('GC quarantine fixture identity is missing');
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(bytes), identity),
+      ).resolves.toBe(false);
+    } finally {
+      await lock.release();
+    }
+
+    expect(await readFile(path)).toEqual(tampered);
+  });
+
+  it('moves an equal-byte post-rename GC quarantine replacement back instead of deleting it', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('GC quarantine equal-byte replacement');
+    const path = join(
+      dshHome,
+      '.dshpack',
+      'backups',
+      'gc-post-rename-identity',
+      'old',
+      'action-0001',
+    );
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter({}, {
+      afterGcQuarantineRename: async (_from: string, to: string) => {
+        await rename(to, `${to}.external`);
+        await writeFile(to, bytes);
+      },
+    } as never);
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('GC quarantine fixture identity is missing');
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(bytes), identity),
+      ).resolves.toBe(false);
+    } finally {
+      await lock.release();
+    }
+
+    expect(await readFile(path)).toEqual(bytes);
+    expect(await adapter.pathIdentity(path)).not.toBe(identity);
+  });
+
+  it('restores a GC quarantine payload when post-rename verification throws', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('GC quarantine rollback after hook failure');
+    const path = join(dshHome, '.dshpack', 'backups', 'gc-post-rename-error', 'old', 'action-0001');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter({}, {
+      afterGcQuarantineRename: async () => {
+        throw new Error('injected post-rename proof failure');
+      },
+    } as never);
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('GC quarantine fixture identity is missing');
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(bytes), identity),
+      ).rejects.toThrow('injected post-rename proof failure');
+    } finally {
+      await lock.release();
+    }
+
+    expect(await readFile(path)).toEqual(bytes);
+  });
+
+  it('does not follow a backup-root junction while compensating a post-rename GC purge failure', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('GC quarantine root-swap source');
+    const txid = 'gc-post-rename-root-swap';
+    const path = join(dshHome, '.dshpack', 'backups', txid, 'old', 'action-0001');
+    const backups = join(dshHome, '.dshpack', 'backups');
+    const external = join(dshHome, 'external-backups');
+    let externalPurging: string | undefined;
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter({}, {
+      afterGcQuarantineRename: async (_from: string, to: string) => {
+        await rename(backups, `${backups}.real`);
+        await mkdir(external, { recursive: true });
+        await symlink(external, backups, process.platform === 'win32' ? 'junction' : 'dir');
+        await mkdir(dirname(to), { recursive: true });
+        await writeFile(to, 'external purging sentinel');
+        externalPurging = to;
+      },
+    } as never);
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('GC quarantine fixture identity is missing');
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(bytes), identity),
+      ).rejects.toBeInstanceOf(TransactionPhysicalProgressError);
+    } finally {
+      await lock.release();
+    }
+
+    if (externalPurging === undefined)
+      throw new Error('root-swap hook did not publish its sentinel');
+    expect(await readFile(externalPurging, 'utf8')).toBe('external purging sentinel');
+  });
+
+  it('returns false from dedicated current and marker CAS when their expected documents differ', async () => {
+    const dshHome = await home();
+    const current = join(dshHome, '.dshpack', 'generations', 'demo-pack', 'current');
+    const marker = join(dshHome, '.dshpack', 'installed', 'demo-pack.json');
+    await mkdir(dirname(current), { recursive: true });
+    await mkdir(dirname(marker), { recursive: true });
+    await writeFile(current, '1\n');
+    await writeFile(marker, '{"metadataVersion":1}\n');
+    const adapter = createNodeTransactionAdapter();
+    if (
+      adapter.compareAndSwapGenerationCurrent === undefined ||
+      adapter.compareAndSwapManagedDocument === undefined
+    ) {
+      throw new Error('bounded document CAS adapters are required');
+    }
+
+    await expect(adapter.compareAndSwapGenerationCurrent(current, '2\n', '3\n')).resolves.toBe(
+      false,
+    );
+    await expect(
+      adapter.compareAndSwapManagedDocument(
+        marker,
+        '{"metadataVersion":0}\n',
+        '{"metadataVersion":1}\n',
+      ),
+    ).resolves.toBe(false);
+    expect(await readFile(current, 'utf8')).toBe('1\n');
+    expect(await readFile(marker, 'utf8')).toBe('{"metadataVersion":1}\n');
+  });
+
+  it('rejects an invalid GC quarantine action leaf before touching any bytes', async () => {
+    const dshHome = await home();
+    const path = join(dshHome, '.dshpack', 'backups', 'gc-invalid-action', 'old', 'not-an-action');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, 'external');
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest(Buffer.from('external')), '1:2:3'),
+      ).rejects.toMatchObject({
+        exitCode: 31,
+        diagnostics: [{ code: 'E_TRANSACTION_GC_QUARANTINE_SCOPE' }],
+      });
+    } finally {
+      await lock.release();
+    }
+
+    expect(await readFile(path, 'utf8')).toBe('external');
+  });
+
   it.each(['fifo', 'symlink'] as const)(
     'opens a normal state file with O_NONBLOCK and rejects a pre-open %s swap',
     async (swap) => {
@@ -309,6 +556,306 @@ describe('transaction binary state files', () => {
     expect(await readFile(action.new.rollbackPath)).toEqual(bytes);
   });
 
+  it('restores a transactionally deleted CAS block when a later GC action fails', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('gc state block');
+    const path = storePath(dshHome, bytes);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter();
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined)
+      throw new Error('fixture CAS block is missing its transaction identity');
+    const result = await runTransaction(
+      { adapter, dshHome, txid: 'gc-state-delete-rollback' },
+      async (transaction) => {
+        await transaction.deleteStateFile('store-block', path, digest(bytes), identity);
+        await expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+        throw abort();
+      },
+    );
+
+    expect(result).toMatchObject({ exitCode: 24, status: 'rolled-back', manualRecovery: [] });
+    expect(await readFile(path)).toEqual(bytes);
+  });
+
+  it('rejects a GC state deletion when its adapter lacks bounded binary reads', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('bounded deletion state');
+    const path = storePath(dshHome, bytes);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const base = createNodeTransactionAdapter();
+    const identity = await base.pathIdentity(path);
+    if (identity === undefined) throw new Error('fixture CAS block identity is missing');
+    const { readBytesIfExists: _unsupportedStateReader, ...withoutStateReader } = base;
+    const result = await runTransaction(
+      { adapter: withoutStateReader, dshHome, txid: 'gc-state-delete-no-bounded-reader' },
+      async (transaction) =>
+        transaction.deleteStateFile('store-block', path, digest(bytes), identity),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 70,
+      status: 'rolled-back',
+      manualRecovery: [],
+      diagnostics: [{ code: 'E_TRANSACTION_STATE_ADAPTER', path }],
+      journal: { actions: [] },
+    });
+    expect(await readFile(path)).toEqual(bytes);
+  });
+
+  it('short-circuits a stale GC deletion identity before reading state bytes', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('stale deletion state');
+    const path = storePath(dshHome, bytes);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const base = createNodeTransactionAdapter();
+    let reads = 0;
+    const result = await runTransaction(
+      {
+        adapter: {
+          ...base,
+          readBytesIfExists: async () => {
+            reads += 1;
+            return bytes;
+          },
+        },
+        dshHome,
+        txid: 'gc-state-delete-stale-identity',
+      },
+      async (transaction) =>
+        transaction.deleteStateFile('store-block', path, digest(bytes), 'stale-identity'),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 30,
+      status: 'rolled-back',
+      manualRecovery: [],
+      diagnostics: [{ code: 'E_TRANSACTION_STATE_CHANGED', path }],
+      journal: { actions: [] },
+    });
+    expect(reads).toBe(0);
+    expect(await readFile(path)).toEqual(bytes);
+  });
+
+  it.each([
+    ['an oversized state reader', 'limit'],
+    ['a FIFO-like state reader', 'security'],
+  ] as const)(
+    'maps %s during GC deletion without moving the original',
+    async (_label, scenario) => {
+      const dshHome = await home();
+      const bytes = Buffer.from('state reader failure');
+      const path = storePath(dshHome, bytes);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, bytes);
+      const base = createNodeTransactionAdapter();
+      const identity = await base.pathIdentity(path);
+      if (identity === undefined) throw new Error('fixture CAS block identity is missing');
+      const error =
+        scenario === 'limit'
+          ? new TransactionStateReadLimitError(path, 1)
+          : new TransactionStateReadSecurityError(path, 'FIFO swap');
+      const result = await runTransaction(
+        {
+          adapter: {
+            ...base,
+            readBytesIfExists: async () => {
+              throw error;
+            },
+          },
+          dshHome,
+          txid: `gc-state-delete-${scenario}`,
+        },
+        async (transaction) =>
+          transaction.deleteStateFile('store-block', path, digest(bytes), identity),
+      );
+
+      expect(result).toMatchObject({
+        exitCode: scenario === 'limit' ? 30 : 31,
+        status: 'rolled-back',
+        manualRecovery: [],
+        diagnostics: [
+          {
+            code:
+              scenario === 'limit'
+                ? 'E_TRANSACTION_STATE_READ_LIMIT'
+                : 'E_TRANSACTION_STATE_READ_SECURITY',
+            path,
+          },
+        ],
+        journal: { actions: [] },
+      });
+      expect(await readFile(path)).toEqual(bytes);
+    },
+  );
+
+  it('requires manual recovery when forward GC deletion backup bytes change after rename', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('forward deletion source');
+    const tampered = Buffer.from('unknown post-rename bytes');
+    const path = storePath(dshHome, bytes);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter(
+      {},
+      {
+        afterStateMoveRename: async (from, to) => {
+          if (from === path) await writeFile(to, tampered);
+        },
+      },
+    );
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('fixture CAS block identity is missing');
+    const result = await runTransaction(
+      { adapter, dshHome, txid: 'gc-state-delete-forward-content-change' },
+      async (transaction) =>
+        transaction.deleteStateFile('store-block', path, digest(bytes), identity),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      status: 'rollback-failed',
+    });
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_TRANSACTION_STATE_CHANGED', path }),
+    );
+    expect(result.manualRecovery).toContainEqual(
+      expect.objectContaining({ actionId: 'action-0001', operation: 'rename' }),
+    );
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      await readFile(
+        join(
+          dshHome,
+          '.dshpack',
+          'backups',
+          'gc-state-delete-forward-content-change',
+          'old',
+          'action-0001',
+        ),
+      ),
+    ).toEqual(tampered);
+  });
+
+  it('rolls back an earlier GC deletion when a later state move rejects the plan', async () => {
+    const dshHome = await home();
+    const first = Buffer.from('first gc state block');
+    const second = Buffer.from('second gc state block');
+    const firstPath = storePath(dshHome, first);
+    const secondPath = storePath(dshHome, second);
+    await mkdir(dirname(firstPath), { recursive: true });
+    await mkdir(dirname(secondPath), { recursive: true });
+    await writeFile(firstPath, first);
+    await writeFile(secondPath, second);
+    const base = createNodeTransactionAdapter();
+    const firstIdentity = await base.pathIdentity(firstPath);
+    const secondIdentity = await base.pathIdentity(secondPath);
+    if (firstIdentity === undefined || secondIdentity === undefined)
+      throw new Error('fixture CAS block identity is missing');
+    let moves = 0;
+    const result = await runTransaction(
+      {
+        adapter: {
+          ...base,
+          async moveArtifactPath(lock, kind, from, to, direction, expectedIdentity, condition) {
+            if (direction === 'to-backup' && ++moves === 2) return false;
+            return base.moveArtifactPath(
+              lock,
+              kind,
+              from,
+              to,
+              direction,
+              expectedIdentity,
+              condition,
+            );
+          },
+        },
+        dshHome,
+        txid: 'gc-state-delete-forward-failure',
+      },
+      async (transaction) => {
+        await transaction.deleteStateFile('store-block', firstPath, digest(first), firstIdentity);
+        await transaction.deleteStateFile(
+          'store-block',
+          secondPath,
+          digest(second),
+          secondIdentity,
+        );
+      },
+    );
+
+    expect(result).toMatchObject({ exitCode: 30, status: 'rolled-back', manualRecovery: [] });
+    expect(await readFile(firstPath)).toEqual(first);
+    expect(await readFile(secondPath)).toEqual(second);
+  });
+
+  it('reports manual recovery when an owned GC state deletion cannot be restored', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('manual recovery gc block');
+    const path = storePath(dshHome, bytes);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const base = createNodeTransactionAdapter();
+    const identity = await base.pathIdentity(path);
+    if (identity === undefined) throw new Error('fixture CAS block identity is missing');
+    const result = await runTransaction(
+      {
+        adapter: {
+          ...base,
+          async moveArtifactPath(lock, kind, from, to, direction, expectedIdentity, condition) {
+            if (direction === 'from-backup') return false;
+            return base.moveArtifactPath(
+              lock,
+              kind,
+              from,
+              to,
+              direction,
+              expectedIdentity,
+              condition,
+            );
+          },
+        },
+        dshHome,
+        txid: 'gc-state-delete-rollback-failure',
+      },
+      async (transaction) => {
+        await transaction.deleteStateFile('store-block', path, digest(bytes), identity);
+        throw abort();
+      },
+    );
+
+    expect(result).toMatchObject({ exitCode: 25, status: 'rollback-failed' });
+    expect(result.manualRecovery).not.toEqual([]);
+    await expect(lstat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not restore a deleted CAS block whose backup bytes changed before rollback', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('delete rollback source');
+    const tampered = Buffer.from('delete rollback tampered');
+    const path = storePath(dshHome, bytes);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    const adapter = createNodeTransactionAdapter();
+    const identity = await adapter.pathIdentity(path);
+    if (identity === undefined) throw new Error('fixture CAS block identity is missing');
+    const txid = 'gc-state-delete-backup-content-changed';
+    const backup = join(dshHome, '.dshpack', 'backups', txid, 'old', 'action-0001');
+    const result = await runTransaction({ adapter, dshHome, txid }, async (transaction) => {
+      await transaction.deleteStateFile('store-block', path, digest(bytes), identity);
+      await writeFile(backup, tampered);
+      throw abort();
+    });
+
+    expect(result).toMatchObject({ exitCode: 25, status: 'rollback-failed' });
+    expect(result.manualRecovery).not.toEqual([]);
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(backup)).toEqual(tampered);
+  });
+
   it('fails closed without manual recovery when binary state creation reports not-written or missing', async () => {
     const dshHome = await home();
     const bytes = Buffer.from('state');
@@ -444,7 +991,7 @@ describe('transaction binary state files', () => {
     expect(await readFile(path)).toEqual(tampered);
   });
 
-  it('moves a post-rename tampered CAS block back instead of swallowing it into the backup', async () => {
+  it('leaves a post-rename tampered CAS block in its backup for manual recovery', async () => {
     const dshHome = await home();
     const bytes = Buffer.from([0, 255, 1, 0, 128]);
     const tampered = Buffer.from([0, 255, 1, 0, 127]);
@@ -467,10 +1014,48 @@ describe('transaction binary state files', () => {
 
     expect(result).toMatchObject({ exitCode: 25, status: 'rollback-failed' });
     expect(result.manualRecovery.some((step) => step.sourcePath === path)).toBe(true);
-    expect(await readFile(path)).toEqual(tampered);
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    const action = result.journal.actions.find(
+      (entry) => entry.kind === 'create' && entry.artifact === 'store-block',
+    );
+    if (action === undefined || action.kind !== 'create') throw new Error('state action missing');
+    expect(await readFile(action.new.rollbackPath)).toEqual(tampered);
   });
 
-  it('moves a post-rename nonempty state directory back instead of swallowing unknown files', async () => {
+  it('never restores an unknown post-rename replacement when the mutation hook then throws', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from([0, 255, 1, 0, 128]);
+    const tampered = Buffer.from([0, 255, 1, 0, 126]);
+    const path = storePath(dshHome, bytes);
+    const adapter = createNodeTransactionAdapter(
+      {},
+      {
+        afterStateMoveRename: async (from, to) => {
+          if (from !== path) return;
+          await writeFile(to, tampered);
+          throw new Error('injected post-rename mutation failure');
+        },
+      },
+    );
+    const result = await runTransaction(
+      { adapter, dshHome, txid: 'state-post-rename-tamper-throws' },
+      async (transaction) => {
+        await transaction.writeStateFile('store-block', path, bytes);
+        throw abort();
+      },
+    );
+
+    expect(result).toMatchObject({ exitCode: 25, status: 'rollback-failed' });
+    expect(result.manualRecovery).not.toEqual([]);
+    await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    const action = result.journal.actions.find(
+      (entry) => entry.kind === 'create' && entry.artifact === 'store-block',
+    );
+    if (action === undefined || action.kind !== 'create') throw new Error('state action missing');
+    expect(await readFile(action.new.rollbackPath)).toEqual(tampered);
+  });
+
+  it('leaves a post-rename nonempty state directory in backup for manual recovery', async () => {
     const dshHome = await home();
     const bytes = Buffer.from([0, 255, 1, 0, 128]);
     const path = storePath(dshHome, bytes);
@@ -494,7 +1079,18 @@ describe('transaction binary state files', () => {
 
     expect(result).toMatchObject({ exitCode: 25, status: 'rollback-failed' });
     expect(result.manualRecovery.some((step) => step.sourcePath === directory)).toBe(true);
-    expect(await readFile(join(directory, unknown), 'utf8')).toBe('external');
+    await expect(readFile(join(directory, unknown), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    const action = result.journal.actions.find(
+      (entry) =>
+        entry.kind === 'create' &&
+        entry.artifact === 'store-directory' &&
+        entry.new.path === directory,
+    );
+    if (action === undefined || action.kind !== 'create')
+      throw new Error('state directory action missing');
+    expect(await readFile(join(action.new.rollbackPath, unknown), 'utf8')).toBe('external');
   });
 
   it('does not remove an owned state parent directory after a concurrent unknown entry appears', async () => {
@@ -1031,6 +1627,23 @@ describe('transaction binary state files', () => {
       exitCode: 30,
       diagnostics: [{ code: 'E_MANAGED_DOCUMENT', path: marker }],
     });
+  });
+
+  it('fails closed for missing and non-UTF-8 private rollback document backups', async () => {
+    const dshHome = await home();
+    const backup = join(dshHome, '.dshpack', 'backups', 'tx-private', 'documents', '0001-new');
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.readTransactionBackupText === undefined)
+      throw new Error('bounded private backup reader is required');
+
+    await expect(adapter.readTransactionBackupText(backup, 128)).rejects.toThrow(
+      /backup document is missing/u,
+    );
+    await mkdir(dirname(backup), { recursive: true });
+    await writeFile(backup, Buffer.from([0xff]));
+    await expect(adapter.readTransactionBackupText(backup, 128)).rejects.toBeInstanceOf(
+      TransactionStateReadSecurityError,
+    );
   });
 
   it('restores the exact previous current pointer after a later rollback and rejects stale or failed CAS writes', async () => {

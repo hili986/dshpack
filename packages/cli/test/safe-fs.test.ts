@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import {
   appendFile,
+  link,
   mkdir,
   mkdtemp,
   realpath,
@@ -19,9 +20,11 @@ import {
   bindSecureRoot,
   linkedAncestor,
   MAX_SAFE_TEXT_BYTES,
+  readBytes,
   readDirectory,
   readText,
   revalidateDirectory,
+  sameIdentity,
 } from '../src/list/safe-fs.js';
 
 const roots: string[] = [];
@@ -37,6 +40,13 @@ afterEach(async () => {
 });
 
 describe('secure root ancestors', () => {
+  it('treats birthtime as part of the stable asset identity triple', () => {
+    const stable = { dev: 7n, ino: 9n, birthtimeNs: 11n };
+
+    expect(sameIdentity(stable, { ...stable })).toBe(true);
+    expect(sameIdentity(stable, { ...stable, birthtimeNs: 12n })).toBe(false);
+  });
+
   it('names the linked ancestor, clears an ordinary chain, and fails closed when blind', async () => {
     const outer = await temporary('safe-linked-ancestor');
     const real = join(outer, 'real');
@@ -223,9 +233,130 @@ describe('secure directory bindings', () => {
       kind: 'security',
     });
   });
+
+  it('rejects a same-inode directory whose entry set changes after enumeration', async () => {
+    const root = await temporary('safe-directory-entry-set');
+    const items = join(root, 'items');
+    await mkdir(items);
+    await writeFile(join(items, 'before'), 'before');
+    const stable = await bindSecureRoot(root);
+    if (!stable.ok) throw new Error('fixture root failed');
+    let mutated = false;
+
+    const result = await readDirectory(stable.value, ['items'], {
+      afterDirectoryRead: async (path) => {
+        if (path !== items || mutated) return;
+        mutated = true;
+        await writeFile(join(items, 'appeared-after-enumeration'), 'after');
+      },
+    });
+
+    expect(mutated).toBe(true);
+    expect(result).toMatchObject({ ok: false, kind: 'changed' });
+  });
 });
 
 describe('same-handle text reads', () => {
+  it('returns exact binary bytes, rejects invalid UTF-8 text, and honors a caller-specific bound', async () => {
+    const root = await temporary();
+    const binary = join(root, 'binary.bin');
+    const text = join(root, 'text.txt');
+    await writeFile(binary, Buffer.from([0, 255, 1]));
+    await writeFile(text, 'four');
+    const stable = await bindSecureRoot(root);
+    if (!stable.ok) throw new Error('fixture root failed');
+
+    const bytes = await readBytes(stable.value, ['binary.bin']);
+    expect(bytes).toMatchObject({ ok: true, value: { bytes: Buffer.from([0, 255, 1]) } });
+    if (!bytes.ok) throw new Error('binary fixture did not read');
+    expect(bytes.value.identity.split(':')).toHaveLength(3);
+    await expect(readText(stable.value, ['binary.bin'])).resolves.toMatchObject({
+      ok: false,
+      kind: 'security',
+    });
+    await expect(readBytes(stable.value, ['text.txt'], {}, 3)).resolves.toMatchObject({
+      ok: false,
+      kind: 'limit',
+    });
+  });
+
+  it('opens with O_NONBLOCK and rejects a FIFO-like handle swapped after lstat', async () => {
+    const root = await temporary();
+    const path = join(root, 'state');
+    await writeFile(path, 'regular before the open window');
+    const stable = await bindSecureRoot(root);
+    if (!stable.ok) throw new Error('fixture root failed');
+    let receivedFlags: number | undefined;
+    let reads = 0;
+    const testNonBlockingFlag = 0x40000000;
+
+    const result = await readBytes(stable.value, ['state'], {
+      nonBlockingFlag: testNonBlockingFlag,
+      openFile: async (_path: string, flags: number) => {
+        receivedFlags = flags;
+        return {
+          stat: async () => ({ isFile: () => false, nlink: 1n }),
+          read: async () => {
+            reads += 1;
+            return { bytesRead: 0 };
+          },
+          close: async () => undefined,
+        } as never;
+      },
+    } as never);
+
+    expect(receivedFlags).toBeDefined();
+    expect((receivedFlags as number) & testNonBlockingFlag).not.toBe(0);
+    expect(reads).toBe(0);
+    expect(result).toMatchObject({ ok: false, kind: 'security' });
+  });
+
+  it('rejects an oversized state file before attempting an open', async () => {
+    const root = await temporary('safe-oversized-before-open');
+    const stable = await bindSecureRoot(root);
+    if (!stable.ok) throw new Error('fixture root binding failed');
+    await writeFile(join(root, 'oversized'), Buffer.alloc(129));
+    let opens = 0;
+
+    const result = await readBytes(
+      stable.value,
+      ['oversized'],
+      {
+        openFile: async () => {
+          opens += 1;
+          throw new Error('oversized input must not be opened');
+        },
+      },
+      128,
+    );
+
+    expect(opens).toBe(0);
+    expect(result).toMatchObject({ ok: false, kind: 'limit' });
+  });
+
+  it('rejects an unsafe parent and a final-path replacement after the read snapshot', async () => {
+    const root = await temporary();
+    const parent = join(root, 'not-a-directory');
+    const path = join(root, 'value.txt');
+    await writeFile(parent, 'file');
+    await writeFile(path, 'before');
+    const stable = await bindSecureRoot(root);
+    if (!stable.ok) throw new Error('fixture root failed');
+
+    await expect(readBytes(stable.value, ['not-a-directory', 'child'])).resolves.toMatchObject({
+      ok: false,
+      kind: 'security',
+    });
+    await expect(
+      readBytes(stable.value, ['value.txt'], {
+        afterFileSnapshot: async () => {
+          await rename(path, `${path}.old`);
+          await writeFile(path, 'replacement');
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, kind: 'security' });
+  });
+
   it('classifies missing and non-file entries', async () => {
     const root = await temporary();
     await mkdir(join(root, 'directory'));
@@ -236,6 +367,21 @@ describe('same-handle text reads', () => {
       kind: 'missing',
     });
     await expect(readText(stable.value, ['directory'])).resolves.toMatchObject({
+      ok: false,
+      kind: 'security',
+    });
+  });
+
+  it('refuses a hardlinked state candidate before opening it', async () => {
+    const root = await temporary();
+    const source = join(root, 'source.txt');
+    const linked = join(root, 'linked.txt');
+    await writeFile(source, 'shared bytes');
+    await link(source, linked);
+    const stable = await bindSecureRoot(root);
+    if (!stable.ok) throw new Error('fixture root failed');
+
+    await expect(readText(stable.value, ['linked.txt'])).resolves.toMatchObject({
       ok: false,
       kind: 'security',
     });
@@ -324,7 +470,7 @@ describe('same-handle text reads', () => {
       },
     });
     expect(grown).toBe(true);
-    expect(result).toMatchObject({ ok: false, kind: 'io' });
+    expect(result).toMatchObject({ ok: false, kind: 'limit' });
   });
 
   it('detects a pathname removed after the handle read', async () => {

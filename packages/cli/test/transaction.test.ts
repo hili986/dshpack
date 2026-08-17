@@ -10,6 +10,7 @@ import {
   type TransactionArtifactLock,
   type TransactionArtifactMoveDirection,
   TransactionFailure,
+  TransactionPhysicalProgressError,
 } from '../src/transaction.js';
 
 class MemoryTransactionAdapter implements TransactionAdapter {
@@ -117,6 +118,16 @@ class MemoryTransactionAdapter implements TransactionAdapter {
   }
 
   async validateMutationPath(): Promise<void> {}
+
+  async validateTransactionBackupPath(): Promise<void> {}
+
+  async recoverTransactionSetupDirectories(): Promise<void> {}
+
+  async removeDirectoryIfEmpty(path: string): Promise<boolean> {
+    if (this.entries.get(path) !== '<directory>') return false;
+    this.entries.delete(path);
+    return true;
+  }
 
   create(path: string, contents = '<artifact>'): void {
     if (this.entries.has(path)) throw new Error(`exists: ${path}`);
@@ -377,6 +388,26 @@ describe('runTransaction', () => {
       expect.objectContaining({
         code: 'E_TRANSACTION_SETUP_FAILED',
         message: expect.stringContaining('injected initial journal failure'),
+      }),
+    ]);
+  });
+
+  it('uses the backup directory as the recovery location for physical progress without path details', async () => {
+    const adapter = new MemoryTransactionAdapter();
+    const dshHome = join('sandbox', 'physical-progress-default-home');
+    const result = await runTransaction(
+      { adapter, dshHome, txid: 'tx-physical-progress-defaults' },
+      async () => {
+        throw new TransactionPhysicalProgressError('injected physical progress without paths');
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 25 });
+    expect(result.manualRecovery).toEqual([
+      expect.objectContaining({
+        actionId: 'durability',
+        sourcePath: result.backupDirectory,
+        destinationPath: result.backupDirectory,
       }),
     ]);
   });

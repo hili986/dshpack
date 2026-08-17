@@ -229,12 +229,22 @@ export async function rollbackAction(
   const occupied = await adapter.pathExists(action.old.path);
   if (preserved && occupied) throw new Error(`restore target still exists: ${action.old.path}`);
   if (preserved) {
-    await adapter.moveArtifactPath(
+    const stateCondition =
+      action.artifact === 'store-block' || action.artifact === 'generation'
+        ? action.old.contentSha256 === undefined
+          ? undefined
+          : { contentSha256: action.old.contentSha256 }
+        : undefined;
+    const restored = await adapter.moveArtifactPath(
       lock,
       action.artifact,
       action.old.path,
       action.new.preservedAt,
       'from-backup',
+      action.old.identity,
+      stateCondition,
     );
+    if (!restored)
+      throw new Error(`preserved state changed before rollback: ${action.new.preservedAt}`);
   } else if (!occupied) throw new Error(`preserved original is missing: ${action.new.preservedAt}`);
 }

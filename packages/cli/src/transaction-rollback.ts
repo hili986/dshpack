@@ -15,6 +15,7 @@ import {
   type TransactionArtifactLock,
   TransactionFailure,
   type TransactionJournal,
+  TransactionPhysicalProgressError,
   type TransactionResult,
 } from './transaction-types.js';
 
@@ -37,6 +38,30 @@ export async function rollbackTransaction<T>(
   const operationDiagnostics = normalizedFailures.flatMap(({ diagnostics }) => diagnostics);
   const rollbackDiagnostics: Diagnostic[] = [];
   const manualRecovery: ManualRecoveryStep[] = [];
+  const physicalProgress = failures.find(
+    (failure): failure is TransactionPhysicalProgressError =>
+      failure instanceof TransactionPhysicalProgressError,
+  );
+  if (physicalProgress !== undefined) {
+    const sourcePath = physicalProgress.sourcePath ?? backupDirectory;
+    const destinationPath = physicalProgress.destinationPath ?? backupDirectory;
+    const reason = errorMessage(physicalProgress);
+    rollbackDiagnostics.push(
+      diagnostic(
+        'E_TRANSACTION_DURABILITY_UNKNOWN',
+        'a filesystem mutation completed without a durable acknowledgement.',
+        'Inspect both transaction paths before retrying; automatic rollback cannot prove persistence.',
+        sourcePath,
+      ),
+    );
+    manualRecovery.push({
+      actionId: 'durability',
+      operation: 'inspect-lock',
+      sourcePath,
+      destinationPath,
+      reason,
+    });
+  }
   const persist = (): Promise<void> =>
     adapter.atomicWriteText(journalPath, serializeJournal(journal));
   const reportJournalFailure = (error: unknown): void => {

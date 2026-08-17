@@ -55,9 +55,26 @@ function sha256(bytes: Uint8Array): string {
   return `${SHA256_PREFIX}${createHash('sha256').update(bytes).digest('base64url')}`;
 }
 
+/**
+ * Store directories are portable across Windows' case-insensitive filesystem.  The digest file
+ * remains its exact SRI spelling; only the two-character sharding directory is canonicalized.
+ */
+export function casStoreShard(digest: string): string {
+  return digest.slice(SHA256_PREFIX.length, SHA256_PREFIX.length + 2).toLowerCase();
+}
+
+/** The on-disk shard spelling is part of the portable CAS layout, not a case-insensitive alias. */
+export function isCanonicalCasStoreShard(shard: string, digest: string): boolean {
+  return shard === casStoreShard(digest);
+}
+
+/** A resolved physical shard leaf must retain its portable lower-case spelling. */
+export function isExactCasStoreShardLeaf(actual: string, expected: string): boolean {
+  return actual === expected;
+}
+
 function blockPath(dshHome: string, digest: string): string {
-  const token = digest.slice(SHA256_PREFIX.length);
-  return join(dshHome, '.dshpack', 'store', token.slice(0, 2), digest);
+  return join(dshHome, '.dshpack', 'store', casStoreShard(digest), digest);
 }
 
 export function generationFilename(sequence: number): string {

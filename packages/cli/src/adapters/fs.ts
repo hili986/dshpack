@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { type FileHandle, lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { type FileHandle, lstat, mkdir, open, readFile, rename, rm, rmdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export interface FileSystemAdapter {
@@ -17,13 +17,48 @@ export interface AtomicWriteOptions {
   dirMode?: number;
 }
 
+/** Rename completed, but persisting one of its directory entries failed. */
+export class DurableRenameAfterMoveError extends Error {
+  constructor(
+    readonly source: string,
+    readonly destination: string,
+  ) {
+    super('rename completed but directory durability confirmation failed.');
+    this.name = 'DurableRenameAfterMoveError';
+  }
+}
+
+/** Unlink completed, but persisting its parent directory entry failed. */
+export class DurableRemoveAfterUnlinkError extends Error {
+  constructor(readonly path: string) {
+    super('unlink completed but parent directory durability confirmation failed.');
+    this.name = 'DurableRemoveAfterUnlinkError';
+  }
+}
+
+/** Directory creation succeeded, but persisting its parent entry failed. */
+export class DurableDirectoryCreateError extends Error {
+  constructor(readonly path: string) {
+    super('directory creation completed but parent durability confirmation failed.');
+    this.name = 'DurableDirectoryCreateError';
+  }
+}
+
+/** Directory removal completed, but persisting its parent entry failed. */
+export class DurableDirectoryRemoveError extends Error {
+  constructor(readonly path: string) {
+    super('directory removal completed but parent durability confirmation failed.');
+    this.name = 'DurableDirectoryRemoveError';
+  }
+}
+
 function isUnsupportedDirectorySync(error: unknown): boolean {
   if (process.platform !== 'win32') return false;
   const code = (error as NodeJS.ErrnoException | null)?.code;
   return code === 'EISDIR' || code === 'EINVAL' || code === 'EPERM' || code === 'ENOTSUP';
 }
 
-async function syncDirectory(path: string): Promise<void> {
+export async function syncDirectory(path: string): Promise<void> {
   let handle: FileHandle | undefined;
   try {
     handle = await open(path, 'r');
@@ -33,6 +68,39 @@ async function syncDirectory(path: string): Promise<void> {
     if (!isUnsupportedDirectorySync(error)) throw error;
   } finally {
     await handle?.close();
+  }
+}
+
+/** Rename a state entry and durably persist both affected directory entries. */
+export async function renameDurable(source: string, destination: string): Promise<void> {
+  await rename(source, destination);
+  try {
+    const destinationParent = dirname(destination);
+    const sourceParent = dirname(source);
+    await syncDirectory(destinationParent);
+    if (sourceParent !== destinationParent) await syncDirectory(sourceParent);
+  } catch {
+    throw new DurableRenameAfterMoveError(source, destination);
+  }
+}
+
+/** Remove a quarantined payload only after its parent directory entry is durably updated. */
+export async function removeFileDurable(path: string): Promise<void> {
+  await rm(path);
+  try {
+    await syncDirectory(dirname(path));
+  } catch {
+    throw new DurableRemoveAfterUnlinkError(path);
+  }
+}
+
+/** Remove an empty transaction-owned directory and durably persist its parent entry. */
+export async function removeDirectoryDurable(path: string): Promise<void> {
+  await rmdir(path);
+  try {
+    await syncDirectory(dirname(path));
+  } catch {
+    throw new DurableDirectoryRemoveError(path);
   }
 }
 
@@ -105,12 +173,15 @@ export const nodeFileSystemAdapter: FileSystemAdapter = {
     await mkdir(path, { recursive: true, mode: 0o700 });
   },
   createDirectoryExclusive: async (path) => {
+    let created = false;
     try {
       await mkdir(path, { mode: 0o700 });
+      created = true;
       await syncDirectory(dirname(path));
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+      if (created) throw new DurableDirectoryCreateError(path);
       throw error;
     }
   },
@@ -126,5 +197,5 @@ export const nodeFileSystemAdapter: FileSystemAdapter = {
   readText: (path) => readFile(path, 'utf8'),
   atomicWriteText,
   writeText: atomicWriteText,
-  rename,
+  rename: renameDurable,
 };

@@ -11,6 +11,7 @@ import {
   countMetadataAssetTargetReferences,
   type InstalledMetadataV1,
 } from '../src/metadata/contracts.js';
+import { casStoreShard } from '../src/metadata/state-storage.js';
 import type { TransactionJournal } from '../src/transaction.js';
 import { GENERATED_BY } from '../src/version.js';
 import { enginePack, fakeRuntime, snapshot } from './install-engine-fixture.js';
@@ -32,8 +33,7 @@ function sha256(bytes: Uint8Array): string {
 }
 
 function storePath(dshHome: string, digest: string): string {
-  const token = digest.slice('sha256-'.length);
-  return join(dshHome, '.dshpack', 'store', token.slice(0, 2), digest);
+  return join(dshHome, '.dshpack', 'store', casStoreShard(digest), digest);
 }
 
 function generationPath(dshHome: string, profile: string, sequence: number): string {

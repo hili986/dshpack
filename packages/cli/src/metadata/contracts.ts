@@ -437,7 +437,8 @@ function validAsset(value: unknown, profile: string): value is MetadataAsset {
   return uniquePaths(value.files);
 }
 
-function validSettingsContribution(value: unknown): value is SettingsContribution {
+/** Shared validator for persisted metadata and generation settings facts. */
+export function isValidSettingsContribution(value: unknown): value is SettingsContribution {
   if (
     !isRecord(value) ||
     !exactKeys(value, ['namespace', 'keys']) ||
@@ -486,7 +487,7 @@ function validV1(value: unknown): value is InstalledMetadataV1 {
     !Array.isArray(value.assets) ||
     value.assets.length === 0 ||
     !value.assets.every((asset) => validAsset(asset, profile)) ||
-    !validSettingsContribution(value.settingsContribution) ||
+    !isValidSettingsContribution(value.settingsContribution) ||
     typeof value.generation !== 'number' ||
     !Number.isSafeInteger(value.generation) ||
     value.generation < 1 ||

@@ -1,7 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
+
+import { DurableDirectoryCreateError, DurableRenameAfterMoveError } from './adapters/fs.js';
 import { EXIT_CODES } from './exit-codes.js';
 import {
   createArtifact,
+  deleteStateFile,
   replaceArtifact,
   writeDocument,
   writeStateFile,
@@ -19,6 +23,7 @@ import {
   type TransactionContext,
   TransactionFailure,
   type TransactionJournal,
+  TransactionPhysicalProgressError,
   type TransactionResult,
   type TransactionStateFileKind,
   TransactionStateReadLimitError,
@@ -35,7 +40,7 @@ export async function runTransaction<T>(
   options: RunTransactionOptions,
   operation: (transaction: TransactionContext) => Promise<T>,
 ): Promise<TransactionResult<T>> {
-  const { adapter, dshHome, txid } = options;
+  const { adapter, dshHome, txid, purpose } = options;
   const invalidTxid = invalidTxidDiagnostic(txid);
   const backupDirectory = join(
     dshHome,
@@ -47,6 +52,7 @@ export async function runTransaction<T>(
   const journal: TransactionJournal = {
     version: 0,
     txid,
+    ...(purpose === undefined ? {} : { purpose }),
     dshHome,
     backupDirectory,
     state: invalidTxid === undefined ? 'active' : 'not-started',
@@ -63,8 +69,11 @@ export async function runTransaction<T>(
       manualRecovery: [],
     };
   }
+  const setupDirectory = join(dirname(backupDirectory), `.setup-${randomUUID()}`);
+  const setupJournalPath = join(setupDirectory, 'journal.json');
+  let writableJournalPath = setupJournalPath;
   const persist = async (): Promise<void> => {
-    await adapter.atomicWriteText(journalPath, serializeJournal(journal));
+    await adapter.atomicWriteText(writableJournalPath, serializeJournal(journal));
   };
   let actionQueue = Promise.resolve();
   let actionFailed = false;
@@ -91,6 +100,11 @@ export async function runTransaction<T>(
     }
   };
   let artifactLock: TransactionArtifactLock | undefined;
+  let setupDirectoryOwned = false;
+  let backupDirectoryOwned = false;
+  let setupCreationRequested = false;
+  let setupCreationConfirmedAbsent = false;
+  let setupOwnershipUnknown = false;
   const requireArtifactLock = (): TransactionArtifactLock => {
     if (artifactLock === undefined) throw new Error('artifact lock is unavailable');
     return artifactLock;
@@ -206,6 +220,17 @@ export async function runTransaction<T>(
         ),
       );
     },
+    async deleteStateFile(kind, path, expectedSha256, expectedIdentity) {
+      return serializeAction(() =>
+        deleteStateFile(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          kind,
+          path,
+          expectedSha256,
+          expectedIdentity,
+        ),
+      );
+    },
     async readGenerationCurrent(path) {
       return serializeAction(async () => {
         await adapter.validateMutationPath(requireArtifactLock(), 'generation-current', path);
@@ -283,8 +308,12 @@ export async function runTransaction<T>(
         ),
       ]);
     }
+    const lock = requireArtifactLock();
+    await adapter.recoverTransactionSetupDirectories(lock);
+    await adapter.validateTransactionBackupPath(lock, backupDirectory);
     await adapter.ensureDirectory(dirname(backupDirectory));
-    if (!(await adapter.createDirectoryExclusive(backupDirectory))) {
+    await adapter.validateTransactionBackupPath(lock, backupDirectory);
+    if (await adapter.pathExists(backupDirectory)) {
       journal.state = 'not-started';
       await artifactLock.release();
       artifactLock = undefined;
@@ -304,11 +333,95 @@ export async function runTransaction<T>(
         manualRecovery: [],
       };
     }
-    await adapter.ensureDirectory(backupDirectory);
+    setupCreationRequested = true;
+    await adapter.validateTransactionBackupPath(lock, setupDirectory);
+    if (!(await adapter.createDirectoryExclusive(setupDirectory))) {
+      setupCreationConfirmedAbsent = true;
+      throw new TransactionFailure(EXIT_CODES.PROFILE_CONFLICT_OR_LOCK, [
+        diagnostic(
+          'E_TRANSACTION_SETUP_EXISTS',
+          'transaction setup directory unexpectedly already exists.',
+          'Retry with a new transaction id; no transaction journal was published.',
+          setupDirectory,
+        ),
+      ]);
+    }
+    setupDirectoryOwned = true;
+    await adapter.validateTransactionBackupPath(lock, setupDirectory);
+    await adapter.ensureDirectory(setupDirectory);
+    await adapter.validateTransactionBackupPath(lock, setupDirectory);
     await persist();
+    await adapter.validateTransactionBackupPath(lock, setupDirectory);
+    await adapter.validateTransactionBackupPath(lock, backupDirectory);
+    await adapter.rename(setupDirectory, backupDirectory);
+    setupDirectoryOwned = false;
+    backupDirectoryOwned = true;
+    writableJournalPath = journalPath;
+    await adapter.validateTransactionBackupPath(lock, backupDirectory);
   } catch (error) {
+    if (
+      error instanceof DurableDirectoryCreateError &&
+      error.path === setupDirectory &&
+      !setupDirectoryOwned
+    ) {
+      setupDirectoryOwned = true;
+    }
+    if (
+      error instanceof DurableRenameAfterMoveError &&
+      error.source === setupDirectory &&
+      error.destination === backupDirectory
+    ) {
+      setupDirectoryOwned = false;
+      backupDirectoryOwned = true;
+    }
+    if (
+      setupCreationRequested &&
+      !setupCreationConfirmedAbsent &&
+      !setupDirectoryOwned &&
+      !backupDirectoryOwned
+    ) {
+      setupOwnershipUnknown = true;
+    }
+    const setupPhysicalProgress =
+      error instanceof TransactionPhysicalProgressError
+        ? error
+        : error instanceof DurableDirectoryCreateError && error.path !== setupDirectory
+          ? new TransactionPhysicalProgressError(
+              'transaction metadata directory was created without durable acknowledgement.',
+              error.path,
+              dirname(error.path),
+            )
+          : undefined;
     const lock = artifactLock;
     artifactLock = undefined;
+    let cleanupError: unknown;
+    const cleanupPath = setupDirectoryOwned
+      ? setupDirectory
+      : backupDirectoryOwned
+        ? backupDirectory
+        : undefined;
+    if (cleanupPath !== undefined) {
+      const removeSetupDirectory = adapter.removeDirectoryIfEmpty;
+      if (removeSetupDirectory === undefined) {
+        cleanupError = new Error('transaction adapter cannot remove an owned setup directory');
+      } else {
+        try {
+          if (lock === undefined) throw new Error('artifact lock is unavailable for setup cleanup');
+          await adapter.validateTransactionBackupPath(lock, cleanupPath);
+          if (!(await removeSetupDirectory.call(adapter, cleanupPath))) {
+            cleanupError = new Error('transaction setup backup directory is no longer empty');
+          }
+        } catch (caught) {
+          cleanupError = caught;
+        }
+      }
+    }
+    if (setupOwnershipUnknown) {
+      cleanupError ??= new Error(
+        'transaction setup directory may have been created before failure',
+      );
+    }
+    if (setupPhysicalProgress !== undefined) cleanupError ??= setupPhysicalProgress;
     let releaseError: unknown;
     if (lock !== undefined) {
       try {
@@ -339,29 +452,56 @@ export async function runTransaction<T>(
         ),
       );
     }
+    if (cleanupError !== undefined) {
+      setupDiagnostics.push(
+        diagnostic(
+          'E_TRANSACTION_SETUP_CLEANUP_FAILED',
+          `transaction setup cleanup failed: ${errorMessage(cleanupError)}`,
+          'Inspect the transaction backup directory before retrying; it was not removed automatically.',
+          cleanupPath ?? setupDirectory,
+        ),
+      );
+    }
     return {
       ...resultBase,
       ok: false,
       diagnostics: setupDiagnostics,
       status: 'not-started',
       exitCode:
-        releaseError === undefined
+        releaseError === undefined && cleanupError === undefined
           ? error instanceof TransactionFailure
             ? error.exitCode
             : EXIT_CODES.INTERNAL
           : // The lock file outlived the failed setup; the caller must inspect it by hand.
             EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
       manualRecovery:
-        releaseError === undefined || lock === undefined
+        releaseError === undefined && cleanupError === undefined
           ? []
           : [
-              {
-                actionId: 'artifact-lock',
-                operation: 'inspect-lock',
-                sourcePath: lock.lockPath,
-                destinationPath: lock.lockPath,
-                reason: errorMessage(releaseError),
-              },
+              ...(cleanupError === undefined
+                ? []
+                : [
+                    {
+                      actionId: 'setup-backup',
+                      operation: 'inspect-lock' as const,
+                      sourcePath:
+                        setupPhysicalProgress?.sourcePath ?? cleanupPath ?? setupDirectory,
+                      destinationPath:
+                        setupPhysicalProgress?.destinationPath ?? cleanupPath ?? setupDirectory,
+                      reason: errorMessage(cleanupError),
+                    },
+                  ]),
+              ...(releaseError === undefined || lock === undefined
+                ? []
+                : [
+                    {
+                      actionId: 'artifact-lock',
+                      operation: 'inspect-lock' as const,
+                      sourcePath: lock.lockPath,
+                      destinationPath: lock.lockPath,
+                      reason: errorMessage(releaseError),
+                    },
+                  ]),
             ],
     };
   }

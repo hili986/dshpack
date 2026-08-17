@@ -11,11 +11,22 @@ export interface SafePathHooks {
   afterFileChunk?(path: string, bytesRead: number): Promise<void>;
   afterFileSnapshot?(path: string): Promise<void>;
   afterDirectoryLstat?(path: string): Promise<void>;
+  /** Test seam for a directory whose entry set changes after enumeration. */
+  afterDirectoryRead?(path: string): Promise<void>;
+  /** Called after an entry set has been read and bound, for a later full-scan revalidation. */
+  afterDirectorySnapshot?(
+    binding: DirectoryBinding,
+    entries: readonly Dirent<string>[],
+  ): Promise<void>;
   /** Test seam for an ancestor that cannot be inspected during the reparse-point walk. */
   beforeAncestorLstat?(path: string): Promise<void>;
+  /** Test seam for a file that changes into a special object in the lstat-to-open window. */
+  openFile?(path: string, flags: number): Promise<Awaited<ReturnType<typeof open>>>;
+  /** Test-only stand-in for O_NONBLOCK on platforms where Node exposes it as zero. */
+  nonBlockingFlag?: number;
 }
 
-export type SafePathFailureKind = 'missing' | 'security' | 'io';
+export type SafePathFailureKind = 'missing' | 'security' | 'io' | 'limit' | 'changed';
 
 export interface SafePathFailure {
   ok: false;
@@ -42,16 +53,32 @@ export interface SafeText {
   identity: string;
 }
 
-export const MAX_SAFE_TEXT_BYTES = 1024 * 1024;
-const READ_CHUNK_BYTES = 64 * 1024;
-const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
-
-function identity(stats: { dev: bigint; ino: bigint }): string {
-  return `${stats.dev}:${stats.ino}`;
+export interface SafeBytes {
+  bytes: Buffer;
+  identity: string;
 }
 
-function sameIdentity(left: BigStats, right: BigStats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+/** Immutable observation retained by a higher-level scan until it has the mutation lease. */
+export interface SafeFileSnapshot {
+  segments: readonly [string, ...string[]];
+  identity: string;
+  sha256: string;
+  size: number;
+  maximumBytes: number;
+}
+
+export const MAX_SAFE_TEXT_BYTES = 1024 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
+
+function identity(stats: { dev: bigint; ino: bigint; birthtimeNs: bigint }): string {
+  return `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
+}
+
+export function sameIdentity(
+  left: Pick<BigStats, 'dev' | 'ino' | 'birthtimeNs'>,
+  right: Pick<BigStats, 'dev' | 'ino' | 'birthtimeNs'>,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.birthtimeNs === right.birthtimeNs;
 }
 
 function sameSnapshot(left: BigStats, right: BigStats): boolean {
@@ -61,6 +88,10 @@ function sameSnapshot(left: BigStats, right: BigStats): boolean {
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   );
+}
+
+function sha256(bytes: Uint8Array): string {
+  return `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
 }
 
 function failure(error: unknown, path: string): SafePathFailure {
@@ -75,10 +106,19 @@ function changed(path: string): SafePathFailure {
   return { ok: false, kind: 'security', reason: `路径在安全读取期间被替换：${path}` };
 }
 
+function directoryEntriesChanged(path: string): SafePathFailure {
+  return {
+    ok: false,
+    kind: 'changed',
+    reason: `directory entries changed during stable enumeration: ${path}`,
+  };
+}
+
 async function readBounded(
   handle: Awaited<ReturnType<typeof open>>,
   path: string,
   hooks: SafePathHooks,
+  maximumBytes: number,
 ): Promise<SafePathResult<Buffer>> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -87,8 +127,8 @@ async function readBounded(
     const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
     if (bytesRead === 0) break;
     total += bytesRead;
-    if (total > MAX_SAFE_TEXT_BYTES)
-      return { ok: false, kind: 'io', reason: `文本文件超过 1 MiB 安全上限：${path}` };
+    if (total > maximumBytes)
+      return { ok: false, kind: 'limit', reason: `file exceeds its safe read limit: ${path}` };
     chunks.push(chunk.subarray(0, bytesRead));
     await hooks.afterFileChunk?.(path, total);
   }
@@ -235,18 +275,65 @@ export async function readDirectory(
   const path = (directory.value.entries.at(-1) as DirectoryIdentity).path;
   try {
     const entries = await readdir(path, { encoding: 'utf8', withFileTypes: true });
+    await hooks.afterDirectoryRead?.(path);
+    const afterEntries = await readdir(path, { encoding: 'utf8', withFileTypes: true });
+    if (!sameDirectoryEntries(entries, afterEntries)) return directoryEntriesChanged(path);
     const current = await revalidateDirectory(directory.value, hooks);
-    return current.ok ? { ok: true, value: entries } : current;
+    if (!current.ok) return current;
+    await hooks.afterDirectorySnapshot?.(directory.value, entries);
+    return { ok: true, value: entries };
   } catch (error) {
     return failure(error, path);
   }
 }
 
-export async function readText(
+/** Re-read one enumerated directory and require exactly the same entry set and stable binding. */
+export async function revalidateDirectoryEntries(
+  binding: DirectoryBinding,
+  expected: readonly Dirent<string>[],
+  hooks: SafePathHooks = {},
+): Promise<SafePathResult<void>> {
+  const path = (binding.entries.at(-1) as DirectoryIdentity).path;
+  try {
+    const entries = await readdir(path, { encoding: 'utf8', withFileTypes: true });
+    if (!sameDirectoryEntries(expected, entries)) return directoryEntriesChanged(path);
+    return revalidateDirectory(binding, hooks);
+  } catch (error) {
+    return failure(error, path);
+  }
+}
+
+function directoryEntryType(entry: Dirent<string>): string {
+  if (entry.isDirectory()) return 'directory';
+  if (entry.isFile()) return 'file';
+  if (entry.isSymbolicLink()) return 'symlink';
+  return 'other';
+}
+
+/**
+ * Directory identity alone does not change when a concurrent writer adds or removes a child.
+ * Compare the complete name/type set so callers never plan from a partial generation/CAS view.
+ */
+function sameDirectoryEntries(
+  left: readonly Dirent<string>[],
+  right: readonly Dirent<string>[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const normalize = (entries: readonly Dirent<string>[]) =>
+    entries
+      .map((entry) => `${directoryEntryType(entry)}\u0000${entry.name}`)
+      .sort((first, second) => first.localeCompare(second, 'en'));
+  const before = normalize(left);
+  const after = normalize(right);
+  return before.every((entry, index) => entry === after[index]);
+}
+
+export async function readBytes(
   root: DirectoryBinding,
   segments: readonly [string, ...string[]],
   hooks: SafePathHooks = {},
-): Promise<SafePathResult<SafeText>> {
+  maximumBytes = MAX_SAFE_TEXT_BYTES,
+): Promise<SafePathResult<SafeBytes>> {
   const parents = await appendDirectories(root, segments.slice(0, -1), hooks);
   if (!parents.ok) return parents;
   const path = join(
@@ -259,37 +346,67 @@ export async function readText(
   } catch (error) {
     return failure(error, path);
   }
-  if (!before.isFile() || before.isSymbolicLink())
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n)
     return { ok: false, kind: 'security', reason: `拒绝 symlink 或非普通文件：${path}` };
+  if (before.size > BigInt(maximumBytes)) {
+    return {
+      ok: false,
+      kind: 'limit',
+      reason: `file exceeds its safe read limit: ${path}`,
+    };
+  }
   await hooks.afterFileLstat?.(path);
 
   let handle: Awaited<ReturnType<typeof open>>;
   try {
-    handle = await open(path, READ_FLAGS);
+    const readFlags =
+      constants.O_RDONLY |
+      (constants.O_NOFOLLOW ?? 0) |
+      (hooks.nonBlockingFlag ?? constants.O_NONBLOCK ?? 0);
+    handle = await (hooks.openFile === undefined
+      ? open(path, readFlags)
+      : hooks.openFile(path, readFlags));
   } catch {
     return changed(path);
   }
   try {
     const opened = (await handle.stat({ bigint: true })) as BigStats;
-    if (!opened.isFile() || !sameIdentity(before, opened)) return changed(path);
+    if (!opened.isFile() || opened.nlink !== 1n || !sameIdentity(before, opened))
+      return changed(path);
     await hooks.afterFileOpen?.(path);
     const named = (await lstat(path, { bigint: true })) as BigStats;
-    if (!named.isFile() || named.isSymbolicLink() || !sameIdentity(opened, named))
+    if (
+      !named.isFile() ||
+      named.isSymbolicLink() ||
+      named.nlink !== 1n ||
+      !sameIdentity(opened, named)
+    )
       return changed(path);
-    const bytes = await readBounded(handle, path, hooks);
+    const bytes = await readBounded(handle, path, hooks, maximumBytes);
     if (!bytes.ok) return bytes;
     await hooks.afterFileRead?.(path);
     const after = (await handle.stat({ bigint: true })) as BigStats;
     if (!sameSnapshot(opened, after)) return changed(path);
     await hooks.afterFileSnapshot?.(path);
     const finalPath = (await lstat(path, { bigint: true })) as BigStats;
-    if (!finalPath.isFile() || finalPath.isSymbolicLink() || !sameIdentity(after, finalPath))
+    if (
+      !finalPath.isFile() ||
+      finalPath.isSymbolicLink() ||
+      finalPath.nlink !== 1n ||
+      !sameIdentity(after, finalPath)
+    )
       return changed(path);
+    if (!sameSnapshot(after, finalPath))
+      return {
+        ok: false,
+        kind: 'changed',
+        reason: `file changed after its bounded snapshot: ${path}`,
+      };
     const directories = await revalidateDirectory(parents.value, hooks);
     if (!directories.ok) return directories;
     return {
       ok: true,
-      value: { text: bytes.value.toString('utf8'), identity: identity(opened) },
+      value: { bytes: bytes.value, identity: identity(opened) },
     };
   } catch (error) {
     const result = failure(error, path);
@@ -298,3 +415,41 @@ export async function readText(
     await handle.close().catch(() => undefined);
   }
 }
+
+/** Re-open and compare every component of a prior bounded file observation before mutation. */
+export async function revalidateFileSnapshot(
+  root: DirectoryBinding,
+  snapshot: SafeFileSnapshot,
+  hooks: SafePathHooks = {},
+): Promise<SafePathResult<void>> {
+  const current = await readBytes(root, snapshot.segments, hooks, snapshot.maximumBytes);
+  if (!current.ok) return current;
+  if (
+    current.value.identity !== snapshot.identity ||
+    current.value.bytes.byteLength !== snapshot.size ||
+    sha256(current.value.bytes) !== snapshot.sha256
+  )
+    return {
+      ok: false,
+      kind: 'changed',
+      reason: 'file content changed after it was captured for a managed-state scan.',
+    };
+  return { ok: true, value: undefined };
+}
+
+export async function readText(
+  root: DirectoryBinding,
+  segments: readonly [string, ...string[]],
+  hooks: SafePathHooks = {},
+  maximumBytes = MAX_SAFE_TEXT_BYTES,
+): Promise<SafePathResult<SafeText>> {
+  const bytes = await readBytes(root, segments, hooks, maximumBytes);
+  if (!bytes.ok) return bytes;
+  const text = bytes.value.bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes.value.bytes)) {
+    return { ok: false, kind: 'security', reason: 'file is not valid UTF-8' };
+  }
+  return { ok: true, value: { text, identity: bytes.value.identity } };
+}
+
+import { createHash } from 'node:crypto';

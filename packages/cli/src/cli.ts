@@ -2,6 +2,7 @@ import { Command, CommanderError } from 'commander';
 
 import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
+import { gcCommand, registerGcCommand } from './commands/gc.js';
 import { initCommand } from './commands/init.js';
 import { installCommand, registerInstallCommand } from './commands/install.js';
 import { listCommand, registerListCommand } from './commands/list.js';
@@ -20,6 +21,7 @@ const commandDefinitions = [
   lockCommand,
   switchCommand,
   doctorCommand,
+  gcCommand,
   validateCommand,
   initCommand,
   packCommand,
@@ -66,6 +68,7 @@ export function createProgram(): Command {
     if (
       name === 'validate' ||
       name === 'doctor' ||
+      name === 'gc' ||
       name === 'export' ||
       name === 'install' ||
       name === 'list' ||
@@ -85,6 +88,7 @@ export function createProgram(): Command {
   }
   registerValidateCommand(program);
   registerDoctorCommand(program);
+  registerGcCommand(program);
   registerExportCommand(program);
   registerInstallCommand(program);
   registerListCommand(program);

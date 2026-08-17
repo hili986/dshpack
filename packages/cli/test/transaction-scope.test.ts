@@ -5,7 +5,8 @@ import { dirname, join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { nodeTransactionAdapter, runTransaction } from '../src/transaction.js';
+import { casStoreShard } from '../src/metadata/state-storage.js';
+import { nodeTransactionAdapter, runTransaction, TransactionFailure } from '../src/transaction.js';
 
 async function withTemporaryRoot(
   operation: (root: string, dshHome: string) => Promise<void>,
@@ -227,7 +228,6 @@ describe('transaction mutation path scope', () => {
     await withTemporaryRoot(async (root, dshHome) => {
       const bytes = Buffer.from('state');
       const address = digest(bytes);
-      const token = address.slice('sha256-'.length);
       const outside = join(root, 'outside-state');
       await mkdir(outside, { recursive: true });
       await writeFile(join(outside, 'sentinel'), 'external\n');
@@ -239,7 +239,7 @@ describe('transaction mutation path scope', () => {
         },
         {
           kind: 'store-block' as const,
-          path: join(dshHome, '.dshpack', 'store', token.slice(0, 2), 'extra', address),
+          path: join(dshHome, '.dshpack', 'store', casStoreShard(address), 'extra', address),
           code: 'E_TRANSACTION_STORE_PATH_SCOPE',
         },
         {
@@ -260,13 +260,96 @@ describe('transaction mutation path scope', () => {
         );
         expectScopeFailure(result, entry.code, entry.path);
       }
+      const uppercaseBytes = Buffer.from('case-shard-3014');
+      const uppercaseDigest = digest(uppercaseBytes);
+      expect(casStoreShard(uppercaseDigest)).toBe('db');
+      const uppercasePath = join(dshHome, '.dshpack', 'store', 'DB', uppercaseDigest);
+      const uppercaseResult = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'uppercase-store-directory' },
+        async (transaction) =>
+          transaction.writeStateFile('store-block', uppercasePath, uppercaseBytes),
+      );
+      expectScopeFailure(uppercaseResult, 'E_TRANSACTION_STORE_PATH_SCOPE', uppercasePath);
+      const lock = await nodeTransactionAdapter.acquireArtifactLock(dshHome);
+      try {
+        await expect(
+          nodeTransactionAdapter.validateMutationPath(
+            lock,
+            'store-directory',
+            join(dshHome, '.dshpack', 'store', 'DB'),
+          ),
+        ).rejects.toMatchObject({
+          exitCode: 31,
+          diagnostics: [{ code: 'E_TRANSACTION_STORE_DIRECTORY_SCOPE' }],
+        });
+      } finally {
+        await lock.release();
+      }
       expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
+    });
+  });
+
+  it('rejects a canonical CAS request that resolves through an uppercase physical shard', async () => {
+    await withTemporaryRoot(async (_root, dshHome) => {
+      const bytes = Buffer.from('physical-uppercase-shard');
+      const address = digest(bytes);
+      const shard = casStoreShard(address);
+      const uppercaseShard = shard.toUpperCase();
+      const upperPath = join(dshHome, '.dshpack', 'store', uppercaseShard);
+      const canonicalPath = join(dshHome, '.dshpack', 'store', shard, address);
+      await mkdir(upperPath, { recursive: true });
+      const upperIdentity = await lstat(upperPath, { bigint: true });
+      let aliases = false;
+      try {
+        const canonicalIdentity = await lstat(join(dshHome, '.dshpack', 'store', shard), {
+          bigint: true,
+        });
+        aliases =
+          canonicalIdentity.dev === upperIdentity.dev &&
+          canonicalIdentity.ino === upperIdentity.ino;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+
+      const lock = await nodeTransactionAdapter.acquireArtifactLock(dshHome);
+      try {
+        const validation = nodeTransactionAdapter.validateMutationPath(
+          lock,
+          'store-directory',
+          join(dshHome, '.dshpack', 'store', shard),
+        );
+        if (aliases) {
+          await expect(validation).rejects.toMatchObject({
+            exitCode: 31,
+            diagnostics: [{ code: 'E_TRANSACTION_STORE_DIRECTORY_SCOPE' }],
+          });
+        } else {
+          await expect(validation).resolves.toBeUndefined();
+        }
+      } finally {
+        await lock.release();
+      }
+
+      const result = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'physical-uppercase-store-shard' },
+        async (transaction) => transaction.writeStateFile('store-block', canonicalPath, bytes),
+      );
+
+      if (aliases) {
+        expectScopeFailure(result, 'E_TRANSACTION_STORE_PATH_SCOPE', canonicalPath);
+        await expect(readFile(canonicalPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      } else {
+        // A case-sensitive filesystem keeps DB and db distinct, so no alias is traversed. The
+        // same test body exercises the dangerous physical alias whenever the filesystem has one.
+        expect(result).toMatchObject({ exitCode: 0, status: 'committed', manualRecovery: [] });
+        expect(await readFile(canonicalPath)).toEqual(bytes);
+      }
     });
   });
 
   it('rejects noncanonical managed-marker and generation filename leaves before any state action', async () => {
     await withTemporaryRoot(async (_root, dshHome) => {
-      const managed = ['Bad.json', '.json', 'web.json'];
+      const managed = ['Bad.json', 'Bad', '.json', 'web.json'];
       for (const [index, leaf] of managed.entries()) {
         const path = join(dshHome, '.dshpack', 'installed', leaf);
         const result = await runTransaction(
@@ -318,11 +401,44 @@ describe('transaction mutation path scope', () => {
     });
   });
 
+  it('accepts the transaction-owned generation and installed state roots themselves', async () => {
+    await withTemporaryRoot(async (_root, dshHome) => {
+      const lock = await nodeTransactionAdapter.acquireArtifactLock(dshHome);
+      try {
+        await expect(
+          nodeTransactionAdapter.validateMutationPath(
+            lock,
+            'generation-directory',
+            join(dshHome, '.dshpack', 'generations'),
+          ),
+        ).resolves.toBeUndefined();
+        await expect(
+          nodeTransactionAdapter.validateMutationPath(
+            lock,
+            'generation-directory',
+            join(dshHome, '.dshpack', 'generations', 'web'),
+          ),
+        ).rejects.toMatchObject({
+          exitCode: 31,
+          diagnostics: [{ code: 'E_TRANSACTION_GENERATION_DIRECTORY_SCOPE' }],
+        });
+        await expect(
+          nodeTransactionAdapter.validateMutationPath(
+            lock,
+            'installed-directory',
+            join(dshHome, '.dshpack', 'installed'),
+          ),
+        ).resolves.toBeUndefined();
+      } finally {
+        await lock.release();
+      }
+    });
+  });
+
   it('rejects store and generation parent junctions without touching the external sentinel', async () => {
     await withTemporaryRoot(async (root, dshHome) => {
       const bytes = Buffer.from('state');
       const address = digest(bytes);
-      const token = address.slice('sha256-'.length);
       const outside = join(root, 'outside-state-root');
       await mkdir(outside, { recursive: true });
       await writeFile(join(outside, 'sentinel'), 'external\n');
@@ -332,7 +448,7 @@ describe('transaction mutation path scope', () => {
         join(dshHome, '.dshpack', 'store'),
         process.platform === 'win32' ? 'junction' : 'dir',
       );
-      const storePath = join(dshHome, '.dshpack', 'store', token.slice(0, 2), address);
+      const storePath = join(dshHome, '.dshpack', 'store', casStoreShard(address), address);
       const storeResult = await runTransaction(
         { adapter: nodeTransactionAdapter, dshHome, txid: 'store-parent-junction' },
         async (transaction) => transaction.writeStateFile('store-block', storePath, bytes),
@@ -359,9 +475,8 @@ describe('transaction mutation path scope', () => {
     await withTemporaryRoot(async (root, dshHome) => {
       const bytes = Buffer.from('state');
       const address = digest(bytes);
-      const token = address.slice('sha256-'.length);
       const store = join(dshHome, '.dshpack', 'store');
-      const path = join(store, token.slice(0, 2), address);
+      const path = join(store, casStoreShard(address), address);
       const outside = join(root, 'outside-swapped-store');
       await mkdir(outside, { recursive: true });
       await writeFile(join(outside, 'sentinel'), 'external\n');
@@ -385,7 +500,7 @@ describe('transaction mutation path scope', () => {
       );
       expectScopeFailure(result, 'E_TRANSACTION_STORE_DIRECTORY_SCOPE', store);
       expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
-      await expect(readFile(join(outside, token.slice(0, 2), address))).rejects.toMatchObject({
+      await expect(readFile(join(outside, casStoreShard(address), address))).rejects.toMatchObject({
         code: 'ENOENT',
       });
     });
@@ -395,9 +510,8 @@ describe('transaction mutation path scope', () => {
     await withTemporaryRoot(async (root, dshHome) => {
       const bytes = Buffer.from('state');
       const address = digest(bytes);
-      const token = address.slice('sha256-'.length);
       const store = join(dshHome, '.dshpack', 'store');
-      const prefix = join(store, token.slice(0, 2));
+      const prefix = join(store, casStoreShard(address));
       const path = join(prefix, address);
       const outside = join(root, 'outside-final-store-guard');
       await mkdir(outside, { recursive: true });
@@ -431,6 +545,58 @@ describe('transaction mutation path scope', () => {
       });
       expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
       await expect(readFile(join(outside, address))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
+
+  it('rejects a backup-root junction swapped after lock acquisition before publishing a transaction journal', async () => {
+    await withTemporaryRoot(async (root, dshHome) => {
+      const outside = join(root, 'outside-backups');
+      const backups = join(dshHome, '.dshpack', 'backups');
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, 'sentinel'), 'external\n');
+      const base = nodeTransactionAdapter;
+      let validations = 0;
+      const adapter = {
+        ...base,
+        async validateTransactionBackupPath() {
+          validations += 1;
+          if (validations === 2) {
+            await rm(backups, { recursive: true, force: true });
+            await symlink(outside, backups, process.platform === 'win32' ? 'junction' : 'dir');
+          }
+          if (validations < 2) return;
+          const stats = await lstat(backups);
+          if (stats.isSymbolicLink()) {
+            throw new TransactionFailure(31, [
+              {
+                code: 'E_TRANSACTION_BACKUP_SCOPE',
+                severity: 'error',
+                message: 'backup root is not a stable directory.',
+                hint: 'Repair the backup root before retrying.',
+                path: backups,
+                evidence: 'local',
+              },
+            ]);
+          }
+        },
+      };
+
+      const result = await runTransaction(
+        { adapter, dshHome, txid: 'gc-backup-root-swapped', purpose: 'gc' },
+        async () => undefined,
+      );
+
+      expect(result).toMatchObject({ exitCode: 31, status: 'not-started', manualRecovery: [] });
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ code: 'E_TRANSACTION_BACKUP_SCOPE' }),
+      );
+      expect(validations).toBeGreaterThanOrEqual(2);
+      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
+      await expect(
+        readFile(join(outside, 'gc-backup-root-swapped', 'journal.json')),
+      ).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
   });
 

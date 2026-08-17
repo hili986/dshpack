@@ -15,6 +15,7 @@ import {
   captureInstalledAssets,
   generationDocument,
   generationFilename,
+  isExactCasStoreShardLeaf,
   isManagedProfileInventoryPath,
   nextGeneration,
   settingsContribution,
@@ -72,6 +73,11 @@ function asset(blocks: CapturedInstallAsset['blocks']): CapturedInstallAsset {
 }
 
 describe('metadata state storage boundaries', () => {
+  it('does not case-fold a resolved CAS shard leaf', () => {
+    expect(isExactCasStoreShardLeaf('db', 'db')).toBe(true);
+    expect(isExactCasStoreShardLeaf('DB', 'db')).toBe(false);
+  });
+
   it('rejects malformed and overflowing current pointers before allocating a generation', async () => {
     for (const pointer of ['1', '9007199254740991\n']) {
       await expect(
