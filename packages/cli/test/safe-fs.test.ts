@@ -62,15 +62,16 @@ describe('secure root ancestors', () => {
     'accepts a root spelled as an 8.3 alias, which names the same directory through no link',
     async () => {
       const long = await temporary('safe-shortname');
-      const quoted = long.replaceAll("'", "''");
+      // `cmd`'s %~sI expands to the 8.3 spelling in about 45ms. The COM route through
+      // powershell.exe returns the same string but pays for a shell start plus object
+      // activation, which on a cold CI runner overran the 5s default and failed this
+      // test for a reason that had nothing to do with what it checks.
+      // windowsVerbatimArguments keeps Node from re-quoting the path into the value.
       const short = await new Promise<string>((done, fail) => {
         execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-Command',
-            `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${quoted}').ShortPath`,
-          ],
+          'cmd.exe',
+          ['/d', '/c', `for %I in ("${long}") do @echo %~sI`],
+          { windowsVerbatimArguments: true },
           (error, stdout) => (error === null ? done(stdout.trim()) : fail(error)),
         );
       });
@@ -86,6 +87,9 @@ describe('secure root ancestors', () => {
       await expect(bindSecureRoot(short)).resolves.toMatchObject({ ok: true });
       await expect(linkedAncestor(short)).resolves.toBeUndefined();
     },
+    // Spawning a process is the one slow step here; leave headroom so a busy runner
+    // cannot turn a passing assertion into a timeout.
+    30_000,
   );
 });
 
