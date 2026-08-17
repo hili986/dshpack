@@ -74,9 +74,12 @@ describe('secure root ancestors', () => {
           (error, stdout) => (error === null ? done(stdout.trim()) : fail(error)),
         );
       });
-      // Without this the test would pass while testing nothing: 8.3 generation can be off.
-      expect(short).not.toBe(long);
-      expect(await realpath(short)).toBe(long);
+      // The precondition is that this spelling really is an alias — not merely that it
+      // differs from the one we created the directory with. Without it the test would
+      // pass while testing nothing, since 8.3 generation can be turned off machine-wide.
+      // Stated against realpath so it holds even when TEMP is itself an aliased path.
+      expect(short).not.toBe(await realpath(short));
+      expect(await realpath(short)).toBe(await realpath(long));
 
       // The old check compared this spelling against its realpath and called the
       // difference a symlink ancestor, refusing an ordinary home outright.
