@@ -25,8 +25,8 @@ import {
   isSemanticPackPath,
   validateLocalPack,
 } from '../validation/validate-pack.js';
+import { GENERATED_BY } from '../version.js';
 
-const GENERATED_BY = 'dshpack@0.1.0';
 const LOCK_PROFILE = 'dshpack-lock';
 const DETERMINISTIC_GENERATED_AT = '1970-01-01T00:00:00Z';
 

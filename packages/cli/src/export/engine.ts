@@ -8,6 +8,7 @@ import { type CommandReport, exitCodeFor, strictDiagnostics } from '../commands/
 import { dshOptions, readProfile, text } from '../doctor/support.js';
 import { EXIT_CODES } from '../exit-codes.js';
 import { validateLocalPack } from '../validation/validate-pack.js';
+import { GENERATED_BY } from '../version.js';
 import {
   buildPluginFacts,
   collectOptionalAssets,
@@ -182,7 +183,7 @@ export async function exportProfile(input: ExportInput): Promise<CommandReport<E
   const lock = {
     lockVersion: 0,
     manifestSha256: sha256(Buffer.from(packText)),
-    generatedBy: 'dshpack@0.1.0',
+    generatedBy: GENERATED_BY,
     generatedAt: new Date().toISOString(),
     dsh: { exportedFrom: dshVersion },
     plugins: pluginFacts.locked,

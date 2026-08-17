@@ -1,6 +1,7 @@
 import type { PackLock } from '@dshpack/core';
 
 import type { InstalledMetadataV0 } from '../list/contracts.js';
+import { GENERATED_BY } from '../version.js';
 import type { InstalledPluginFact } from './profile-plugin.js';
 import type { ValidatedPackMaterial } from './read.js';
 import type { InstallPlan } from './types.js';
@@ -14,7 +15,7 @@ export function effectiveInstallLock(
   return {
     lockVersion: 0,
     manifestSha256: plan.manifestDigest,
-    generatedBy: 'dshpack@0.0.0',
+    generatedBy: GENERATED_BY,
     generatedAt,
     dsh: { exportedFrom: plan.dsh.current },
     plugins: plugins.map((plugin) => ({

@@ -12,6 +12,7 @@ vi.mock('../src/export/engine.js', () => ({ exportProfile: runners.exportProfile
 
 import { runCli } from '../src/cli.js';
 import { diagnostic, exitCodeFor, resolveDshHomeValue } from '../src/commands/shared.js';
+import { DSHPACK_VERSION } from '../src/version.js';
 
 interface CapturedRun {
   exitCode: number | undefined;
@@ -242,6 +243,23 @@ describe('JSON mode closure', () => {
     expect(result).toMatchObject({ exitCode: 0, stderr: '' });
     expect(result.stdout.trim().split('\n')).toHaveLength(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ diagnostics: [], help: expect.any(String) });
+  });
+
+  it.each([['-V'], ['--version']] as const)('answers %s with the package version', async (flag) => {
+    const result = await capture([flag]);
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(result.stdout.trim()).toBe(DSHPACK_VERSION);
+  });
+
+  it('reports the version under its own key, not as help text', async () => {
+    const result = await capture(['--version', '--json']);
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report).toMatchObject({ diagnostics: [], version: DSHPACK_VERSION });
+    expect(report).not.toHaveProperty('help');
   });
 });
 

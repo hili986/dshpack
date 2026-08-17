@@ -67,6 +67,7 @@ export default defineConfig({
         'packages/cli/src/lock/engine.ts': { branches: 90 },
         'packages/cli/src/commands/lock.ts': { branches: 90 },
         'packages/cli/src/cli.ts': { branches: 90 },
+        'packages/cli/src/version.ts': { branches: 90 },
         'packages/cli/src/list/contracts.ts': { branches: 90 },
         'packages/cli/src/list/engine.ts': { branches: 90 },
         'packages/cli/src/list/metadata-contract.ts': { branches: 90 },

@@ -11,6 +11,7 @@ import { diagnostic, writeReport } from './commands/shared.js';
 import { registerSwitchCommand, switchCommand } from './commands/switch.js';
 import { registerValidateCommand, validateCommand } from './commands/validate.js';
 import { EXIT_CODES } from './exit-codes.js';
+import { DSHPACK_VERSION } from './version.js';
 
 const commandDefinitions = [
   exportCommand,
@@ -55,6 +56,7 @@ export function createProgram(): Command {
   const program = new Command()
     .name('dshpack')
     .description('dshpack 命令行工具')
+    .version(DSHPACK_VERSION, '-V, --version', '输出 dshpack 版本号')
     .option('--dsh-home <path>', '指定 DSH home 路径')
     .option('--no-color', '禁用彩色输出')
     .option('--quiet', '仅输出必要信息')
@@ -114,14 +116,13 @@ export async function runCli(argv: readonly string[] = process.argv): Promise<vo
     if (error instanceof CommanderError) {
       if (error.exitCode === 0) {
         if (json) {
-          writeReport(
-            {
-              diagnostics: [],
-              exitCode: EXIT_CODES.SUCCESS,
-              metadata: { help: helpOutput.join('') },
-            },
-            true,
-          );
+          // `--version` and `--help` both stop the parse successfully; only the latter
+          // has anything to say in `help`, so report the version under its own key.
+          const metadata =
+            error.code === 'commander.version'
+              ? { version: DSHPACK_VERSION }
+              : { help: helpOutput.join('') };
+          writeReport({ diagnostics: [], exitCode: EXIT_CODES.SUCCESS, metadata }, true);
         } else {
           process.exitCode = EXIT_CODES.SUCCESS;
         }
