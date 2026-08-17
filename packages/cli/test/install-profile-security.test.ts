@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -145,7 +146,10 @@ describe('bundle patch path boundary', () => {
 describe('atomic reads and private tarball staging', () => {
   it('requires private POSIX staging and defers directory ACL enforcement on Windows', async () => {
     const root = await temporary();
-    await expect(requirePrivateDirectory(root)).resolves.toMatchObject({ canonical: root });
+    const canonicalRoot = await realpath(root);
+    await expect(requirePrivateDirectory(root)).resolves.toMatchObject({
+      canonical: canonicalRoot,
+    });
 
     await chmod(root, 0o755);
     if (process.platform !== 'win32') {
@@ -157,7 +161,9 @@ describe('atomic reads and private tarball staging', () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
     try {
-      await expect(requirePrivateDirectory(root)).resolves.toMatchObject({ canonical: root });
+      await expect(requirePrivateDirectory(root)).resolves.toMatchObject({
+        canonical: canonicalRoot,
+      });
     } finally {
       if (platform === undefined) Reflect.deleteProperty(process, 'platform');
       else Object.defineProperty(process, 'platform', platform);
@@ -168,7 +174,8 @@ describe('atomic reads and private tarball staging', () => {
       try {
         const mode = (await lstat(root, { bigint: true })).mode & 0o077n;
         const forcedPosix = requirePrivateDirectory(root);
-        if (mode === 0n) await expect(forcedPosix).resolves.toMatchObject({ canonical: root });
+        if (mode === 0n)
+          await expect(forcedPosix).resolves.toMatchObject({ canonical: canonicalRoot });
         else await expect(forcedPosix).rejects.toMatchObject({ code: 'E_PROFILE_DIRECTORY' });
       } finally {
         if (platform === undefined) Reflect.deleteProperty(process, 'platform');
