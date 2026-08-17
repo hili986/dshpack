@@ -8,7 +8,11 @@ export interface SettingsClock {
 
 export interface YamlSettingsAdapterOptions {
   beforeLockAcquire?: () => Promise<Result<void>>;
+  /** Test seam for replacement between exclusive creation and the writer handle acquisition. */
+  beforeLockWrite?: (path: string) => Promise<void>;
   clock?: SettingsClock;
+  /** Test seam for a retained lock-handle close failure. */
+  closeLockGuard?: (handle: FileHandle) => Promise<void>;
   removeLock?: (path: string) => Promise<void>;
   writeLockContents?: (handle: FileHandle, owner: string) => Promise<void>;
 }
@@ -22,6 +26,7 @@ const systemClock: SettingsClock = {
 };
 const writeLockContents = (handle: FileHandle, owner: string): Promise<void> =>
   handle.writeFile(owner, 'utf8');
+const closeLockGuard = (handle: FileHandle): Promise<void> => handle.close();
 const removeLock = (path: string): Promise<void> => rm(path, { force: true });
 
 function pass<T>(value: T): Result<T> {
@@ -104,6 +109,8 @@ async function tryAcquireLock(
   lockPath: string,
   owner: string,
   write: (handle: FileHandle, owner: string) => Promise<void>,
+  beforeWrite: ((path: string) => Promise<void>) | undefined,
+  closeGuard: (handle: FileHandle) => Promise<void>,
   remove: (path: string) => Promise<void>,
 ): Promise<LockAttempt> {
   let guard: FileHandle;
@@ -118,6 +125,7 @@ async function tryAcquireLock(
   try {
     const stats = await guard.stat({ bigint: true });
     identity = { dev: stats.dev, ino: stats.ino };
+    await beforeWrite?.(lockPath);
     writeHandle = await open(lockPath, 'r+');
     if (!sameIdentity(await writeHandle.stat({ bigint: true }), identity))
       throw new Error('lock replaced');
@@ -129,7 +137,7 @@ async function tryAcquireLock(
     if (identity !== undefined) {
       await removeMatchingLock(lockPath, identity, remove).catch(() => undefined);
     }
-    await guard.close().catch(() => undefined);
+    await closeGuard(guard).catch(() => undefined);
     return { kind: 'io-error' };
   }
 }
@@ -144,6 +152,7 @@ export async function withSettingsFileLock<T>(
   const lockPath = `${filename}.lock`;
   const owner = `${process.pid}\n`;
   const deadline = clock.now() + LOCK_TIMEOUT_MS;
+  const closeGuard = options.closeLockGuard ?? closeLockGuard;
   let delay = LOCK_RETRY_INITIAL_MS;
   let guard: FileHandle;
   let identity: LockIdentity;
@@ -162,6 +171,8 @@ export async function withSettingsFileLock<T>(
       lockPath,
       owner,
       options.writeLockContents ?? writeLockContents,
+      options.beforeLockWrite,
+      closeGuard,
       options.removeLock ?? removeLock,
     );
     if (attempt.kind === 'acquired') {
@@ -197,7 +208,7 @@ export async function withSettingsFileLock<T>(
     releaseFailed = true;
   }
   try {
-    await guard.close();
+    await closeGuard(guard);
   } catch {
     releaseFailed = true;
   }

@@ -257,4 +257,48 @@ describe('settings branch boundaries', () => {
       await expect(readFile(lockPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
+
+  it('stops before the operation when the guarded lock pathname is replaced', async () => {
+    await withScratch(async (directory) => {
+      const filename = join(directory, 'settings.yaml');
+      const lockPath = `${filename}.lock`;
+      let operated = false;
+
+      const result = await withSettingsFileLock(
+        filename,
+        async () => {
+          operated = true;
+          return 'unexpected';
+        },
+        {
+          beforeLockWrite: async (path) => {
+            await rm(path);
+            await writeFile(path, 'replacement\n', { mode: 0o600, flag: 'wx' });
+          },
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(operated).toBe(false);
+      expect(await readFile(lockPath, 'utf8')).toBe('replacement\n');
+    });
+  });
+
+  it('reports an I/O failure when its retained guard cannot be closed', async () => {
+    await withScratch(async (directory) => {
+      const filename = join(directory, 'settings.yaml');
+
+      const result = await withSettingsFileLock(filename, async () => 'done', {
+        closeLockGuard: async (handle) => {
+          await handle.close();
+          throw Object.assign(new Error('synthetic'), { code: 'EIO' });
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toEqual([
+        expect.objectContaining({ code: 'E_SETTINGS_IO', path: `${filename}.lock` }),
+      ]);
+    });
+  });
 });
