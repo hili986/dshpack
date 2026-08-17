@@ -1,4 +1,14 @@
-import { appendFile, mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   bindDirectory,
   bindSecureRoot,
+  linkedAncestor,
   MAX_SAFE_TEXT_BYTES,
   readDirectory,
   readText,
@@ -23,6 +34,56 @@ async function temporary(prefix = 'safe-fs'): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((path) => rm(path, { force: true, recursive: true })));
+});
+
+describe('secure root ancestors', () => {
+  it('names the linked ancestor, clears an ordinary chain, and fails closed when blind', async () => {
+    const outer = await temporary('safe-linked-ancestor');
+    const real = join(outer, 'real');
+    await mkdir(join(real, 'home'), { recursive: true });
+    await expect(linkedAncestor(join(real, 'home'))).resolves.toBeUndefined();
+
+    const link = join(outer, 'link');
+    await symlink(real, link, 'junction');
+    await expect(linkedAncestor(join(link, 'home'))).resolves.toBe(link);
+
+    // An ancestor we cannot inspect is one we cannot vouch for.
+    const blind = join(real, 'home');
+    await expect(
+      linkedAncestor(blind, {
+        beforeAncestorLstat: async (path) => {
+          if (path === real) throw new Error('unreadable ancestor');
+        },
+      }),
+    ).resolves.toBe(real);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'accepts a root spelled as an 8.3 alias, which names the same directory through no link',
+    async () => {
+      const long = await temporary('safe-shortname');
+      const quoted = long.replaceAll("'", "''");
+      const short = await new Promise<string>((done, fail) => {
+        execFile(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-Command',
+            `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${quoted}').ShortPath`,
+          ],
+          (error, stdout) => (error === null ? done(stdout.trim()) : fail(error)),
+        );
+      });
+      // Without this the test would pass while testing nothing: 8.3 generation can be off.
+      expect(short).not.toBe(long);
+      expect(await realpath(short)).toBe(long);
+
+      // The old check compared this spelling against its realpath and called the
+      // difference a symlink ancestor, refusing an ordinary home outright.
+      await expect(bindSecureRoot(short)).resolves.toMatchObject({ ok: true });
+      await expect(linkedAncestor(short)).resolves.toBeUndefined();
+    },
+  );
 });
 
 describe('secure directory bindings', () => {

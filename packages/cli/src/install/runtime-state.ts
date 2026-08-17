@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { linkedAncestor } from '../list/safe-fs.js';
 import { digestTargetBeforeState } from './build-plan.js';
 import type { CaptureInstallTargetInput, InstallTargetCapture } from './runtime-types.js';
 import type { InstallPathBeforeState } from './types.js';
@@ -69,8 +70,9 @@ async function rootIdentity(dshHome: string): Promise<{ canonical: string; stats
   if (!stats.isDirectory() || stats.isSymbolicLink())
     throw new InstallTargetStateError('DSH_HOME 必须是普通目录。', dshHome);
   const canonical = await realpath(dshHome);
-  if (relative(resolve(dshHome), resolve(canonical)) !== '')
-    throw new InstallTargetStateError('DSH_HOME 含 symlink/junction 祖先。', dshHome);
+  const linked = await linkedAncestor(dshHome);
+  if (linked !== undefined)
+    throw new InstallTargetStateError(`DSH_HOME 含 symlink/junction 祖先：${linked}`, dshHome);
   return { canonical, stats };
 }
 

@@ -1,6 +1,6 @@
 import { type BigIntStats, constants, type Dirent } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 type BigStats = BigIntStats;
 
@@ -11,6 +11,8 @@ export interface SafePathHooks {
   afterFileChunk?(path: string, bytesRead: number): Promise<void>;
   afterFileSnapshot?(path: string): Promise<void>;
   afterDirectoryLstat?(path: string): Promise<void>;
+  /** Test seam for an ancestor that cannot be inspected during the reparse-point walk. */
+  beforeAncestorLstat?(path: string): Promise<void>;
 }
 
 export type SafePathFailureKind = 'missing' | 'security' | 'io';
@@ -122,6 +124,36 @@ async function inspectDirectory(
   }
 }
 
+/**
+ * The nearest ancestor of `path` that is a symlink, junction or other reparse point, or
+ * undefined when the whole chain to the drive root is ordinary directories.
+ *
+ * Ancestors are inspected directly rather than by comparing `path` against its realpath.
+ * That comparison cannot answer this question on Windows: an 8.3 alias
+ * (`C:\Users\RUNNER~1\AppData\Local\Temp`) or a differently-cased spelling names exactly
+ * the same directory through no link at all, yet compares unequal — which refused a
+ * perfectly ordinary home as though it were under attack. An ancestor we cannot inspect
+ * is one we cannot vouch for, so it counts as linked.
+ */
+export async function linkedAncestor(
+  path: string,
+  hooks: SafePathHooks = {},
+): Promise<string | undefined> {
+  for (let current = dirname(resolve(path)); ; ) {
+    let stats: BigStats;
+    try {
+      await hooks.beforeAncestorLstat?.(current);
+      stats = (await lstat(current, { bigint: true })) as BigStats;
+    } catch {
+      return current;
+    }
+    if (stats.isSymbolicLink()) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
 export async function bindSecureRoot(
   rootPath: string,
   hooks: SafePathHooks = {},
@@ -130,8 +162,13 @@ export async function bindSecureRoot(
     return { ok: false, kind: 'security', reason: `安全根目录必须是绝对路径：${rootPath}` };
   const root = await inspectDirectory(rootPath, hooks);
   if (!root.ok) return root;
-  if (relative(resolve(rootPath), resolve(root.value.canonical)) !== '')
-    return { ok: false, kind: 'security', reason: `安全根目录含 symlink 祖先：${rootPath}` };
+  const linked = await linkedAncestor(rootPath, hooks);
+  if (linked !== undefined)
+    return {
+      ok: false,
+      kind: 'security',
+      reason: `安全根目录含 symlink 祖先：${linked}`,
+    };
   return {
     ok: true,
     value: { rootPath, rootCanonical: root.value.canonical, entries: [root.value] },
@@ -154,9 +191,9 @@ async function appendDirectories(
       return changed(expected.path);
     entries.push(current.value);
   }
-  const currentRoot = entries[0] as DirectoryIdentity;
-  if (relative(resolve(root.rootPath), resolve(currentRoot.canonical)) !== '')
-    return changed(root.rootPath);
+  // Re-run the ancestor walk rather than compare spellings: an ancestor that became a
+  // junction since the bind must be caught, but an 8.3 alias never was one.
+  if ((await linkedAncestor(root.rootPath, hooks)) !== undefined) return changed(root.rootPath);
   let cursor = (entries.at(-1) as DirectoryIdentity).path;
   for (const segment of segments) {
     cursor = join(cursor, segment);

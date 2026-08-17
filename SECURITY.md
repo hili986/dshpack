@@ -46,6 +46,7 @@
 - **`--yes` 不能替代危险确认**。逐包 `--allow-build` 与 `danger-full-access` 各自需要显式授权；`--replace` 与 `--allow-unverified` 是硬门（不给则不发生 / 直接失败），不走提示路径。任何交互提示默认值为拒绝；非 TTY 缺确认时 exit 21 并打印完整非交互命令。
 - 权限**绝不**因 pack 内容或任务文本而自动升级。
 - 本工具只终止自己派生的进程；不做进程树终止（Windows 上那等同 `taskkill /T`，会误杀用户正在运行的 dsh）。
+- **DSH_HOME 及其每一级祖先都不得是 symlink / junction / reparse point**，否则拒绝——链接可在校验与写入之间被换掉，使"路径在根内"的判断失效。判据是**逐级 `lstat`**，不是把路径字符串和 `realpath` 比：Windows 上 8.3 短名（`C:\Users\RUNNER~1\…`）和不同大小写拼法指向的是同一个目录、中间一个链接也没有，字符串却不相等。无法探查的祖先按"有链接"处理（fail closed）。
 
 ## 凭据处理
 
