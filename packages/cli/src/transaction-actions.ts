@@ -446,39 +446,67 @@ export async function writeDocument(
     await adapter.ensureDirectory(dirname(path));
   }
   await adapter.validateMutationPath(lock, documentKind, path);
-  const originalDocument =
-    documentKind === 'generation-current'
-      ? callerExpected
-      : documentKind === 'managed-document'
-        ? adapter.readManagedDocument === undefined
-          ? (() => {
-              throw new TransactionFailure(EXIT_CODES.INTERNAL, [
-                diagnostic(
-                  'E_TRANSACTION_STATE_ADAPTER',
-                  'transaction adapter does not support bounded managed document reads.',
-                  'Use the production transaction adapter or explicitly provide a bounded reader in tests.',
-                  path,
-                ),
-              ]);
-            })()
-          : await adapter.readManagedDocument(path)
-        : await adapter.readTextIfExists(path);
-  if (documentKind === 'settings' && originalDocument !== callerExpected) {
+  let observedDocument: string | undefined;
+  if (documentKind === 'generation-current') observedDocument = callerExpected;
+  else if (documentKind === 'managed-document') {
+    if (adapter.readManagedDocument === undefined)
+      throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+        diagnostic(
+          'E_TRANSACTION_STATE_ADAPTER',
+          'transaction adapter does not support bounded managed document reads.',
+          'Use the production transaction adapter or explicitly provide a bounded reader in tests.',
+          path,
+        ),
+      ]);
+    try {
+      observedDocument = await adapter.readManagedDocument(path);
+    } catch (error) {
+      if (error instanceof TransactionFailure) throw error;
+      try {
+        mapStateReadFailure(error, path);
+      } catch (mapped) {
+        if (mapped instanceof TransactionFailure) throw mapped;
+      }
+      throw new TransactionFailure(EXIT_CODES.SECURITY, [
+        diagnostic(
+          'E_TRANSACTION_STATE_READ_SECURITY',
+          'installed metadata could not be read as stable managed state.',
+          'Inspect the installed metadata path for links, special files, or concurrent changes.',
+          path,
+        ),
+      ]);
+    }
+  } else observedDocument = await adapter.readTextIfExists(path);
+  if (
+    (documentKind === 'settings' || documentKind === 'managed-document') &&
+    callerExpected !== undefined &&
+    observedDocument !== callerExpected
+  ) {
     throw new TransactionFailure(EXIT_CODES.CONTRACT, [
       diagnostic(
-        documentKind === 'settings'
-          ? 'E_TRANSACTION_SETTINGS_CHANGED'
-          : 'E_TRANSACTION_GENERATION_CURRENT_CHANGED',
-        documentKind === 'settings'
-          ? `${path} 在 settings 候选文档生成后被其他写入者修改。`
-          : `${path} 在 generation current 读取后被其他写入者修改。`,
-        documentKind === 'settings'
-          ? '重新读取最新 settings 文档、重新生成候选内容后再试。'
-          : '重新读取 current 指针后再试。',
+        documentKind === 'managed-document'
+          ? 'E_TRANSACTION_MANAGED_DOCUMENT_CHANGED'
+          : documentKind === 'settings'
+            ? 'E_TRANSACTION_SETTINGS_CHANGED'
+            : 'E_TRANSACTION_GENERATION_CURRENT_CHANGED',
+        documentKind === 'managed-document'
+          ? 'installed metadata changed after the caller captured its expected document.'
+          : documentKind === 'settings'
+            ? `${path} 在 settings 候选文档生成后被其他写入者修改。`
+            : `${path} 在 generation current 读取后被其他写入者修改。`,
+        documentKind === 'managed-document'
+          ? 'Read the installed metadata again and retry the operation.'
+          : documentKind === 'settings'
+            ? '重新读取最新 settings 文档、重新生成候选内容后再试。'
+            : '重新读取 current 指针后再试。',
         path,
       ),
     ]);
   }
+  const originalDocument =
+    documentKind === 'managed-document' && callerExpected !== undefined
+      ? callerExpected
+      : observedDocument;
   const id = actionId(journal.actions.length + 1);
   const label =
     documentKind === 'settings'
@@ -512,7 +540,9 @@ export async function writeDocument(
   // Persist old/new document locations and the pending state before the CAS write.
   await persist();
   const expectedDocument =
-    documentKind === 'settings' || documentKind === 'generation-current'
+    documentKind === 'settings' ||
+    documentKind === 'generation-current' ||
+    (documentKind === 'managed-document' && callerExpected !== undefined)
       ? callerExpected
       : originalDocument;
   const wrote =

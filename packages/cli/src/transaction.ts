@@ -273,13 +273,14 @@ export async function runTransaction<T>(
         ),
       );
     },
-    async writeManagedDocument(path, newDocument) {
+    async writeManagedDocument(path, newDocument, expectedDocument) {
       return serializeAction(() =>
         writeDocument(
           { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
           'managed-document',
           path,
           newDocument,
+          expectedDocument,
         ),
       );
     },

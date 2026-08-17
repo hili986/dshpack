@@ -84,6 +84,14 @@ describe('materializeSource', () => {
     expect(sourceAdapter.materializeSource).toBeTypeOf('function');
     expect(sourceAdapter.SourceError).toBeTypeOf('function');
   });
+  it.each([
+    [{ kind: 'directory', path: 'C:/safe/pack' }, 'C:/safe/pack'],
+    [{ kind: 'archive', path: 'C:/safe/pack.dshpack.tgz' }, 'C:/safe/pack.dshpack.tgz'],
+    [{ kind: 'https', url: 'https://packs.example/demo.tgz', integrity: `sha512-${'A'.repeat(86)}==` }, `https://packs.example/demo.tgz#sha512-${'A'.repeat(86)}==`],
+    [{ kind: 'github', owner: 'owner', repo: 'demo', commit: 'a'.repeat(40), url: 'https://codeload.github.com/owner/demo/tar.gz/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }, 'github:owner/demo#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+  ] as const)('reconstructs the single safe source reference for persisted provenance %#', (provenance, expected) => {
+    expect(sourceAdapter.sourceReferenceFromProvenance(provenance)).toBe(expected);
+  });
   it('classifies public addresses and binds both DNS lookup result shapes', async () => {
     for (const [address, allowed] of [['93.184.216.34', true], ['0.0.0.0', false], ['10.0.0.1', false], ['100.64.0.1', false], ['127.0.0.1', false], ['169.254.0.1', false], ['172.16.0.1', false], ['192.0.0.1', false], ['192.0.2.1', false], ['192.88.99.1', false], ['192.168.0.1', false], ['198.18.0.1', false], ['198.51.100.1', false], ['203.0.113.1', false], ['224.0.0.1', false], ['240.0.0.1', false], ['2606:4700:4700::1111', true], ['2606:4700:4700:0:0:0:0:1111', true], ['2001:4860::1', true], ['2001:21::1', false], ['2001:db8::1', false], ['2002::1', false], ['3fff::1', false], ['::1', false], ['::ffff:192.0.2.1', false], ['fe80::1%lo', false], ['invalid', false]] as const) expect(isPublicAddress(address)).toBe(allowed);
     const target = { address: '93.184.216.34', family: 4 as const }; const bound = fixedLookup(target);

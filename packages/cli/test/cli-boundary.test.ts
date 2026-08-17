@@ -10,7 +10,7 @@ const runners = vi.hoisted(() => ({
 vi.mock('../src/doctor/engine.js', () => ({ runDoctor: runners.doctor }));
 vi.mock('../src/export/engine.js', () => ({ exportProfile: runners.exportProfile }));
 
-import { runCli } from '../src/cli.js';
+import { COMMAND_NAMES, createProgram, runCli } from '../src/cli.js';
 import { diagnostic, exitCodeFor, resolveDshHomeValue } from '../src/commands/shared.js';
 import { DSHPACK_VERSION } from '../src/version.js';
 
@@ -134,6 +134,13 @@ describe('global DSH_HOME boundary', () => {
       expect(runners.doctor).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('implemented command registration', () => {
+  it('registers migrate as an implemented command instead of the generic placeholder', () => {
+    expect(COMMAND_NAMES).toContain('migrate');
+    expect(createProgram().commands.some((command) => command.name() === 'migrate')).toBe(true);
+  });
 });
 
 describe('top-level error boundary', () => {

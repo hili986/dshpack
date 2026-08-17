@@ -284,7 +284,11 @@ export interface TransactionContext {
     expectedDocument: string | undefined,
     newDocument: string,
   ): Promise<void>;
-  writeManagedDocument(path: string, newDocument: string): Promise<void>;
+  /**
+   * Atomically replace a managed marker.  Supplying `expectedDocument` binds the write to a
+   * caller-owned preflight snapshot instead of silently adopting a concurrent writer's text.
+   */
+  writeManagedDocument(path: string, newDocument: string, expectedDocument?: string): Promise<void>;
   writeSettings(
     path: string,
     expectedDocument: string | undefined,

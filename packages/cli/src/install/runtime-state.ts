@@ -142,7 +142,12 @@ async function hashFile(
   return collect ? Buffer.concat(chunks, total).toString('utf8') : undefined;
 }
 
-async function hashDirectory(root: string, directory: string, hash: Hash): Promise<void> {
+async function hashDirectory(
+  root: string,
+  directory: string,
+  hash: Hash,
+  includePath?: (portableRelativePath: string) => boolean,
+): Promise<void> {
   const before = (await lstat(directory, { bigint: true })) as BigStats;
   if (!before.isDirectory() || before.isSymbolicLink())
     throw new InstallTargetStateError('目标不是普通目录。', directory);
@@ -153,8 +158,10 @@ async function hashDirectory(root: string, directory: string, hash: Hash): Promi
   for (const entry of entries) {
     const path = join(directory, entry.name);
     const relativePath = relative(root, path).replaceAll('\\', '/');
+    if (includePath !== undefined && !includePath(relativePath)) continue;
     const stats = (await lstat(path, { bigint: true })) as BigStats;
-    if (stats.isDirectory() && !stats.isSymbolicLink()) await hashDirectory(root, path, hash);
+    if (stats.isDirectory() && !stats.isSymbolicLink())
+      await hashDirectory(root, path, hash, includePath);
     else if (stats.isFile() && !stats.isSymbolicLink())
       await hashFile(path, relativePath, stats, hash, false);
     else throw new InstallTargetStateError('目标目录含不安全条目。', path);
@@ -168,13 +175,14 @@ async function directoryState(
   dshHome: string,
   rootCanonical: string,
   relativePath: string,
+  includePath?: (portableRelativePath: string) => boolean,
 ): Promise<InstallPathBeforeState> {
   const target = await targetStats(dshHome, rootCanonical, relativePath);
   if (target.stats === undefined) return { path: relativePath, state: 'absent' };
   if (!target.stats.isDirectory())
     throw new InstallTargetStateError('托管目标必须是目录。', target.path);
   const hash = createHash('sha256');
-  await hashDirectory(target.path, target.path, hash);
+  await hashDirectory(target.path, target.path, hash, includePath);
   return { path: relativePath, state: 'present', sha256: `sha256-${hash.digest('base64url')}` };
 }
 
@@ -197,7 +205,12 @@ export async function captureInstallTargetState(
   input: CaptureInstallTargetInput,
 ): Promise<InstallTargetCapture> {
   const root = await rootIdentity(input.dshHome);
-  const profile = await directoryState(input.dshHome, root.canonical, `profiles/${input.profile}`);
+  const profile = await directoryState(
+    input.dshHome,
+    root.canonical,
+    `profiles/${input.profile}`,
+    input.profileInventoryPath,
+  );
   const skills = await Promise.all(
     input.skills.map((path) => directoryState(input.dshHome, root.canonical, path)),
   );

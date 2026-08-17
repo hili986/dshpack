@@ -50,6 +50,11 @@ export interface CaptureInstallTargetInput {
   skills: readonly string[];
   presets: readonly string[];
   externalDefaultPreset?: string;
+  /**
+   * Optional profile inventory filter for state-only consumers.  The installer leaves this
+   * unset; legacy migration excludes runtime dependency trees from its ownership snapshot.
+   */
+  profileInventoryPath?: (portableRelativePath: string) => boolean;
 }
 
 export interface InstallSubprocessResult {

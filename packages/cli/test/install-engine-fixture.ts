@@ -29,6 +29,7 @@ export interface EnginePackOptions {
   name?: string;
   mcp?: boolean;
   permissionPreset?: 'workspace-write' | 'danger-full-access';
+  tested?: string[];
   plugin?: { allowBuilds?: boolean; source?: 'npm' | 'tarball'; unverified?: boolean };
 }
 
@@ -52,7 +53,7 @@ export async function enginePack(options: EnginePackOptions = {}): Promise<strin
     description: 'engine fixture',
     author: 'tester',
     license: 'MIT',
-    dsh: { tested: ['0.1.0-rc.6'] },
+    dsh: { tested: options.tested ?? ['0.1.0-rc.6'] },
     plugins:
       options.plugin === undefined
         ? []
@@ -164,7 +165,10 @@ export interface FakeRuntimeControl {
 }
 
 export interface FakeRuntimeResult {
-  runtime: InstallRuntime;
+  runtime: InstallRuntime & {
+    createScratchRuntime?(dshHome: string, legacyInstalledAt: string): InstallRuntime;
+    removeScratch?(dshHome: string): Promise<void>;
+  };
   calls: string[];
   stderr: string[];
   scriptPolicies: Array<{ command: 'dsh' | 'pnpm'; policy: string | undefined }>;
@@ -384,7 +388,16 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
     now: () => '2026-08-16T12:00:00.000Z',
     txid: () => `tx-${randomUUID()}`,
   };
-  return { runtime, calls, stderr, scriptPolicies };
+  return {
+    runtime: Object.assign(runtime, {
+      // Migration's reconstruction must never reuse the live runtime.  A fresh fake keeps all
+      // subprocess/write call logs separate while still exercising the isolated scratch replay.
+      createScratchRuntime: () => fakeRuntime().runtime,
+    }),
+    calls,
+    stderr,
+    scriptPolicies,
+  };
 }
 
 export async function snapshot(root: string): Promise<Record<string, string>> {

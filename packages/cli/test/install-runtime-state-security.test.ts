@@ -37,6 +37,29 @@ describe('install target state security', () => {
     expect(result.state.profile.state).toBe('present');
   });
 
+  it('permits an explicitly excluded runtime node_modules link but keeps managed links unsafe', async () => {
+    const home = await temporary();
+    const external = await temporary();
+    await mkdir(join(home, 'profiles', 'demo'), { recursive: true });
+    await writeFile(join(home, 'profiles', 'demo', 'cordis.yml'), '[]\n');
+    await symlink(external, join(home, 'profiles', 'demo', 'node_modules'), 'junction');
+
+    await expect(
+      captureInstallTargetState({
+        ...request(home),
+        profileInventoryPath: (path) => path.toLowerCase() !== 'node_modules',
+      }),
+    ).resolves.toMatchObject({ state: { profile: { state: 'present' } } });
+
+    await symlink(external, join(home, 'profiles', 'demo', 'managed-link'), 'junction');
+    await expect(
+      captureInstallTargetState({
+        ...request(home),
+        profileInventoryPath: (path) => path.toLowerCase() !== 'node_modules',
+      }),
+    ).rejects.toMatchObject({ code: 'E_TARGET_PATH' });
+  });
+
   it('requires an absolute ordinary DSH_HOME with no link ancestor', async () => {
     await expect(captureInstallTargetState(request('relative-home'))).rejects.toMatchObject({
       code: 'E_TARGET_PATH',

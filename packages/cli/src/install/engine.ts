@@ -33,8 +33,8 @@ function report(
   };
 }
 
-function captureRequest(
-  input: InstallInput,
+export function captureInstallTargetRequest(
+  input: Pick<InstallInput, 'dshHome' | 'as'>,
   material: ValidatedPackMaterial,
 ): CaptureInstallTargetInput {
   const profile = input.as ?? material.manifest.name;
@@ -235,7 +235,7 @@ export async function installPack(
       'not-started',
     );
   }
-  const request = captureRequest(input, material);
+  const request = captureInstallTargetRequest(input, material);
   let before: InstallTargetCapture;
   try {
     before = await runtime.captureTargetState(request);

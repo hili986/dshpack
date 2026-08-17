@@ -35,6 +35,19 @@ export interface MaterializedSource {
   cleanup(): Promise<void>;
 }
 
+/** Reconstruct the one accepted source argument for a validated persisted provenance record. */
+export function sourceReferenceFromProvenance(provenance: SourceProvenance): string {
+  switch (provenance.kind) {
+    case 'directory':
+    case 'archive':
+      return provenance.path;
+    case 'https':
+      return `${provenance.url}#${provenance.integrity}`;
+    case 'github':
+      return `github:${provenance.owner}/${provenance.repo}#${provenance.commit}`;
+  }
+}
+
 export interface SourceAdapter {
   materialize(reference: string, dependencies?: SourceDependencies): Promise<MaterializedSource>;
 }
