@@ -125,7 +125,14 @@ describe('managed transaction actions', () => {
 
       expect(result).toMatchObject({ ok: false, status: 'rolled-back', exitCode: 23 });
       expect(await readFile(record, 'utf8')).toBe(original);
-      const action = result.journal.actions[0];
+      const action = result.journal.actions.find(
+        (
+          entry,
+        ): entry is Extract<
+          (typeof result.journal.actions)[number],
+          { kind: 'managed-document-write' }
+        > => entry.kind === 'managed-document-write',
+      );
       expect(action).toMatchObject({ kind: 'managed-document-write', phase: 'rolled-back' });
       if (action?.kind !== 'managed-document-write' || !action.old.exists) {
         throw new Error('missing managed document action');
@@ -149,7 +156,14 @@ describe('managed transaction actions', () => {
 
       expect(result).toMatchObject({ ok: false, status: 'rolled-back', exitCode: 23 });
       await expect(readFile(record, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      const action = result.journal.actions[0];
+      const action = result.journal.actions.find(
+        (
+          entry,
+        ): entry is Extract<
+          (typeof result.journal.actions)[number],
+          { kind: 'managed-document-write' }
+        > => entry.kind === 'managed-document-write',
+      );
       if (action?.kind !== 'managed-document-write') {
         throw new Error('missing managed document action');
       }
@@ -163,9 +177,11 @@ describe('managed transaction actions', () => {
       const base = createNodeTransactionAdapter();
       const adapter: TransactionAdapter = {
         ...base,
-        async compareAndMoveText(path, expected, destination) {
+        async compareAndMoveManagedDocument(path, expected, destination) {
           if (path === record) throw new Error('injected managed rollback failure');
-          return base.compareAndMoveText(path, expected, destination);
+          if (base.compareAndMoveManagedDocument === undefined)
+            throw new Error('managed document rollback is required');
+          return base.compareAndMoveManagedDocument(path, expected, destination);
         },
       };
       const result = await runTransaction(
@@ -176,15 +192,20 @@ describe('managed transaction actions', () => {
         },
       );
 
-      const action = result.journal.actions[0];
+      const action = result.journal.actions.find(
+        (
+          entry,
+        ): entry is Extract<
+          (typeof result.journal.actions)[number],
+          { kind: 'managed-document-write' }
+        > => entry.kind === 'managed-document-write',
+      );
       if (action?.kind !== 'managed-document-write') {
         throw new Error('missing managed document action');
       }
-      expect(result).toMatchObject({
-        ok: false,
-        status: 'rollback-failed',
-        exitCode: 25,
-        manualRecovery: [
+      expect(result).toMatchObject({ ok: false, status: 'rollback-failed', exitCode: 25 });
+      expect(result.manualRecovery).toEqual(
+        expect.arrayContaining([
           {
             actionId: action.id,
             operation: 'rename',
@@ -192,9 +213,13 @@ describe('managed transaction actions', () => {
             destinationPath: action.new.rollbackPath,
             reason: 'injected managed rollback failure',
           },
-        ],
-      });
-      expect(result.diagnostics.at(-1)).toMatchObject({
+        ]),
+      );
+      expect(
+        result.diagnostics.find(
+          (item) => item.code === 'E_TRANSACTION_ROLLBACK_FAILED' && item.path === record,
+        ),
+      ).toMatchObject({
         code: 'E_TRANSACTION_ROLLBACK_FAILED',
         path: record,
         hint: expect.stringContaining(action.new.rollbackPath),

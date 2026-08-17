@@ -1,18 +1,23 @@
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 import { EXIT_CODES } from './exit-codes.js';
 import { actionId, diagnostic } from './transaction-journal.js';
 import {
   type CreateJournalAction,
+  type GenerationCurrentJournalAction,
+  MAX_TRANSACTION_STATE_BYTES,
   type ManagedDocumentJournalAction,
   type ReplaceJournalAction,
   type SettingsJournalAction,
   type TransactionAdapter,
-  type TransactionArtifactKind,
   type TransactionArtifactLock,
+  type TransactionDirectoryArtifactKind,
   TransactionFailure,
   type TransactionJournal,
   type TransactionMutationKind,
+  type TransactionStateDirectoryKind,
+  type TransactionStateFileKind,
 } from './transaction-types.js';
 
 interface ActionOptions {
@@ -23,9 +28,38 @@ interface ActionOptions {
   persist(): Promise<void>;
 }
 
+function sha256(bytes: Uint8Array): string {
+  return `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return Buffer.from(left).equals(Buffer.from(right));
+}
+
+async function verifyWrittenState(
+  adapter: TransactionAdapter,
+  path: string,
+  expected: Uint8Array,
+): Promise<void> {
+  if (adapter.readBytesIfExists === undefined) {
+    throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+      diagnostic(
+        'E_TRANSACTION_STATE_ADAPTER',
+        'transaction adapter does not support managed binary state reads.',
+        'Use the production transaction adapter or explicitly provide safe byte reads in tests.',
+        path,
+      ),
+    ]);
+  }
+  const actual = await adapter.readBytesIfExists(path);
+  if (actual === undefined || sha256(actual) !== sha256(expected) || !sameBytes(actual, expected)) {
+    throw new Error(`written state content is missing or changed: ${path}`);
+  }
+}
+
 export async function createArtifact(
   options: ActionOptions,
-  kind: TransactionArtifactKind,
+  kind: TransactionDirectoryArtifactKind,
   path: string,
   apply: () => Promise<void>,
 ): Promise<void> {
@@ -68,9 +102,143 @@ export async function createArtifact(
   await persist();
 }
 
+/** Reserve a state parent directory and only remove it later when it remains empty and owned. */
+async function ensureStateDirectory(
+  options: ActionOptions,
+  kind: TransactionStateDirectoryKind,
+  path: string,
+): Promise<void> {
+  const { adapter, backupDirectory, journal, lock, persist } = options;
+  await adapter.validateMutationPath(lock, kind, path);
+  const id = actionId(journal.actions.length + 1);
+  const rollbackPath = join(backupDirectory, 'new', id);
+  const action: CreateJournalAction = {
+    id,
+    kind: 'create',
+    artifact: kind,
+    ownership: 'pending',
+    phase: 'planned',
+    old: { path, exists: false },
+    new: { path, exists: true, rollbackPath, emptyOnRollback: true },
+  };
+  journal.actions.push(action);
+  await adapter.ensureDirectory(dirname(rollbackPath));
+  await persist();
+  if (!(await adapter.createDirectoryExclusive(path))) {
+    action.ownership = 'not-owned';
+    action.phase = 'applied';
+    await persist();
+    return;
+  }
+  // A parent can be swapped after the exclusive mkdir. Rebind it before recording ownership.
+  await adapter.validateMutationPath(lock, kind, path);
+  const identity = await adapter.pathIdentity(path);
+  if (identity === undefined) throw new Error(`reserved state directory is missing: ${path}`);
+  action.new.identity = identity;
+  action.ownership = 'owned';
+  await persist();
+  action.phase = 'applied';
+  await persist();
+}
+
+async function ensureStateFileParent(
+  options: ActionOptions,
+  kind: TransactionStateFileKind,
+  path: string,
+): Promise<void> {
+  const root =
+    kind === 'store-block'
+      ? join(options.lock.dshHome, '.dshpack', 'store')
+      : join(options.lock.dshHome, '.dshpack', 'generations');
+  const directoryKind = kind === 'store-block' ? 'store-directory' : 'generation-directory';
+  await ensureStateDirectory(options, directoryKind, root);
+  await ensureStateDirectory(options, directoryKind, dirname(path));
+}
+
+async function ensureDocumentParent(
+  options: ActionOptions,
+  kind: Extract<TransactionMutationKind, 'managed-document' | 'generation-current'>,
+  path: string,
+): Promise<void> {
+  const root =
+    kind === 'managed-document'
+      ? join(options.lock.dshHome, '.dshpack', 'installed')
+      : join(options.lock.dshHome, '.dshpack', 'generations');
+  const directoryKind =
+    kind === 'managed-document' ? 'installed-directory' : 'generation-directory';
+  await ensureStateDirectory(options, directoryKind, root);
+  if (dirname(path) !== root) await ensureStateDirectory(options, directoryKind, dirname(path));
+}
+
+/** Create one immutable, transaction-owned state file and remember how to remove it on rollback. */
+export async function writeStateFile(
+  options: ActionOptions,
+  kind: TransactionStateFileKind,
+  path: string,
+  bytes: Uint8Array,
+): Promise<boolean> {
+  const { adapter, backupDirectory, journal, lock, persist } = options;
+  if (bytes.byteLength > MAX_TRANSACTION_STATE_BYTES) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_STATE_READ_LIMIT',
+        `managed state exceeds the bounded write limit: ${path}`,
+        'Reduce the state payload before retrying; no state mutation was started.',
+        path,
+      ),
+    ]);
+  }
+  if (adapter.writeExclusiveBytes === undefined) {
+    throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+      diagnostic(
+        'E_TRANSACTION_STATE_ADAPTER',
+        'transaction adapter 不支持受管二进制状态写入。',
+        '使用生产 transaction adapter，或为测试 adapter 显式实现安全的 exclusive bytes 写入。',
+        path,
+      ),
+    ]);
+  }
+  await adapter.validateMutationPath(lock, kind, path);
+  await ensureStateFileParent(options, kind, path);
+  // mkdir may have created an ancestor, so prove that the final path is still canonical before
+  // the exclusive write. This does not trust the spelling of a new store/generation directory.
+  await adapter.validateMutationPath(lock, kind, path);
+  const id = actionId(journal.actions.length + 1);
+  const rollbackPath = join(backupDirectory, 'new', id);
+  const action: CreateJournalAction = {
+    id,
+    kind: 'create',
+    artifact: kind,
+    ownership: 'pending',
+    phase: 'planned',
+    old: { path, exists: false },
+    new: { path, exists: true, rollbackPath, contentSha256: sha256(bytes) },
+  };
+  journal.actions.push(action);
+  await adapter.ensureDirectory(dirname(rollbackPath));
+  // The pending journal entry must exist before a block or generation becomes visible.
+  await persist();
+  const written = await adapter.writeExclusiveBytes(path, bytes);
+  if (!written) {
+    action.ownership = 'not-owned';
+    action.phase = 'applied';
+    await persist();
+    return false;
+  }
+  const identity = await adapter.pathIdentity(path);
+  if (identity === undefined) throw new Error(`written state file is missing: ${path}`);
+  await verifyWrittenState(adapter, path, bytes);
+  action.new.identity = identity;
+  action.ownership = 'owned';
+  await persist();
+  action.phase = 'applied';
+  await persist();
+  return true;
+}
+
 export async function replaceArtifact(
   options: ActionOptions,
-  kind: TransactionArtifactKind,
+  kind: TransactionDirectoryArtifactKind,
   path: string,
 ): Promise<void> {
   const { adapter, backupDirectory, journal, lock, persist } = options;
@@ -104,30 +272,104 @@ export async function replaceArtifact(
   await persist();
 }
 
-type DocumentAction = SettingsJournalAction | ManagedDocumentJournalAction;
+type DocumentAction =
+  | SettingsJournalAction
+  | ManagedDocumentJournalAction
+  | GenerationCurrentJournalAction;
+
+function assertManagedDocumentWriteSize(path: string, document: string): void {
+  if (Buffer.byteLength(document, 'utf8') <= MAX_TRANSACTION_STATE_BYTES) return;
+  throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+    diagnostic(
+      'E_MANAGED_DOCUMENT',
+      `installed metadata exceeds the bounded write limit: ${path}`,
+      'Reduce the metadata document before retrying; no state mutation was started.',
+      path,
+    ),
+  ]);
+}
 
 export async function writeDocument(
   options: ActionOptions,
-  documentKind: Extract<TransactionMutationKind, 'settings' | 'managed-document'>,
+  documentKind: Extract<
+    TransactionMutationKind,
+    'settings' | 'managed-document' | 'generation-current'
+  >,
   path: string,
   newDocument: string,
   callerExpected?: string,
 ): Promise<void> {
   const { adapter, backupDirectory, journal, lock, persist } = options;
+  if (documentKind === 'managed-document') assertManagedDocumentWriteSize(path, newDocument);
   await adapter.validateMutationPath(lock, documentKind, path);
-  const originalDocument = await adapter.readTextIfExists(path);
+  if (documentKind === 'generation-current') {
+    if (adapter.readGenerationCurrent === undefined) {
+      throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+        diagnostic(
+          'E_TRANSACTION_STATE_ADAPTER',
+          'transaction adapter does not support bounded generation current reads.',
+          'Use the production transaction adapter or explicitly provide a bounded reader in tests.',
+          path,
+        ),
+      ]);
+    }
+    if ((await adapter.readGenerationCurrent(path)) !== callerExpected) {
+      throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+        diagnostic(
+          'E_TRANSACTION_GENERATION_CURRENT_CHANGED',
+          'generation current changed after the caller captured its expected document.',
+          'Read the current pointer again and retry the operation.',
+          path,
+        ),
+      ]);
+    }
+  }
+  if (documentKind === 'managed-document' || documentKind === 'generation-current') {
+    await ensureDocumentParent(options, documentKind, path);
+  } else {
+    await adapter.ensureDirectory(dirname(path));
+  }
+  await adapter.validateMutationPath(lock, documentKind, path);
+  const originalDocument =
+    documentKind === 'generation-current'
+      ? callerExpected
+      : documentKind === 'managed-document'
+        ? adapter.readManagedDocument === undefined
+          ? (() => {
+              throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+                diagnostic(
+                  'E_TRANSACTION_STATE_ADAPTER',
+                  'transaction adapter does not support bounded managed document reads.',
+                  'Use the production transaction adapter or explicitly provide a bounded reader in tests.',
+                  path,
+                ),
+              ]);
+            })()
+          : await adapter.readManagedDocument(path)
+        : await adapter.readTextIfExists(path);
   if (documentKind === 'settings' && originalDocument !== callerExpected) {
     throw new TransactionFailure(EXIT_CODES.CONTRACT, [
       diagnostic(
-        'E_TRANSACTION_SETTINGS_CHANGED',
-        `${path} 在 settings 候选文档生成后被其他写入者修改。`,
-        '重新读取最新 settings 文档、重新生成候选内容后再试。',
+        documentKind === 'settings'
+          ? 'E_TRANSACTION_SETTINGS_CHANGED'
+          : 'E_TRANSACTION_GENERATION_CURRENT_CHANGED',
+        documentKind === 'settings'
+          ? `${path} 在 settings 候选文档生成后被其他写入者修改。`
+          : `${path} 在 generation current 读取后被其他写入者修改。`,
+        documentKind === 'settings'
+          ? '重新读取最新 settings 文档、重新生成候选内容后再试。'
+          : '重新读取 current 指针后再试。',
         path,
       ),
     ]);
   }
   const id = actionId(journal.actions.length + 1);
-  const label = documentKind === 'settings' ? 'settings' : 'managed';
+  const label =
+    documentKind === 'settings'
+      ? 'settings'
+      : documentKind === 'managed-document'
+        ? 'managed'
+        : 'generation-current';
   const documentPath = join(backupDirectory, 'documents', `${id}-${label}-original`);
   const newDocumentPath = join(backupDirectory, 'documents', `${id}-${label}-new`);
   const rollbackPath = join(backupDirectory, 'new', `${id}-${label}`);
@@ -147,21 +389,58 @@ export async function writeDocument(
   const action: DocumentAction =
     documentKind === 'settings'
       ? { ...common, kind: 'settings-write' }
-      : { ...common, kind: 'managed-document-write' };
+      : documentKind === 'managed-document'
+        ? { ...common, kind: 'managed-document-write' }
+        : { ...common, kind: 'generation-current-write' };
   journal.actions.push(action);
   // Persist old/new document locations and the pending state before the CAS write.
   await persist();
-  const expectedDocument = documentKind === 'settings' ? callerExpected : originalDocument;
-  if (!(await adapter.compareAndSwapText(path, expectedDocument, newDocument))) {
+  const expectedDocument =
+    documentKind === 'settings' || documentKind === 'generation-current'
+      ? callerExpected
+      : originalDocument;
+  const wrote =
+    documentKind === 'generation-current'
+      ? adapter.compareAndSwapGenerationCurrent === undefined
+        ? (() => {
+            throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+              diagnostic(
+                'E_TRANSACTION_STATE_ADAPTER',
+                'transaction adapter does not support bounded generation current writes.',
+                'Use the production transaction adapter or explicitly provide a bounded writer in tests.',
+                path,
+              ),
+            ]);
+          })()
+        : await adapter.compareAndSwapGenerationCurrent(path, expectedDocument, newDocument)
+      : documentKind === 'managed-document'
+        ? adapter.compareAndSwapManagedDocument === undefined
+          ? (() => {
+              throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+                diagnostic(
+                  'E_TRANSACTION_STATE_ADAPTER',
+                  'transaction adapter does not support bounded managed document writes.',
+                  'Use the production transaction adapter or explicitly provide a bounded writer in tests.',
+                  path,
+                ),
+              ]);
+            })()
+          : await adapter.compareAndSwapManagedDocument(path, expectedDocument, newDocument)
+        : await adapter.compareAndSwapText(path, expectedDocument, newDocument);
+  if (!wrote) {
     action.writeState = 'not-written';
     await persist();
     throw new TransactionFailure(EXIT_CODES.CONTRACT, [
       diagnostic(
         documentKind === 'settings'
           ? 'E_TRANSACTION_SETTINGS_CHANGED'
-          : 'E_TRANSACTION_MANAGED_DOCUMENT_CHANGED',
+          : documentKind === 'generation-current'
+            ? 'E_TRANSACTION_GENERATION_CURRENT_CHANGED'
+            : 'E_TRANSACTION_MANAGED_DOCUMENT_CHANGED',
         `${path} 在事务读取后被其他写入者修改。`,
-        '重新读取最新文档后重试安装。',
+        documentKind === 'generation-current'
+          ? '重新读取 current 指针后重试安装。'
+          : '重新读取最新文档后重试安装。',
         path,
       ),
     ]);

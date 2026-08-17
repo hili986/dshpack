@@ -1,6 +1,11 @@
 import { dirname, join, resolve } from 'node:path';
 import { EXIT_CODES } from './exit-codes.js';
-import { createArtifact, replaceArtifact, writeDocument } from './transaction-actions.js';
+import {
+  createArtifact,
+  replaceArtifact,
+  writeDocument,
+  writeStateFile,
+} from './transaction-actions.js';
 import {
   diagnostic,
   errorMessage,
@@ -15,6 +20,9 @@ import {
   TransactionFailure,
   type TransactionJournal,
   type TransactionResult,
+  type TransactionStateFileKind,
+  TransactionStateReadLimitError,
+  TransactionStateReadSecurityError,
 } from './transaction-types.js';
 
 export {
@@ -87,6 +95,60 @@ export async function runTransaction<T>(
     if (artifactLock === undefined) throw new Error('artifact lock is unavailable');
     return artifactLock;
   };
+  const readStateBytes = async (path: string): Promise<Uint8Array | undefined> => {
+    if (adapter.readBytesIfExists === undefined) {
+      throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+        diagnostic(
+          'E_TRANSACTION_STATE_ADAPTER',
+          'transaction adapter 不支持受管二进制状态读取。',
+          '使用生产 transaction adapter，或为测试 adapter 显式实现安全的 bytes 读取。',
+          path,
+        ),
+      ]);
+    }
+    try {
+      return await adapter.readBytesIfExists(path);
+    } catch (error) {
+      if (error instanceof TransactionStateReadLimitError) {
+        throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+          diagnostic(
+            'E_TRANSACTION_STATE_READ_LIMIT',
+            `managed state exceeds the bounded read limit: ${path}`,
+            'Inspect or remove the oversized state file before retrying.',
+            path,
+          ),
+        ]);
+      }
+      if (error instanceof TransactionStateReadSecurityError) {
+        throw new TransactionFailure(EXIT_CODES.SECURITY, [
+          diagnostic(
+            'E_TRANSACTION_STATE_READ_SECURITY',
+            `managed state is not a stable regular file: ${path}`,
+            'Inspect the state path for links, special files, hard links, or concurrent changes.',
+            path,
+          ),
+        ]);
+      }
+      throw error;
+    }
+  };
+
+  const assertGenerationCurrentDocument = (path: string, document: string): void => {
+    if (
+      Buffer.byteLength(document, 'utf8') > 128 ||
+      !/^[1-9]\d*\n$/u.test(document) ||
+      !Number.isSafeInteger(Number(document.slice(0, -1)))
+    ) {
+      throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+        diagnostic(
+          'E_GENERATION_CURRENT',
+          `generation current must be a bounded positive integer pointer: ${path}`,
+          'Repair the current pointer before retrying; no state mutation was started.',
+          path,
+        ),
+      ]);
+    }
+  };
 
   const transaction: TransactionContext = {
     txid,
@@ -117,6 +179,72 @@ export async function runTransaction<T>(
           { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
           'profile',
           path,
+        ),
+      );
+    },
+    async artifactIdentity(kind, path) {
+      return serializeAction(async () => {
+        await adapter.validateMutationPath(requireArtifactLock(), kind, path);
+        const identity = await adapter.pathIdentity(path);
+        if (identity === undefined) throw new Error(`transaction artifact is missing: ${path}`);
+        return identity;
+      });
+    },
+    async readStateBytes(path) {
+      return serializeAction(async () => {
+        await adapter.validateMutationPath(requireArtifactLock(), 'store-block', path);
+        return readStateBytes(path);
+      });
+    },
+    async writeStateFile(kind: TransactionStateFileKind, path, bytes) {
+      return serializeAction(() =>
+        writeStateFile(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          kind,
+          path,
+          bytes,
+        ),
+      );
+    },
+    async readGenerationCurrent(path) {
+      return serializeAction(async () => {
+        await adapter.validateMutationPath(requireArtifactLock(), 'generation-current', path);
+        const bytes = await readStateBytes(path);
+        if (bytes === undefined) return undefined;
+        if (bytes.byteLength > 128) {
+          throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+            diagnostic(
+              'E_GENERATION_CURRENT',
+              `generation current exceeds its bounded pointer size: ${path}`,
+              'Repair the current pointer before retrying.',
+              path,
+            ),
+          ]);
+        }
+        const text = Buffer.from(bytes).toString('utf8');
+        if (!Buffer.from(text, 'utf8').equals(Buffer.from(bytes))) {
+          throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+            diagnostic(
+              'E_GENERATION_CURRENT',
+              `generation current is not valid UTF-8: ${path}`,
+              'Repair the current pointer before retrying.',
+              path,
+            ),
+          ]);
+        }
+        return text;
+      });
+    },
+    async writeGenerationCurrent(path, expectedDocument, newDocument) {
+      if (expectedDocument !== undefined) assertGenerationCurrentDocument(path, expectedDocument);
+      assertGenerationCurrentDocument(path, newDocument);
+      return serializeAction(() =>
+        writeDocument(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          'generation-current',
+          path,
+          newDocument,
+          expectedDocument,
         ),
       );
     },

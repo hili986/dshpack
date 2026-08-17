@@ -26,6 +26,7 @@ const sha512 = (content: string): string =>
 
 export interface EnginePackOptions {
   assets?: boolean;
+  name?: string;
   mcp?: boolean;
   permissionPreset?: 'workspace-write' | 'danger-full-access';
   plugin?: { allowBuilds?: boolean; source?: 'npm' | 'tarball'; unverified?: boolean };
@@ -46,7 +47,7 @@ export async function enginePack(options: EnginePackOptions = {}): Promise<strin
   packRoots.add(root);
   const manifest: PackManifest = {
     formatVersion: 0,
-    name: 'engine-pack',
+    name: options.name ?? 'engine-pack',
     version: '1.0.0',
     description: 'engine fixture',
     author: 'tester',

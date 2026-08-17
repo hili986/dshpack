@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
@@ -21,6 +22,7 @@ export interface SnapshotStat {
   birthtimeMs: number;
   mtimeMs: number;
   ctimeMs: number;
+  nlink?: number;
 }
 
 export interface SnapshotFileHandle {
@@ -31,7 +33,7 @@ export interface SnapshotFileHandle {
 
 export interface BoundedReadDependencies {
   lstatPath?: (path: string) => Promise<SnapshotStat>;
-  openFile?: (path: string) => Promise<SnapshotFileHandle>;
+  openFile?: (path: string, flags?: number) => Promise<SnapshotFileHandle>;
 }
 
 export interface SnapshotCaptureDependencies extends BoundedReadDependencies {
@@ -68,11 +70,18 @@ async function defaultLstat(path: string): Promise<SnapshotStat> {
     birthtimeMs: value.birthtimeMs,
     mtimeMs: value.mtimeMs,
     ctimeMs: value.ctimeMs,
+    nlink: value.nlink,
   };
 }
 
-async function defaultOpen(path: string): Promise<SnapshotFileHandle> {
-  const handle = await open(path, 'r');
+const REGULAR_FILE_READ_FLAGS =
+  constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0);
+
+async function defaultOpen(
+  path: string,
+  flags = REGULAR_FILE_READ_FLAGS,
+): Promise<SnapshotFileHandle> {
+  const handle = await open(path, flags);
   return {
     stat: async () => {
       const value = await handle.stat();
@@ -84,6 +93,7 @@ async function defaultOpen(path: string): Promise<SnapshotFileHandle> {
         birthtimeMs: value.birthtimeMs,
         mtimeMs: value.mtimeMs,
         ctimeMs: value.ctimeMs,
+        nlink: value.nlink,
       };
     },
     read: async (buffer, offset, length) => handle.read(buffer, offset, length, null),
@@ -107,7 +117,8 @@ function stableFile(left: SnapshotStat, right: SnapshotStat): boolean {
     right.kind === 'file' &&
     left.size === right.size &&
     left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
+    left.ctimeMs === right.ctimeMs &&
+    left.nlink === right.nlink
   );
 }
 
@@ -116,6 +127,8 @@ export async function readBoundedRegularFile(
   path: string,
   dependencies: BoundedReadDependencies = {},
   expected?: SnapshotStat,
+  maximumBytes = MAX_SOURCE_FILE_BYTES,
+  requireSingleLink = false,
 ): Promise<Uint8Array> {
   const lstatPath = dependencies.lstatPath ?? defaultLstat;
   const openFile = dependencies.openFile ?? defaultOpen;
@@ -123,13 +136,32 @@ export async function readBoundedRegularFile(
   if (before.kind !== 'file' || (expected !== undefined && !sameIdentity(before, expected))) {
     throw new SnapshotCaptureError('security', 'source file is not stable and regular', path);
   }
-  if (before.size > MAX_SOURCE_FILE_BYTES) {
-    throw new SnapshotCaptureError('limit', 'source file exceeds 1 MiB', path);
+  if (requireSingleLink && before.nlink !== 1) {
+    throw new SnapshotCaptureError('security', 'source file is not singly linked', path);
   }
-  const handle = await openFile(path);
+  if (before.size > maximumBytes) {
+    throw new SnapshotCaptureError(
+      'limit',
+      `source file exceeds ${String(maximumBytes)} bytes`,
+      path,
+    );
+  }
+  let handle: SnapshotFileHandle;
+  try {
+    handle = await openFile(path, REGULAR_FILE_READ_FLAGS);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ELOOP') {
+      throw new SnapshotCaptureError('security', 'source file changed to a link before open', path);
+    }
+    throw error;
+  }
   try {
     const opened = await handle.stat();
-    if (!sameIdentity(before, opened) || opened.kind !== 'file') {
+    if (
+      !sameIdentity(before, opened) ||
+      opened.kind !== 'file' ||
+      (requireSingleLink && opened.nlink !== 1)
+    ) {
       throw new SnapshotCaptureError('security', 'source file changed before open', path);
     }
     const chunks: Uint8Array[] = [];
@@ -142,8 +174,12 @@ export async function readBoundedRegularFile(
       }
       if (bytesRead === 0) break;
       total += bytesRead;
-      if (total > MAX_SOURCE_FILE_BYTES) {
-        throw new SnapshotCaptureError('limit', 'source file grew beyond 1 MiB', path);
+      if (total > maximumBytes) {
+        throw new SnapshotCaptureError(
+          'limit',
+          `source file grew beyond ${String(maximumBytes)} bytes`,
+          path,
+        );
       }
       chunks.push(chunk.subarray(0, bytesRead));
     }

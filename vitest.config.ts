@@ -72,6 +72,7 @@ export default defineConfig({
         'packages/cli/src/list/engine.ts': { branches: 90 },
         'packages/cli/src/list/metadata-contract.ts': { branches: 90 },
         'packages/cli/src/metadata/contracts.ts': { branches: 90 },
+        'packages/cli/src/metadata/state-storage.ts': { branches: 90 },
         'packages/cli/src/list/safe-fs.ts': { branches: 90 },
         'packages/cli/src/switch/engine.ts': { branches: 90 },
         'packages/cli/src/switch/settings.ts': { branches: 90 },

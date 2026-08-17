@@ -2,6 +2,7 @@ import type { Diagnostic } from '@dshpack/core';
 
 import { EXIT_CODES, type ExitCode } from './exit-codes.js';
 import {
+  MAX_TRANSACTION_STATE_BYTES,
   type ManualRecoveryStep,
   type TransactionAdapter,
   type TransactionArtifactLock,
@@ -68,7 +69,9 @@ export function actionId(index: number): string {
 
 export function recoveryStep(action: TransactionJournalAction, reason: string): ManualRecoveryStep {
   const documentAction =
-    action.kind === 'settings-write' || action.kind === 'managed-document-write';
+    action.kind === 'settings-write' ||
+    action.kind === 'managed-document-write' ||
+    action.kind === 'generation-current-write';
   const sourcePath =
     action.kind === 'create'
       ? action.new.path
@@ -95,7 +98,19 @@ export async function rollbackAction(
 ): Promise<void> {
   if (action.kind === 'create') {
     if (action.ownership === 'not-owned') return;
-    await adapter.validateMutationPath(lock, action.artifact, action.new.path);
+    try {
+      await adapter.validateMutationPath(lock, action.artifact, action.new.path);
+    } catch (error) {
+      // A transaction-created state parent replaced by an escaped link is no longer ours to move.
+      // Leaving the external replacement untouched is the only safe rollback action.
+      if (
+        action.new.emptyOnRollback === true &&
+        error instanceof TransactionFailure &&
+        error.exitCode === EXIT_CODES.SECURITY
+      )
+        return;
+      throw error;
+    }
     if (action.ownership === 'pending') {
       const currentIdentity = await adapter.pathIdentity(action.new.path);
       if (currentIdentity !== undefined) {
@@ -106,6 +121,20 @@ export async function rollbackAction(
     if (action.new.identity === undefined) {
       throw new Error(`owned artifact identity was not recorded: ${action.new.path}`);
     }
+    const stateCondition =
+      action.artifact === 'store-block' || action.artifact === 'generation'
+        ? action.new.contentSha256 === undefined
+          ? undefined
+          : { contentSha256: action.new.contentSha256 }
+        : action.new.emptyOnRollback === true
+          ? { empty: true as const }
+          : undefined;
+    if (
+      (action.artifact === 'store-block' || action.artifact === 'generation') &&
+      stateCondition === undefined
+    ) {
+      throw new Error(`owned state content cannot be verified: ${action.new.path}`);
+    }
     if (
       !(await adapter.moveArtifactPath(
         lock,
@@ -114,34 +143,84 @@ export async function rollbackAction(
         action.new.rollbackPath,
         'to-backup',
         action.new.identity,
+        stateCondition,
       ))
     ) {
       throw new Error(`owned artifact is missing or identity changed: ${action.new.path}`);
     }
     return;
   }
-  if (action.kind === 'settings-write' || action.kind === 'managed-document-write') {
+  if (
+    action.kind === 'settings-write' ||
+    action.kind === 'managed-document-write' ||
+    action.kind === 'generation-current-write'
+  ) {
     if (action.writeState === 'not-written') return;
     await adapter.validateMutationPath(
       lock,
-      action.kind === 'settings-write' ? 'settings' : 'managed-document',
+      action.kind === 'settings-write'
+        ? 'settings'
+        : action.kind === 'managed-document-write'
+          ? 'managed-document'
+          : 'generation-current',
       action.new.path,
     );
     if (action.writeState === 'pending') {
       throw new Error(`settings write outcome is unresolved: ${action.new.path}`);
     }
-    const expectedDocument = await adapter.readText(action.new.documentPath);
-    const restored = action.old.exists
-      ? await adapter.compareAndSwapText(
-          action.old.path,
-          expectedDocument,
-          await adapter.readText(action.old.documentPath),
-        )
-      : await adapter.compareAndMoveText(
-          action.old.path,
-          expectedDocument,
-          action.new.rollbackPath,
-        );
+    const readTransactionBackupText = adapter.readTransactionBackupText;
+    if (readTransactionBackupText === undefined) {
+      throw new Error('transaction adapter does not support bounded rollback backup reads');
+    }
+    const maximumBackupBytes =
+      action.kind === 'generation-current-write' ? 128 : MAX_TRANSACTION_STATE_BYTES;
+    const readBackup = (path: string): Promise<string> =>
+      readTransactionBackupText.call(adapter, path, maximumBackupBytes);
+    const expectedDocument = await readBackup(action.new.documentPath);
+    const restored =
+      action.kind === 'generation-current-write'
+        ? action.old.exists
+          ? adapter.compareAndSwapGenerationCurrent === undefined
+            ? false
+            : await adapter.compareAndSwapGenerationCurrent(
+                action.old.path,
+                expectedDocument,
+                await readBackup(action.old.documentPath),
+              )
+          : adapter.compareAndMoveGenerationCurrent === undefined
+            ? false
+            : await adapter.compareAndMoveGenerationCurrent(
+                action.old.path,
+                expectedDocument,
+                action.new.rollbackPath,
+              )
+        : action.kind === 'managed-document-write'
+          ? action.old.exists
+            ? adapter.compareAndSwapManagedDocument === undefined
+              ? false
+              : await adapter.compareAndSwapManagedDocument(
+                  action.old.path,
+                  expectedDocument,
+                  await readBackup(action.old.documentPath),
+                )
+            : adapter.compareAndMoveManagedDocument === undefined
+              ? false
+              : await adapter.compareAndMoveManagedDocument(
+                  action.old.path,
+                  expectedDocument,
+                  action.new.rollbackPath,
+                )
+          : action.old.exists
+            ? await adapter.compareAndSwapText(
+                action.old.path,
+                expectedDocument,
+                await readBackup(action.old.documentPath),
+              )
+            : await adapter.compareAndMoveText(
+                action.old.path,
+                expectedDocument,
+                action.new.rollbackPath,
+              );
     if (!restored) throw new Error(`settings changed after transaction write: ${action.new.path}`);
     return;
   }

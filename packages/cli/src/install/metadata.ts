@@ -1,6 +1,6 @@
 import type { PackLock } from '@dshpack/core';
 
-import type { InstalledMetadataV0 } from '../list/contracts.js';
+import type { InstalledMetadataV1, SettingsContribution } from '../metadata/contracts.js';
 import { GENERATED_BY } from '../version.js';
 import type { InstalledPluginFact } from './profile-plugin.js';
 import type { ValidatedPackMaterial } from './read.js';
@@ -37,9 +37,14 @@ export function installedMetadata(
   installedAt: string,
   txid: string,
   material: ValidatedPackMaterial,
-): InstalledMetadataV0 {
+  state: {
+    assets: InstalledMetadataV1['assets'];
+    settingsContribution: SettingsContribution;
+    generation: number;
+  },
+): InstalledMetadataV1 {
   return {
-    metadataVersion: 0,
+    metadataVersion: 1,
     profile: plan.targetProfile,
     pack: {
       name: plan.pack.name,
@@ -59,5 +64,9 @@ export function installedMetadata(
     plugins,
     effectiveLock: effectiveInstallLock(plan, material, plugins, installedAt),
     sideEffects: ['profile/cordis.yml'],
+    assets: state.assets,
+    settingsContribution: state.settingsContribution,
+    generation: state.generation,
+    installedBy: GENERATED_BY,
   };
 }

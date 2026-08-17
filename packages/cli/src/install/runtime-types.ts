@@ -26,6 +26,9 @@ export type InstallRuntimeStage =
   | 'settings'
   | 'dump'
   | 'doctor'
+  | 'store'
+  | 'generation'
+  | 'current'
   | 'metadata';
 
 export interface InstallInput extends Omit<InstallPlanOptions, 'sourceArgument'> {

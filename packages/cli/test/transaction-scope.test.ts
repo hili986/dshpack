@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -31,6 +32,11 @@ function expectScopeFailure(
     journal: { actions: [] },
   });
   expect(result.diagnostics[0]).toMatchObject({ code, path });
+  expect(result.manualRecovery).toEqual([]);
+}
+
+function digest(bytes: Uint8Array): string {
+  return `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
 }
 
 describe('transaction mutation path scope', () => {
@@ -214,6 +220,217 @@ describe('transaction mutation path scope', () => {
 
       expectScopeFailure(result, 'E_TRANSACTION_SETTINGS_PATH_SCOPE', outside);
       expect(await readFile(outside, 'utf8')).toBe('owner: external\n');
+    });
+  });
+
+  it('rejects malformed store and generation state paths before writing any state', async () => {
+    await withTemporaryRoot(async (root, dshHome) => {
+      const bytes = Buffer.from('state');
+      const address = digest(bytes);
+      const token = address.slice('sha256-'.length);
+      const outside = join(root, 'outside-state');
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, 'sentinel'), 'external\n');
+      const cases = [
+        {
+          kind: 'store-block' as const,
+          path: join(dshHome, '.dshpack', 'store', 'zz', address),
+          code: 'E_TRANSACTION_STORE_PATH_SCOPE',
+        },
+        {
+          kind: 'store-block' as const,
+          path: join(dshHome, '.dshpack', 'store', token.slice(0, 2), 'extra', address),
+          code: 'E_TRANSACTION_STORE_PATH_SCOPE',
+        },
+        {
+          kind: 'generation' as const,
+          path: join(dshHome, '.dshpack', 'generations', 'web', '0001.json'),
+          code: 'E_TRANSACTION_GENERATION_PATH_SCOPE',
+        },
+        {
+          kind: 'generation' as const,
+          path: join(dshHome, '.dshpack', 'generations', 'Bad', '0001.json'),
+          code: 'E_TRANSACTION_GENERATION_PATH_SCOPE',
+        },
+      ];
+      for (const [index, entry] of cases.entries()) {
+        const result = await runTransaction(
+          { adapter: nodeTransactionAdapter, dshHome, txid: `malformed-state-${String(index)}` },
+          async (transaction) => transaction.writeStateFile(entry.kind, entry.path, bytes),
+        );
+        expectScopeFailure(result, entry.code, entry.path);
+      }
+      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
+    });
+  });
+
+  it('rejects noncanonical managed-marker and generation filename leaves before any state action', async () => {
+    await withTemporaryRoot(async (_root, dshHome) => {
+      const managed = ['Bad.json', '.json', 'web.json'];
+      for (const [index, leaf] of managed.entries()) {
+        const path = join(dshHome, '.dshpack', 'installed', leaf);
+        const result = await runTransaction(
+          {
+            adapter: nodeTransactionAdapter,
+            dshHome,
+            txid: `invalid-managed-leaf-${String(index)}`,
+          },
+          async (transaction) => transaction.writeManagedDocument(path, '{"metadataVersion":1}\n'),
+        );
+        expectScopeFailure(result, 'E_TRANSACTION_MANAGED_DOCUMENT_PATH_SCOPE', path);
+        await expect(lstat(dirname(path))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+
+      const generation = [
+        'not-a-sequence.json',
+        '0000.json',
+        '00001.json',
+        `${String(Number.MAX_SAFE_INTEGER + 1)}.json`,
+      ];
+      for (const [index, leaf] of generation.entries()) {
+        const path = join(dshHome, '.dshpack', 'generations', 'demo-pack', leaf);
+        const result = await runTransaction(
+          {
+            adapter: nodeTransactionAdapter,
+            dshHome,
+            txid: `invalid-generation-leaf-${String(index)}`,
+          },
+          async (transaction) =>
+            transaction.writeStateFile('generation', path, Buffer.from('{}\n')),
+        );
+        expectScopeFailure(result, 'E_TRANSACTION_GENERATION_PATH_SCOPE', path);
+        await expect(lstat(dirname(path))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    });
+  });
+
+  it('accepts the canonical positive safe-integer generation filename boundary', async () => {
+    await withTemporaryRoot(async (_root, dshHome) => {
+      const leaf = `${String(Number.MAX_SAFE_INTEGER)}.json`;
+      const path = join(dshHome, '.dshpack', 'generations', 'demo-pack', leaf);
+      const result = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'maximum-safe-generation-leaf' },
+        async (transaction) => transaction.writeStateFile('generation', path, Buffer.from('{}\n')),
+      );
+
+      expect(result).toMatchObject({ exitCode: 0, status: 'committed', manualRecovery: [] });
+      expect(await readFile(path, 'utf8')).toBe('{}\n');
+    });
+  });
+
+  it('rejects store and generation parent junctions without touching the external sentinel', async () => {
+    await withTemporaryRoot(async (root, dshHome) => {
+      const bytes = Buffer.from('state');
+      const address = digest(bytes);
+      const token = address.slice('sha256-'.length);
+      const outside = join(root, 'outside-state-root');
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, 'sentinel'), 'external\n');
+      await mkdir(join(dshHome, '.dshpack'), { recursive: true });
+      await symlink(
+        outside,
+        join(dshHome, '.dshpack', 'store'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      const storePath = join(dshHome, '.dshpack', 'store', token.slice(0, 2), address);
+      const storeResult = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'store-parent-junction' },
+        async (transaction) => transaction.writeStateFile('store-block', storePath, bytes),
+      );
+      expectScopeFailure(storeResult, 'E_TRANSACTION_STORE_PATH_SCOPE', storePath);
+
+      await rm(join(dshHome, '.dshpack', 'store'), { recursive: true, force: true });
+      await symlink(
+        outside,
+        join(dshHome, '.dshpack', 'generations'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      const current = join(dshHome, '.dshpack', 'generations', 'demo-pack', 'current');
+      const generationResult = await runTransaction(
+        { adapter: nodeTransactionAdapter, dshHome, txid: 'generation-parent-junction' },
+        async (transaction) => transaction.writeGenerationCurrent(current, undefined, '1\n'),
+      );
+      expectScopeFailure(generationResult, 'E_TRANSACTION_GENERATION_PATH_SCOPE', current);
+      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
+    });
+  });
+
+  it('revalidates a store parent swapped after the first validation before binary write', async () => {
+    await withTemporaryRoot(async (root, dshHome) => {
+      const bytes = Buffer.from('state');
+      const address = digest(bytes);
+      const token = address.slice('sha256-'.length);
+      const store = join(dshHome, '.dshpack', 'store');
+      const path = join(store, token.slice(0, 2), address);
+      const outside = join(root, 'outside-swapped-store');
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, 'sentinel'), 'external\n');
+      const base = nodeTransactionAdapter;
+      let validations = 0;
+      const result = await runTransaction(
+        {
+          adapter: {
+            ...base,
+            validateMutationPath: async (lock, kind, candidate) => {
+              await base.validateMutationPath(lock, kind, candidate);
+              if (kind === 'store-block' && ++validations === 1) {
+                await symlink(outside, store, process.platform === 'win32' ? 'junction' : 'dir');
+              }
+            },
+          },
+          dshHome,
+          txid: 'store-parent-swapped',
+        },
+        async (transaction) => transaction.writeStateFile('store-block', path, bytes),
+      );
+      expectScopeFailure(result, 'E_TRANSACTION_STORE_DIRECTORY_SCOPE', store);
+      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
+      await expect(readFile(join(outside, token.slice(0, 2), address))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+  });
+
+  it('revalidates a store parent swapped after parent creation immediately before the binary write', async () => {
+    await withTemporaryRoot(async (root, dshHome) => {
+      const bytes = Buffer.from('state');
+      const address = digest(bytes);
+      const token = address.slice('sha256-'.length);
+      const store = join(dshHome, '.dshpack', 'store');
+      const prefix = join(store, token.slice(0, 2));
+      const path = join(prefix, address);
+      const outside = join(root, 'outside-final-store-guard');
+      await mkdir(outside, { recursive: true });
+      await mkdir(prefix, { recursive: true });
+      await writeFile(join(outside, 'sentinel'), 'external\n');
+      const base = nodeTransactionAdapter;
+      let storeBlockValidations = 0;
+      const result = await runTransaction(
+        {
+          adapter: {
+            ...base,
+            async validateMutationPath(lock, kind, candidate) {
+              if (kind === 'store-block' && ++storeBlockValidations === 2) {
+                await rm(store, { recursive: true, force: true });
+                await symlink(outside, store, process.platform === 'win32' ? 'junction' : 'dir');
+              }
+              await base.validateMutationPath(lock, kind, candidate);
+            },
+          },
+          dshHome,
+          txid: 'store-parent-swapped-after-create',
+        },
+        async (transaction) => transaction.writeStateFile('store-block', path, bytes),
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        status: 'rolled-back',
+        exitCode: 31,
+        manualRecovery: [],
+        diagnostics: [{ code: 'E_TRANSACTION_STORE_PATH_SCOPE', path }],
+      });
+      expect(await readFile(join(outside, 'sentinel'), 'utf8')).toBe('external\n');
+      await expect(readFile(join(outside, address))).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 

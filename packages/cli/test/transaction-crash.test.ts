@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { compareAndSwapText as compareSettingsText } from '../src/adapters/settings.js';
+import { EXIT_CODES } from '../src/exit-codes.js';
 import {
   type CreateJournalAction,
   nodeTransactionAdapter,
@@ -223,6 +224,38 @@ describe('transaction crash windows', () => {
       await expect(
         withArtifactLock(root, (lock) => rollbackAction(nodeTransactionAdapter, lock, replace)),
       ).rejects.toThrow('preserved original is missing');
+    });
+  });
+
+  it('does not move an escaped replacement of a transaction-owned empty state directory', async () => {
+    await withTemporaryRoot(async (root) => {
+      const dshHome = join(root, 'home');
+      const stateDirectory = join(dshHome, '.dshpack', 'store', 'AA');
+      const action: CreateJournalAction = {
+        id: 'action-0003',
+        kind: 'create',
+        artifact: 'store-directory',
+        ownership: 'owned',
+        phase: 'applied',
+        old: { path: stateDirectory, exists: false },
+        new: {
+          path: stateDirectory,
+          exists: true,
+          rollbackPath: join(root, 'backup', 'new', 'action-0003'),
+          identity: 'owned-directory',
+          emptyOnRollback: true,
+        },
+      };
+      const adapter: TransactionAdapter = {
+        ...nodeTransactionAdapter,
+        async validateMutationPath() {
+          throw new TransactionFailure(EXIT_CODES.SECURITY, []);
+        },
+      };
+
+      await expect(
+        withArtifactLock(dshHome, (lock) => rollbackAction(adapter, lock, action)),
+      ).resolves.toBeUndefined();
     });
   });
 

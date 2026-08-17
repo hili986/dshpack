@@ -2,6 +2,35 @@ import type { Diagnostic } from '@dshpack/core';
 
 import type { ExitCode } from './exit-codes.js';
 
+export const MAX_TRANSACTION_STATE_BYTES = 10 * 1024 * 1024;
+
+export class TransactionStateReadLimitError extends Error {
+  constructor(
+    readonly path: string,
+    readonly bytes: number,
+  ) {
+    super(
+      `managed transaction state exceeds ${String(MAX_TRANSACTION_STATE_BYTES)} bytes: ${path}`,
+    );
+    this.name = 'TransactionStateReadLimitError';
+  }
+}
+
+export class TransactionStateReadSecurityError extends Error {
+  constructor(
+    readonly path: string,
+    reason: string,
+  ) {
+    super(`managed transaction state changed during bounded read: ${path}: ${reason}`);
+    this.name = 'TransactionStateReadSecurityError';
+  }
+}
+
+export interface TransactionStateMoveCondition {
+  contentSha256?: string;
+  empty?: true;
+}
+
 export interface TransactionArtifactLock {
   readonly dshHome: string;
   readonly lockPath: string;
@@ -16,6 +45,35 @@ export interface TransactionAdapter {
     expected: string | undefined,
     replacement: string,
   ): Promise<boolean>;
+  /** Bounded compare-and-swap for generation current; never delegates to settings text I/O. */
+  compareAndSwapGenerationCurrent?(
+    path: string,
+    expected: string | undefined,
+    replacement: string,
+  ): Promise<boolean>;
+  /** Bounded read for generation current before any transaction document action is reserved. */
+  readGenerationCurrent?(path: string): Promise<string | undefined>;
+  /** Bounded compare-and-move for generation current rollback. */
+  compareAndMoveGenerationCurrent?(
+    path: string,
+    expected: string,
+    destination: string,
+  ): Promise<boolean>;
+  /** Bounded compare-and-swap for installed metadata; never delegates to settings text I/O. */
+  readManagedDocument?(path: string): Promise<string | undefined>;
+  /** Stable bounded reader for transaction-private rollback document backups. */
+  readTransactionBackupText?(path: string, maximumBytes: number): Promise<string>;
+  compareAndSwapManagedDocument?(
+    path: string,
+    expected: string | undefined,
+    replacement: string,
+  ): Promise<boolean>;
+  /** Bounded compare-and-move for installed metadata rollback. */
+  compareAndMoveManagedDocument?(
+    path: string,
+    expected: string,
+    destination: string,
+  ): Promise<boolean>;
   createDirectoryExclusive(path: string): Promise<boolean>;
   ensureDirectory(path: string): Promise<void>;
   moveArtifactPath(
@@ -25,12 +83,19 @@ export interface TransactionAdapter {
     backupPath: string,
     direction: TransactionArtifactMoveDirection,
     expectedIdentity?: string,
+    stateCondition?: TransactionStateMoveCondition,
   ): Promise<boolean>;
   pathIdentity(path: string): Promise<string | undefined>;
   pathExists(path: string): Promise<boolean>;
   readText(path: string): Promise<string>;
   readTextIfExists(path: string): Promise<string | undefined>;
+  /** Optional for compatibility with pre-M1 test adapters; state writes fail closed when absent. */
+  readBytesIfExists?(path: string): Promise<Uint8Array | undefined>;
   atomicWriteText(path: string, contents: string): Promise<void>;
+  /** Exclusive, durable binary creation used only for transaction-owned metadata state. */
+  writeExclusiveBytes?(path: string, bytes: Uint8Array): Promise<boolean>;
+  /** Check a transaction-owned state parent before it can be removed during rollback. */
+  isDirectoryEmpty?(path: string): Promise<boolean>;
   rename(from: string, to: string): Promise<void>;
   validateMutationPath(
     lock: TransactionArtifactLock,
@@ -39,8 +104,22 @@ export interface TransactionAdapter {
   ): Promise<void>;
 }
 
-export type TransactionArtifactKind = 'profile' | 'skill' | 'preset';
-export type TransactionMutationKind = TransactionArtifactKind | 'settings' | 'managed-document';
+export type TransactionUserArtifactKind = 'profile' | 'skill' | 'preset';
+export type TransactionStateDirectoryKind =
+  | 'store-directory'
+  | 'generation-directory'
+  | 'installed-directory';
+/** Internal adapter/journal union; state parents are deliberately absent from TransactionContext. */
+export type TransactionDirectoryArtifactKind =
+  | TransactionUserArtifactKind
+  | TransactionStateDirectoryKind;
+export type TransactionStateFileKind = 'store-block' | 'generation';
+export type TransactionArtifactKind = TransactionDirectoryArtifactKind | TransactionStateFileKind;
+export type TransactionMutationKind =
+  | TransactionArtifactKind
+  | 'settings'
+  | 'managed-document'
+  | 'generation-current';
 export type TransactionArtifactMoveDirection = 'to-backup' | 'from-backup';
 export type TransactionPhase = 'planned' | 'applied' | 'rolled-back' | 'rollback-failed';
 export type TransactionState =
@@ -58,7 +137,14 @@ export interface CreateJournalAction {
   ownership: 'pending' | 'not-owned' | 'owned';
   phase: TransactionPhase;
   old: { path: string; exists: false };
-  new: { path: string; exists: true; rollbackPath: string; identity?: string };
+  new: {
+    path: string;
+    exists: true;
+    rollbackPath: string;
+    identity?: string;
+    contentSha256?: string;
+    emptyOnRollback?: true;
+  };
 }
 
 export interface ReplaceJournalAction {
@@ -99,11 +185,21 @@ export interface ManagedDocumentJournalAction {
   new: DocumentJournalNew;
 }
 
+export interface GenerationCurrentJournalAction {
+  id: string;
+  kind: 'generation-current-write';
+  writeState: 'pending' | 'not-written' | 'written';
+  phase: TransactionPhase;
+  old: DocumentJournalOld;
+  new: DocumentJournalNew;
+}
+
 export type TransactionJournalAction =
   | CreateJournalAction
   | ReplaceJournalAction
   | SettingsJournalAction
-  | ManagedDocumentJournalAction;
+  | ManagedDocumentJournalAction
+  | GenerationCurrentJournalAction;
 
 export interface TransactionJournal {
   version: 0;
@@ -126,9 +222,22 @@ export interface TransactionContext {
   readonly txid: string;
   readonly backupDirectory: string;
   readonly journalPath: string;
-  create(kind: TransactionArtifactKind, path: string, apply: () => Promise<void>): Promise<void>;
-  replaceArtifact(kind: TransactionArtifactKind, path: string): Promise<void>;
+  create(
+    kind: TransactionUserArtifactKind,
+    path: string,
+    apply: () => Promise<void>,
+  ): Promise<void>;
+  replaceArtifact(kind: TransactionUserArtifactKind, path: string): Promise<void>;
   replaceProfile(path: string): Promise<void>;
+  artifactIdentity(kind: TransactionUserArtifactKind, path: string): Promise<string>;
+  readStateBytes(path: string): Promise<Uint8Array | undefined>;
+  writeStateFile(kind: TransactionStateFileKind, path: string, bytes: Uint8Array): Promise<boolean>;
+  readGenerationCurrent(path: string): Promise<string | undefined>;
+  writeGenerationCurrent(
+    path: string,
+    expectedDocument: string | undefined,
+    newDocument: string,
+  ): Promise<void>;
   writeManagedDocument(path: string, newDocument: string): Promise<void>;
   writeSettings(
     path: string,

@@ -5,6 +5,15 @@ import type { Diagnostic } from '@dshpack/core';
 import { prepareAgentPresetsMerge } from '../adapters/settings.js';
 import { diagnostic } from '../commands/shared.js';
 import { EXIT_CODES } from '../exit-codes.js';
+import {
+  advanceCurrent,
+  captureInstalledAssets,
+  generationDocument,
+  nextGeneration,
+  settingsContribution,
+  storeCapturedAssets,
+  writeGeneration,
+} from '../metadata/state-storage.js';
 import { type TransactionContext, TransactionFailure } from '../transaction.js';
 import { guardedInstall, installFailure, runInstallFault } from './engine-errors.js';
 import { type InstallReplayCommand, installProfile } from './engine-profile.js';
@@ -137,6 +146,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
     approvals,
     replay,
   );
+  let contribution = settingsContribution({});
   for (const asset of plan.skills)
     await applyAsset(transaction, runtime, material, input.dshHome, asset, 'skill', diagnostics);
   for (const asset of plan.presets)
@@ -156,6 +166,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
       before.settingsDocument,
       prepared.value.document,
     );
+    contribution = settingsContribution(prepared.value.section);
   }
   await runInstallFault(runtime, 'settings');
   await guardedInstall(
@@ -213,7 +224,41 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
       );
   }
   await runInstallFault(runtime, 'doctor');
-  const metadata = installedMetadata(plan, facts, runtime.now(), txid, material);
+  const assets = await captureInstalledAssets(transaction, input.dshHome, plan);
+  const allocation = await nextGeneration(transaction, input.dshHome, plan.targetProfile);
+  await storeCapturedAssets(transaction, input.dshHome, assets);
+  await runInstallFault(runtime, 'store');
+  const installedAt = runtime.now();
+  const generation = generationDocument(
+    allocation.sequence,
+    txid,
+    installedAt,
+    {
+      operation: 'install',
+      pack: {
+        name: plan.pack.name,
+        version: plan.pack.version,
+        manifestDigest: plan.manifestDigest,
+      },
+      source: plan.source,
+    },
+    assets,
+    contribution,
+  );
+  await writeGeneration(transaction, input.dshHome, plan.targetProfile, generation);
+  await runInstallFault(runtime, 'generation');
+  await advanceCurrent(
+    transaction,
+    allocation.currentPath,
+    allocation.previous,
+    allocation.sequence,
+  );
+  await runInstallFault(runtime, 'current');
+  const metadata = installedMetadata(plan, facts, installedAt, txid, material, {
+    assets: assets.map(({ asset }) => asset),
+    settingsContribution: contribution,
+    generation: allocation.sequence,
+  });
   await transaction.writeManagedDocument(
     join(input.dshHome, '.dshpack', 'installed', `${plan.targetProfile}.json`),
     `${JSON.stringify(metadata)}\n`,

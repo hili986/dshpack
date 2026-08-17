@@ -68,6 +68,34 @@ export async function writeFileAtomic(
   }
 }
 
+/** Exclusively create durable binary state without replacing an existing content-addressed file. */
+export async function writeFileExclusive(
+  filename: string,
+  contents: Uint8Array,
+  options: AtomicWriteOptions,
+): Promise<boolean> {
+  const parent = dirname(filename);
+  await mkdir(parent, {
+    recursive: true,
+    ...(options.dirMode === undefined ? {} : { mode: options.dirMode }),
+  });
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(filename, 'wx', options.mode);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;
+    throw error;
+  }
+  try {
+    await handle.writeFile(contents);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await syncDirectory(parent);
+  return true;
+}
+
 /** Secure default adapter for user-private text files. */
 const atomicWriteText = (path: string, contents: string): Promise<void> =>
   writeFileAtomic(path, contents, { mode: 0o600, dirMode: 0o700 });
@@ -79,6 +107,7 @@ export const nodeFileSystemAdapter: FileSystemAdapter = {
   createDirectoryExclusive: async (path) => {
     try {
       await mkdir(path, { mode: 0o700 });
+      await syncDirectory(dirname(path));
       return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException | null)?.code === 'EEXIST') return false;

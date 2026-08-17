@@ -89,6 +89,14 @@ class OwnedMemoryAdapter implements TransactionAdapter {
     return this.entries.has(path) ? this.readText(path) : undefined;
   }
 
+  async readTransactionBackupText(path: string, maximumBytes: number): Promise<string> {
+    const contents = await this.readText(path);
+    if (Buffer.byteLength(contents, 'utf8') > maximumBytes) {
+      throw new Error(`backup exceeds bounded read limit: ${path}`);
+    }
+    return contents;
+  }
+
   async atomicWriteText(path: string, contents: string): Promise<void> {
     this.entries.set(dirname(path), '<directory>');
     this.entries.set(path, contents);
