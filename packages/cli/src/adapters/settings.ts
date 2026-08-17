@@ -21,6 +21,15 @@ export interface SettingsAdapter {
 
 const AGENT_PRESETS = 'agent-presets';
 
+/**
+ * `agent-presets` is a YAML mapping: its M0 adapter preserves every string leaf key exactly,
+ * including case and punctuation. Metadata readers must use this predicate rather than inventing
+ * a narrower identifier policy that would strand an already-installed settings contribution.
+ */
+export function isAgentPresetLeafKey(value: unknown): value is string {
+  return typeof value === 'string';
+}
+
 function pass<T>(value: T): Result<T> {
   return { ok: true, value, diagnostics: [] };
 }

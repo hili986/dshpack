@@ -50,7 +50,8 @@ export function assertPortableSnapshotPath(path: string): void {
   }
 }
 
-function portableKey(path: string): string {
+/** Canonical comparison key for every persisted path that must remain portable to Windows. */
+export function portableSnapshotPathKey(path: string): string {
   return path.normalize('NFC').toLocaleLowerCase('en-US');
 }
 
@@ -58,7 +59,7 @@ export function assertPortableSnapshotEntries(entries: readonly PortableSnapshot
   const byKey = new Map<string, PortableSnapshotEntry>();
   for (const entry of entries) {
     assertPortableSnapshotPath(entry.path);
-    const key = portableKey(entry.path);
+    const key = portableSnapshotPathKey(entry.path);
     if (byKey.has(key)) {
       throw new SnapshotCaptureError(
         'security',

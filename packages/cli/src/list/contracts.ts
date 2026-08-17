@@ -1,8 +1,12 @@
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 
-import { parseCanonicalYaml, validatePackPath } from '@dshpack/core';
-import { valid } from 'semver';
-import { type InstalledMetadataV0, validEffectiveLock } from './metadata-contract.js';
+import { parseCanonicalYaml } from '@dshpack/core';
+import {
+  type InstalledMetadata,
+  isAddressableProfileName,
+  type MetadataReadMode,
+  parseInstalledMetadata as parseMetadataContract,
+} from '../metadata/contracts.js';
 import {
   bindDirectory,
   bindSecureRoot,
@@ -13,37 +17,29 @@ import {
   type SafePathHooks,
 } from './safe-fs.js';
 
-export type { InstalledMetadataV0, InstalledPluginMetadata } from './metadata-contract.js';
+export type {
+  InstalledMetadata,
+  InstalledMetadataV0,
+  InstalledMetadataV1,
+  InstalledPluginMetadata,
+} from '../metadata/contracts.js';
+export {
+  isAddressableProfileName,
+  isInstallableProfileName,
+  isReservedProfileName,
+  MODULE_FALLBACK,
+  PROFILE_NAME,
+} from '../metadata/contracts.js';
 
-export const PROFILE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
-/**
- * dsh ships and auto-creates these two profiles (`PROFILE_TEMPLATES` in its
- * `app-boot/src/profile.ts`). They are ordinary, healthy profiles — dshpack simply
- * declines to take them over, which is a statement about ownership, not about health.
- */
-const RESERVED_PROFILES = new Set(['web', 'headless']);
-/**
- * `profiles/node_modules` is the flat module fallback dsh's launcher maintains, and dsh
- * rejects the name outright in `resolveProfileDir`. It is not a profile in any state.
- */
-export const MODULE_FALLBACK = 'node_modules';
-const TRAVERSAL_NAMES = new Set(['', '.', '..']);
 const PRESET_NAME = /^[a-z0-9][a-z0-9-]*$/u;
 const RESERVED_PRESETS = new Set(['standard', 'code', 'minimal', 'cordis']);
-const SHA256 = /^sha256-[A-Za-z0-9_-]{43}$/u;
-const SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-const COMMIT = /^[a-f0-9]{40}$/u;
-const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u;
-const GITHUB_REPO = /^[A-Za-z0-9._-]+$/u;
-const TXID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 export type ProfileInspection =
   | { status: 'valid'; root: string; binding: DirectoryBinding }
   | { status: 'missing'; reason: string; failureKind: InspectionFailureKind }
   | { status: 'broken'; reason: string; failureKind: InspectionFailureKind };
 
 export type MetadataInspection =
-  | { status: 'valid'; metadata: InstalledMetadataV0 }
+  | { status: 'valid'; metadata: InstalledMetadata; mode: MetadataReadMode }
   | { status: 'missing' }
   | { status: 'broken'; reason: string; failureKind: InspectionFailureKind };
 
@@ -64,31 +60,6 @@ function isStringRecord(value: unknown): value is Record<string, string> {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
-}
-
-export function isReservedProfileName(name: string): boolean {
-  return RESERVED_PROFILES.has(name);
-}
-
-/** Whether `name` addresses a directory inside `profiles/` instead of escaping it. */
-export function isAddressableProfileName(name: string): boolean {
-  return !TRAVERSAL_NAMES.has(name) && !name.includes('/') && !name.includes('\\');
-}
-
-/**
- * Whether dshpack may create and own a profile under `name`. This answers "can we
- * install here", never "is the profile that already exists any good" — dsh accepts far
- * more than this, so judging existing profiles by this rule mislabels healthy ones.
- */
-export function isInstallableProfileName(name: string): boolean {
-  return (
-    name.length >= 3 &&
-    name.length <= 64 &&
-    PROFILE_NAME.test(name) &&
-    !isReservedProfileName(name) &&
-    name !== MODULE_FALLBACK &&
-    isAddressableProfileName(name)
-  );
 }
 
 function isSafePresetName(name: string): boolean {
@@ -173,203 +144,17 @@ export async function inspectProfile(
   return { status: 'valid', root, binding: profileDirectory.value };
 }
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
-function validSemver(value: unknown): value is string {
-  return typeof value === 'string' && valid(value) === value;
-}
-
-function validHttps(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === 'https:' &&
-      url.username === '' &&
-      url.password === '' &&
-      url.search === '' &&
-      url.hash === ''
-    );
-  } catch {
-    return false;
-  }
-}
-
-function validSource(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || typeof value.kind !== 'string') return false;
-  if (value.kind === 'directory' || value.kind === 'archive')
-    return (
-      exactKeys(value, ['kind', 'path']) && typeof value.path === 'string' && isAbsolute(value.path)
-    );
-  if (value.kind === 'https')
-    return (
-      exactKeys(value, ['kind', 'url', 'integrity']) &&
-      validHttps(value.url) &&
-      typeof value.integrity === 'string' &&
-      SHA512.test(value.integrity)
-    );
-  if (
-    value.kind !== 'github' ||
-    !exactKeys(value, ['kind', 'owner', 'repo', 'commit', 'url']) ||
-    typeof value.owner !== 'string' ||
-    !GITHUB_OWNER.test(value.owner) ||
-    typeof value.repo !== 'string' ||
-    !GITHUB_REPO.test(value.repo) ||
-    value.repo === '.' ||
-    value.repo === '..' ||
-    typeof value.commit !== 'string' ||
-    !COMMIT.test(value.commit) ||
-    typeof value.url !== 'string'
-  )
-    return false;
-  return (
-    value.url === `https://codeload.github.com/${value.owner}/${value.repo}/tar.gz/${value.commit}`
-  );
-}
-
-function validResolved(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  if (exactKeys(value, ['version'])) return validSemver(value.version);
-  if (exactKeys(value, ['commit']))
-    return typeof value.commit === 'string' && COMMIT.test(value.commit);
-  return exactKeys(value, ['url']) && validHttps(value.url);
-}
-
-function validIntegrity(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  if (value.kind === 'unverified')
-    return (
-      exactKeys(value, ['kind', 'reason']) &&
-      typeof value.reason === 'string' &&
-      value.reason.trim() !== ''
-    );
-  if (!exactKeys(value, ['kind', 'value']) || typeof value.value !== 'string') return false;
-  if (value.kind === 'git-commit') return COMMIT.test(value.value);
-  return (value.kind === 'npm-sri' || value.kind === 'sha512') && SHA512.test(value.value);
-}
-
-function validPluginFact(value: unknown): boolean {
-  if (
-    !isRecord(value) ||
-    !exactKeys(value, [
-      'name',
-      'packageJsonSha512',
-      'bundlePatch',
-      'actualResolved',
-      'actualIntegrity',
-    ]) ||
-    typeof value.name !== 'string' ||
-    !NPM_PACKAGE.test(value.name) ||
-    typeof value.packageJsonSha512 !== 'string' ||
-    !SHA512.test(value.packageJsonSha512) ||
-    typeof value.bundlePatch !== 'string' ||
-    !validatePackPath(value.bundlePatch.replace(/^\.\//u, '')).ok ||
-    !validResolved(value.actualResolved) ||
-    !validIntegrity(value.actualIntegrity)
-  )
-    return false;
-  const resolved = value.actualResolved;
-  const integrity = value.actualIntegrity;
-  if (integrity.kind === 'unverified') return true;
-  if ('version' in resolved) return integrity.kind === 'npm-sri';
-  if ('commit' in resolved)
-    return integrity.kind === 'git-commit' && resolved.commit === integrity.value;
-  return integrity.kind === 'sha512';
-}
-
-function validInstalledAt(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  try {
-    return new Date(value).toISOString() === value;
-  } catch {
-    return false;
-  }
-}
-
-function parseInstalledMetadata(value: unknown, profile: string): MetadataInspection {
-  if (!isRecord(value))
-    return {
-      status: 'broken',
-      reason: 'installed metadata 格式不合法。',
-      failureKind: 'contract',
-    };
-  if (value.profile !== profile)
-    return {
-      status: 'broken',
-      reason: 'installed metadata 的 profile 与文件名不一致。',
-      failureKind: 'contract',
-    };
-  const pack = value.pack;
-  const defaults = value.defaults;
-  const agentPreset = isRecord(defaults) ? defaults.agentPreset : undefined;
-  if (
-    !exactKeys(value, [
-      'metadataVersion',
-      'profile',
-      'pack',
-      'planDigest',
-      'installedAt',
-      'txid',
-      'source',
-      'defaults',
-      'plugins',
-      'effectiveLock',
-      'sideEffects',
-    ]) ||
-    value.metadataVersion !== 0 ||
-    !isRecord(pack) ||
-    !exactKeys(pack, ['name', 'version', 'manifestDigest']) ||
-    typeof pack.name !== 'string' ||
-    // Install derives the default profile name from the pack name, so a recorded pack
-    // name that could not be a profile name means the record is inconsistent.
-    !isInstallableProfileName(pack.name) ||
-    !validSemver(pack.version) ||
-    typeof pack.manifestDigest !== 'string' ||
-    !SHA256.test(pack.manifestDigest) ||
-    typeof value.planDigest !== 'string' ||
-    !SHA256.test(value.planDigest) ||
-    !validInstalledAt(value.installedAt) ||
-    typeof value.txid !== 'string' ||
-    !TXID.test(value.txid) ||
-    !validSource(value.source) ||
-    !isRecord(defaults) ||
-    !exactKeys(
-      defaults,
-      agentPreset === undefined ? ['permissionPreset'] : ['agentPreset', 'permissionPreset'],
-    ) ||
-    (agentPreset !== undefined &&
-      (typeof agentPreset !== 'string' || !isSafePresetName(agentPreset))) ||
-    (defaults.permissionPreset !== 'workspace-write' &&
-      defaults.permissionPreset !== 'danger-full-access') ||
-    !Array.isArray(value.plugins) ||
-    !value.plugins.every(validPluginFact) ||
-    !validEffectiveLock(
-      value.effectiveLock,
-      pack.manifestDigest,
-      value.installedAt,
-      value.plugins,
-    ) ||
-    !Array.isArray(value.sideEffects) ||
-    value.sideEffects.length !== 1 ||
-    value.sideEffects[0] !== 'profile/cordis.yml'
-  )
-    return {
-      status: 'broken',
-      reason: 'installed metadata 格式不合法。',
-      failureKind: 'contract',
-    };
-  return { status: 'valid', metadata: value as unknown as InstalledMetadataV0 };
-}
-
 export async function inspectMetadata(
   dshHome: string,
   profile: string,
   hooks: SafePathHooks = {},
 ): Promise<MetadataInspection> {
+  if (!isAddressableProfileName(profile))
+    return {
+      status: 'broken',
+      reason: 'profile 名称不符合安全规则。',
+      failureKind: 'contract',
+    };
   const home = await bindSecureRoot(dshHome, hooks);
   if (!home.ok) {
     if (home.kind === 'missing') return { status: 'missing' };
@@ -381,7 +166,17 @@ export async function inspectMetadata(
     return { status: 'broken', reason: source.reason, failureKind: failureKind(source.kind) };
   }
   try {
-    return parseInstalledMetadata(JSON.parse(source.value.text), profile);
+    const parsed = parseMetadataContract(JSON.parse(source.value.text), profile);
+    if (!parsed.ok)
+      return {
+        status: 'broken',
+        reason:
+          parsed.reason === 'profile-mismatch'
+            ? 'installed metadata 的 profile 与文件名不一致。'
+            : 'installed metadata 格式不合法。',
+        failureKind: 'contract',
+      };
+    return { status: 'valid', metadata: parsed.metadata, mode: parsed.mode };
   } catch {
     return {
       status: 'broken',
