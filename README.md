@@ -2,7 +2,7 @@
 
 把一个 dsh 场景——skills、MCP、profile patch、权限默认值——导出成一个**可安装、可分享、可审计**的 pack，再把 pack 装成标准的 dsh profile。
 
-> **当前状态：M0，预发布，尚未发布到 npm。** pack 格式与 CLI 参数都还不是稳定 API。`init` 与 `pack` 两个作者向命令仍未实现。
+> **当前状态：M0 已发布（`npm i -g dshpack`），仍属预发布。** pack 格式与 CLI 参数都还不是稳定 API。`init` 与 `pack` 两个作者向命令仍未实现。
 
 ## 它不做什么
 
