@@ -77,6 +77,18 @@ function requireMetadata(manifest, packageDirectory) {
   if (!repositoryUrl.test(manifest.repository.url)) {
     throw new Error(`${packageDirectory} repository.url has an invalid git+https GitHub shape`);
   }
+  // 0.1.0 shipped `https://github.com/<owner>/<repo>#readme` as its homepage and bugs
+  // URL: the gate above only asked whether these fields existed, so a template value
+  // counted as a real one. Presence is not correctness — check every URL, not just the
+  // one that would have failed the publish.
+  for (const [field, value] of [
+    ['homepage', manifest.homepage],
+    ['bugs.url', manifest.bugs?.url ?? manifest.bugs],
+  ]) {
+    if (typeof value === 'string' && /<owner>|<repo>/.test(value)) {
+      throw new Error(`${packageDirectory} ${field} is still the placeholder: ${value}`);
+    }
+  }
   if (!Array.isArray(manifest.keywords) || manifest.keywords.length === 0) {
     throw new Error(`${packageDirectory} keywords must be a non-empty array`);
   }
@@ -106,6 +118,15 @@ function forbiddenPath(path) {
     base.includes('.test.') ||
     base.includes('.spec.')
   );
+}
+
+// 0.1.0 published both packages without a README, so npm rendered a blank landing page
+// for a tool that was about to be announced. The tarball is the only place this shows.
+function assertReadmeShipped(files, packageName) {
+  const present = files.some(({ relative }) => relative.toLowerCase() === 'package/readme.md');
+  if (!present) {
+    throw new Error(`${packageName} tarball ships no README.md; npm would render an empty page`);
+  }
 }
 
 async function assertForbiddenContentAbsent(files, packageName) {
@@ -175,6 +196,7 @@ export async function verifyReleasePack() {
       await extractTarball({ cwd: extractionRoot, file: archive, strict: true });
       const files = await filesUnder(extractionRoot);
       await assertForbiddenContentAbsent(files, packageToVerify.name);
+      assertReadmeShipped(files, packageToVerify.name);
       if (packageToVerify.name === '@dshpack/core') await assertCoreSchemas(extractionRoot);
     }
   } finally {

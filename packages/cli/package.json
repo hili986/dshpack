@@ -1,6 +1,6 @@
 {
   "name": "dshpack",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "CLI for packaging and managing DSH distributions.",
   "license": "MIT",
@@ -13,9 +13,9 @@
     "url": "git+https://github.com/hili986/dshpack.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://github.com/<owner>/<repo>#readme",
+  "homepage": "https://github.com/hili986/dshpack#readme",
   "bugs": {
-    "url": "https://github.com/<owner>/<repo>/issues"
+    "url": "https://github.com/hili986/dshpack/issues"
   },
   "keywords": [
     "dsh",
@@ -35,7 +35,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -58,7 +59,6 @@
     "semver": "7.8.5",
     "tar": "7.5.22",
     "undici": "8.10.0",
-    "validate-npm-package-name": "8.0.0",
     "yaml": "2.9.0"
   }
 }

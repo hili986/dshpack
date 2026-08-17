@@ -1,6 +1,6 @@
 {
   "name": "@dshpack/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Side-effect-free core contracts and operations for dshpack.",
   "license": "MIT",
@@ -13,9 +13,9 @@
     "url": "git+https://github.com/hili986/dshpack.git",
     "directory": "packages/core"
   },
-  "homepage": "https://github.com/<owner>/<repo>#readme",
+  "homepage": "https://github.com/hili986/dshpack#readme",
   "bugs": {
-    "url": "https://github.com/<owner>/<repo>/issues"
+    "url": "https://github.com/hili986/dshpack/issues"
   },
   "keywords": [
     "dsh",
@@ -27,7 +27,8 @@
   "sideEffects": false,
   "files": [
     "dist",
-    "schemas"
+    "schemas",
+    "README.md"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
