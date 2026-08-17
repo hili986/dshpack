@@ -65,6 +65,44 @@ jobs:
           pnpm --filter @dshpack/core pack --dry-run
           pnpm --filter dshpack pack --dry-run
 
+      # A dry run that never touches auth cannot tell you the release will fail the way
+      # the first one did, twice: 403 for a token without 2FA bypass, then 404 for a
+      # scope that did not exist. pnpm builds publish options — performing the OIDC
+      # exchange — before it honours --dry-run, so this reaches the registry and stops
+      # short of uploading.
+      #
+      # NODE_AUTH_TOKEN is deliberately absent here. pnpm sets the token first and lets a
+      # successful OIDC exchange overwrite it, so with the token present a green run
+      # would prove nothing about the trusted publisher: silent fallback looks identical
+      # to success. Without it, `Skipped OIDC` is the whole signal.
+      # --force is what makes this check real rather than decorative: without it pnpm
+      # skips any package whose version is already in the registry, so once a version is
+      # out the packages are never processed, the exchange never runs, and asserting on
+      # its absence passes while testing nothing. --force only bypasses that skip;
+      # --dry-run still returns before anything is uploaded.
+      - name: Verify trusted publishing without publishing
+        if: ${{ inputs.dry_run == true }}
+        run: |
+          set -o pipefail
+          pnpm publish --recursive --access public --no-git-checks --provenance \
+            --dry-run --force 2>&1 | tee publish-auth-check.log
+
+          # Assert positively that both packages were reached. Absence of a failure
+          # marker is not evidence when the step could have processed nothing at all.
+          reached="$(grep -c '(dry run)' publish-auth-check.log || true)"
+          if [ "$reached" -ne 2 ]; then
+            echo "::error::Expected 2 packages to reach the publish path, saw ${reached}."
+            echo "::error::Nothing was verified. Check the log above before trusting a green release."
+            exit 1
+          fi
+
+          if grep -q 'Skipped OIDC' publish-auth-check.log; then
+            echo "::error::OIDC exchange failed, so the trusted publisher is not in effect."
+            echo "::error::A real publish would silently fall back to NPM_TOKEN. Reason above."
+            exit 1
+          fi
+          echo "Trusted publishing is in effect: ${reached} packages exchanged an OIDC token."
+
       - name: Publish
         if: ${{ inputs.dry_run == false }}
         run: pnpm publish --recursive --access public --no-git-checks --provenance
