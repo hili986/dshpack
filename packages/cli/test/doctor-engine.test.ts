@@ -65,8 +65,8 @@ vi.mock('../src/doctor/support.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/doctor/support.js')>();
   return {
     ...actual,
-    markdownFiles: async () => [],
     readProfile: async () => state.profile ?? { diagnostics: [] },
+    skillCandidateFiles: async () => [],
     text: async (path: string) => (path.includes('.dshpack') ? state.marker : undefined),
   };
 });

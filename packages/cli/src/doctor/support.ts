@@ -1,5 +1,5 @@
 import type { Dirent } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 
 import { type Diagnostic, scanSecrets } from '@dshpack/core';
@@ -156,23 +156,49 @@ export async function readProfile(
   }
 }
 
-export async function markdownFiles(root: string): Promise<string[]> {
+/** dsh registers `<dshHome>/skills` with `skipSystem`, so `.system` is not a discovery source. */
+const SYSTEM_SKILL_DIR = '.system';
+
+/** Whether `path` is a regular file; a missing or unreadable one is simply not one. */
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Skill files under one root, by dsh's own rule: a depth-1 `*.md`, or a depth-2
+ * `SKILL.md`. `isPotentialSkillPath` in `dsh-skill-filesystem` returns false the moment
+ * a path is more than two segments deep, so anything deeper is payload belonging to a
+ * skill rather than a skill — `skills/xingce/references/citation.md` is a reference
+ * document dsh never loads, and grading it as a skill reports a frontmatter defect
+ * against a file that has no frontmatter contract to meet.
+ *
+ * A missing root is empty rather than an error, but an unreadable one still throws: a
+ * permission problem must never read as a clean scan.
+ */
+export async function skillCandidateFiles(root: string): Promise<string[]> {
+  let entries: Dirent<string>[];
+  try {
+    entries = await readdir(root, { encoding: 'utf8', withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
   const output: string[] = [];
-  const visit = async (directory: string): Promise<void> => {
-    let entries: Dirent<string>[];
-    try {
-      entries = await readdir(directory, { encoding: 'utf8', withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === SYSTEM_SKILL_DIR) continue;
+      const candidate = join(path, 'SKILL.md');
+      if (await isFile(candidate)) output.push(candidate);
+      continue;
     }
-    for (const entry of entries) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) await visit(path);
-      if (entry.isFile() && (entry.name === 'SKILL.md' || path.endsWith('.md'))) output.push(path);
-    }
-  };
-  await visit(root);
+    // Anything left that ends in .md is a file or a link to one, and dsh reads both.
+    if (entry.name.endsWith('.md')) output.push(path);
+  }
   return output;
 }
 

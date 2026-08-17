@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   dshOptions,
-  markdownFiles,
   profileSecretDiagnostics,
   readProfile,
+  skillCandidateFiles,
   text,
   versionAtLeast,
 } from '../src/doctor/support.js';
@@ -100,19 +100,39 @@ describe('doctor support', () => {
     });
   });
 
-  it('discovers skill markdown recursively and fails closed for unreadable roots', async () => {
+  it('discovers exactly what dsh discovers and fails closed for unreadable roots', async () => {
     const root = await temporaryRoot();
     const skills = join(root, 'skills');
     await mkdir(join(skills, 'nested'), { recursive: true });
+    await mkdir(join(skills, 'xingce', 'references'), { recursive: true });
+    await mkdir(join(skills, '.system'), { recursive: true });
     await writeFile(join(skills, 'first.md'), '# first\n', 'utf8');
     await writeFile(join(skills, 'nested', 'SKILL.md'), '# nested\n', 'utf8');
     await writeFile(join(skills, 'ignored.txt'), 'ignored\n', 'utf8');
+    // Payload belonging to a skill, not a skill: dsh stops at depth 2, so a reference
+    // document lives at a depth dsh never reads and must not be graded as a skill.
+    await writeFile(join(skills, 'nested', 'other.md'), '# sibling\n', 'utf8');
+    await writeFile(join(skills, 'xingce', 'SKILL.md'), '# xingce\n', 'utf8');
+    await writeFile(join(skills, 'xingce', 'references', 'citation.md'), '# cite\n', 'utf8');
+    // Shaped exactly like `nested` above, so the only thing keeping it out of the result is
+    // skipSystem: the user root is registered with it, so .system is not a discovery source.
+    await writeFile(join(skills, '.system', 'SKILL.md'), '# builtin\n', 'utf8');
+    // A directory with no SKILL.md at all, and one whose SKILL.md is itself a directory:
+    // neither names a file dsh can load, so neither is a skill.
+    await mkdir(join(skills, 'docs'), { recursive: true });
+    await writeFile(join(skills, 'docs', 'readme.md'), '# docs\n', 'utf8');
+    await mkdir(join(skills, 'broken', 'SKILL.md'), { recursive: true });
 
-    await expect(markdownFiles(join(root, 'missing'))).resolves.toEqual([]);
-    await expect(markdownFiles(skills)).resolves.toEqual(
-      expect.arrayContaining([join(skills, 'first.md'), join(skills, 'nested', 'SKILL.md')]),
+    await expect(skillCandidateFiles(join(root, 'missing'))).resolves.toEqual([]);
+    const found = await skillCandidateFiles(skills);
+    expect([...found].sort()).toEqual(
+      [
+        join(skills, 'first.md'),
+        join(skills, 'nested', 'SKILL.md'),
+        join(skills, 'xingce', 'SKILL.md'),
+      ].sort(),
     );
-    await expect(markdownFiles(join(skills, 'first.md'))).rejects.toMatchObject({
+    await expect(skillCandidateFiles(join(skills, 'first.md'))).rejects.toMatchObject({
       code: expect.any(String),
     });
   });

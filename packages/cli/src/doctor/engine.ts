@@ -23,12 +23,12 @@ import {
   type DoctorInput,
   type DoctorMetadata,
   dshOptions,
-  markdownFiles,
   type ProfileFacts,
   profileDiagnostic,
   profileSecretDiagnostics,
   readProfile,
   sideEffects,
+  skillCandidateFiles,
   text,
   versionAtLeast,
 } from './support.js';
@@ -157,15 +157,18 @@ export async function runDoctor(
             code: 'DSH009',
           })),
         );
-      for (const root of [join(input.dshHome, 'skills'), join(input.dshHome, '.agent-presets')])
-        for (const path of await markdownFiles(root)) {
-          const source = await text(path);
-          if (source === undefined) continue;
-          const lint = inspectSkill(source, path);
-          diagnostics.push(...lint);
-          if (lint.some(({ code }) => code === 'DSH010'))
-            await fixSkillName(path, source, input, diagnostics);
-        }
+      // `<dshHome>/skills` only. `.agent-presets` holds presets, and a preset is a
+      // directory carrying `agent.cordis.yml` (metadata in `preset.yml`) — never a
+      // markdown file. Linting the markdown inside one against the skill contract
+      // invents a defect out of a file dsh reads under entirely different rules.
+      for (const path of await skillCandidateFiles(join(input.dshHome, 'skills'))) {
+        const source = await text(path);
+        if (source === undefined) continue;
+        const lint = inspectSkill(source, path);
+        diagnostics.push(...lint);
+        if (lint.some(({ code }) => code === 'DSH010'))
+          await fixSkillName(path, source, input, diagnostics);
+      }
       diagnostics.push(
         ...(await profileSecretDiagnostics(profile.facts.root)).map((item) => ({
           ...item,
