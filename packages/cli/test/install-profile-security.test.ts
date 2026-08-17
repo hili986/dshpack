@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   appendFile,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -16,7 +17,11 @@ import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { auditInstalledBuildScripts } from '../src/install/profile-builds.js';
-import { inspectConfinedDirectory, requireSecureDirectory } from '../src/install/profile-fs.js';
+import {
+  inspectConfinedDirectory,
+  requirePrivateDirectory,
+  requireSecureDirectory,
+} from '../src/install/profile-fs.js';
 import { validateOfficialProfileInit } from '../src/install/profile-init.js';
 import {
   exactPluginAddSpec,
@@ -137,6 +142,22 @@ describe('bundle patch path boundary', () => {
 });
 
 describe('atomic reads and private tarball staging', () => {
+  it('accepts private POSIX staging and defers directory ACL enforcement on Windows', async () => {
+    const root = await temporary();
+    await expect(requirePrivateDirectory(root)).resolves.toMatchObject({ canonical: root });
+    if (process.platform === 'win32') return;
+
+    await chmod(root, 0o755);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    try {
+      await expect(requirePrivateDirectory(root)).resolves.toMatchObject({ canonical: root });
+    } finally {
+      if (platform === undefined) Reflect.deleteProperty(process, 'platform');
+      else Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
   it('detects a package.json swap between lstat and opening the read handle', async () => {
     const root = await temporary();
     const facts = await installedWithPatch(root, 'patch.yml');
