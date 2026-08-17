@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '@dshpack/core';
 
@@ -28,6 +28,31 @@ function materialText(material: ValidatedPackMaterial, path: string): string {
       '重新验证 pack。',
     );
   return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
+/**
+ * Whether a post-install `doctor --strict` finding is this install's to answer for.
+ *
+ * doctor grades the whole harness home — every skill anyone ever wrote, every profile.
+ * Failing the transaction on all of it makes a correct install impossible in any home
+ * that is not already spotless: the pre-existing defect was not introduced here, and
+ * rolling this install back cannot repair it. Attribution is by path — what this
+ * transaction wrote, the profile it wrote into, the settings file it may have merged —
+ * plus findings that name no path at all, which describe the install target itself
+ * because doctor ran scoped to it.
+ */
+function attributableToInstall(item: Diagnostic, dshHome: string, plan: InstallPlan): boolean {
+  if (item.path === undefined) return true;
+  const owned = [
+    join(dshHome, 'profiles', plan.targetProfile),
+    join(dshHome, 'settings.yaml'),
+    // Skipped assets were already the user's; this install did not write them.
+    ...[...plan.skills, ...plan.presets]
+      .filter((asset) => asset.action !== 'skip')
+      .map((asset) => join(dshHome, ...asset.target.split('/'))),
+  ].map((path) => resolve(path));
+  const path = resolve(item.path);
+  return owned.some((root) => path === root || path.startsWith(`${root}${sep}`));
 }
 
 async function applyAsset(
@@ -157,8 +182,36 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
         fix: false,
       }),
   );
-  if (doctor.exitCode !== EXIT_CODES.SUCCESS)
+  const ours: Diagnostic[] = [];
+  const preexisting: Diagnostic[] = [];
+  for (const item of doctor.diagnostics)
+    (attributableToInstall(item, input.dshHome, plan) ? ours : preexisting).push(item);
+  if (ours.some((item) => item.severity === 'error'))
+    throw new TransactionFailure(EXIT_CODES.POST_INSTALL_VERIFY_FAILURE, ours);
+  // A doctor that failed without locating anything is still ours: silence is not evidence
+  // that the target is clean.
+  if (doctor.exitCode !== EXIT_CODES.SUCCESS && doctor.diagnostics.length === 0)
     throw new TransactionFailure(EXIT_CODES.POST_INSTALL_VERIFY_FAILURE, doctor.diagnostics);
+  if (preexisting.length > 0) {
+    diagnostics.push(
+      diagnostic(
+        'W_DOCTOR_PREEXISTING',
+        'warning',
+        `doctor 报告了 ${preexisting.length} 条本次安装之外的既有问题，安装未因此回滚。`,
+        `逐条复核：dshpack doctor --profile ${plan.targetProfile} --strict`,
+      ),
+    );
+    for (const item of preexisting)
+      diagnostics.push(
+        diagnostic(
+          'I_DOCTOR_PREEXISTING',
+          'info',
+          `${item.code}（${item.severity}）${item.message}`,
+          item.hint ?? '与本次安装无关，可单独处理。',
+          item.path,
+        ),
+      );
+  }
   await runInstallFault(runtime, 'doctor');
   const metadata = installedMetadata(plan, facts, runtime.now(), txid, material);
   await transaction.writeManagedDocument(

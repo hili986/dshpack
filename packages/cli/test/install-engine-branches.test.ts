@@ -267,6 +267,63 @@ describe('install engine boundary branches', () => {
     },
   );
 
+  it('rolls back what this install owns and only reports what it does not', async () => {
+    // doctor --strict grades the whole home. The two runs below differ in exactly one
+    // character of one path: whether the identical DSH010 lands on the skill this pack
+    // wrote or on one that was already there. Anything else that diverges is a defect.
+    const graded = (path: string) => ({
+      diagnostics: [diagnostic('DSH010', 'error', 'skill 缺少 name', '补 frontmatter', path)],
+      exitCode: 30 as const,
+      metadata: { sideEffects: [] },
+    });
+
+    const foreign = fakeRuntime();
+    foreign.runtime.runDoctor = async ({ dshHome }) =>
+      graded(join(dshHome, 'skills', 'someone-elses.md'));
+    const keptHome = await home();
+    const kept = await installPack(
+      {
+        source: await enginePack({ assets: true }),
+        dshHome: keptHome,
+        yes: true,
+        interactive: false,
+      },
+      foreign.runtime,
+    );
+
+    // A flat pack skill normalizes into a directory skill, so the finding this install
+    // owns lands at skills/notes/SKILL.md — asserted below against what was written.
+    const mine = fakeRuntime();
+    mine.runtime.runDoctor = async ({ dshHome }) =>
+      graded(join(dshHome, 'skills', 'notes', 'SKILL.md'));
+    const rolled = await installPack(
+      {
+        source: await enginePack({ assets: true }),
+        dshHome: await home(),
+        yes: true,
+        interactive: false,
+      },
+      mine.runtime,
+    );
+
+    expect(kept.metadata.status).toBe('installed');
+    expect(kept.exitCode).toBe(0);
+    const reported = kept.diagnostics.filter((item) => item.code.endsWith('_DOCTOR_PREEXISTING'));
+    expect(reported).toHaveLength(2);
+    // Reported, not swallowed: the original code and location survive into the report.
+    expect(reported.some((item) => item.message.includes('DSH010'))).toBe(true);
+    expect(reported.some((item) => item.path?.endsWith('someone-elses.md') === true)).toBe(true);
+    // ...and never as an error, which would fail the install through the back door.
+    expect(reported.every((item) => item.severity !== 'error')).toBe(true);
+    // The install really happened, and at the path the owned-finding case names.
+    await expect(
+      readFile(join(keptHome, 'skills', 'notes', 'SKILL.md'), 'utf8'),
+    ).resolves.toContain('name: notes');
+
+    expect(rolled.metadata.status).toBe('rolled-back');
+    expect(rolled.exitCode).toBe(24);
+  });
+
   it('rejects a missing immutable patch payload during apply', async () => {
     const fake = fakeRuntime();
     const read = fake.runtime.readValidatedPack;
