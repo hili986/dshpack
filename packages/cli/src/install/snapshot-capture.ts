@@ -1,5 +1,5 @@
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import {
   assertPortableSnapshotEntries,
@@ -161,6 +161,33 @@ function samePath(left: string, right: string): boolean {
   return relative(resolve(left), resolve(right)) === '';
 }
 
+/**
+ * The nearest ancestor of `path` that is a link, or undefined when the chain up to the
+ * drive root is ordinary directories.
+ *
+ * Asked by inspecting the ancestors, not by comparing the caller's spelling of the root
+ * against its realpath: on Windows an 8.3 alias names the very same directory through no
+ * link at all, yet compares unequal, which refused ordinary SOURCE directories outright.
+ * An ancestor that cannot be inspected is one we cannot vouch for, so it counts as linked.
+ */
+async function linkedAncestor(
+  path: string,
+  lstatPath: (path: string) => Promise<SnapshotStat>,
+): Promise<string | undefined> {
+  for (let current = dirname(resolve(path)); ; ) {
+    let stats: SnapshotStat;
+    try {
+      stats = await lstatPath(current);
+    } catch {
+      return current;
+    }
+    if (stats.kind === 'symlink') return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
 function within(root: string, candidate: string): boolean {
   const child = relative(root, candidate);
   return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`));
@@ -193,10 +220,11 @@ export async function captureSourceDirectory(
     throw new SnapshotCaptureError('security', 'SOURCE root is not a regular directory', root);
   }
   const canonicalRoot = await realpathPath(logicalRoot);
-  if (!samePath(logicalRoot, canonicalRoot)) {
+  const linked = await linkedAncestor(logicalRoot, lstatPath);
+  if (linked !== undefined) {
     throw new SnapshotCaptureError(
       'security',
-      'SOURCE path contains a symbolic-link or junction ancestor',
+      `SOURCE path contains a symbolic-link or junction ancestor: ${linked}`,
       root,
     );
   }

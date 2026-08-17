@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -171,6 +173,43 @@ describe('install source snapshot safety', () => {
         listDirectory: () => one('device'),
       }),
     ).rejects.toMatchObject({ kind: 'security' });
+  });
+
+  it('refuses a SOURCE reached through a linked ancestor, or one it cannot inspect', async () => {
+    const directory = { ...fileStat(0), kind: 'directory' as const };
+    const link = { ...fileStat(0), kind: 'symlink' as const };
+    async function* empty() {}
+
+    // Same spelling in and out — the old check compared those two and so never fired
+    // here, while on Windows an 8.3 alias made it fire on directories with no link at all.
+    await expect(
+      captureSourceDirectory('C:/outer/inner/pack', {
+        lstatPath: async (path) => (path === resolve('C:/outer/inner') ? link : directory),
+        realpathPath: async (path) => path,
+        listDirectory: empty,
+      }),
+    ).rejects.toMatchObject({ kind: 'security' });
+
+    await expect(
+      captureSourceDirectory('C:/outer/inner/pack', {
+        lstatPath: async (path) => {
+          if (path === resolve('C:/outer')) throw new Error('unreadable ancestor');
+          return directory;
+        },
+        realpathPath: async (path) => path,
+        listDirectory: empty,
+      }),
+    ).rejects.toMatchObject({ kind: 'security' });
+
+    // An ordinary chain is captured, including when the root's spelling differs from its
+    // realpath the way a Windows 8.3 alias does.
+    await expect(
+      captureSourceDirectory('C:/outer/inner/pack', {
+        lstatPath: async () => directory,
+        realpathPath: async () => resolve('C:/outer/inner/pack-with-a-long-name'),
+        listDirectory: empty,
+      }),
+    ).resolves.toEqual({ entries: [], files: [] });
   });
 
   it('skips ignored entries before lstat or recursive traversal', async () => {
