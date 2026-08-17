@@ -17,6 +17,8 @@ export interface ProfileReadHooks {
   afterFileSnapshot?(path: string): Promise<void>;
   /** Test seam for deterministic directory replacement mutants. */
   afterDirectoryLstat?(path: string): Promise<void>;
+  /** Test seam for deterministic replacement after a private directory's secure inspection. */
+  afterPrivateDirectoryInspection?(path: string): Promise<void>;
 }
 
 export interface AtomicFile {
@@ -152,6 +154,7 @@ export async function requirePrivateDirectory(
   hooks: ProfileReadHooks = {},
 ): Promise<SecureDirectory> {
   const directory = await requireSecureDirectory(path, hooks);
+  await hooks.afterPrivateDirectoryInspection?.(path);
   if (process.platform === 'win32') return directory;
   let current: BigStats;
   try {

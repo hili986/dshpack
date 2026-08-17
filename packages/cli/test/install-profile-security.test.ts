@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   appendFile,
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -142,16 +143,55 @@ describe('bundle patch path boundary', () => {
 });
 
 describe('atomic reads and private tarball staging', () => {
-  it('accepts private POSIX staging and defers directory ACL enforcement on Windows', async () => {
+  it('requires private POSIX staging and defers directory ACL enforcement on Windows', async () => {
     const root = await temporary();
     await expect(requirePrivateDirectory(root)).resolves.toMatchObject({ canonical: root });
-    if (process.platform === 'win32') return;
 
     await chmod(root, 0o755);
+    if (process.platform !== 'win32') {
+      await expect(requirePrivateDirectory(root)).rejects.toMatchObject({
+        code: 'E_PROFILE_DIRECTORY',
+      });
+    }
+
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
     try {
       await expect(requirePrivateDirectory(root)).resolves.toMatchObject({ canonical: root });
+    } finally {
+      if (platform === undefined) Reflect.deleteProperty(process, 'platform');
+      else Object.defineProperty(process, 'platform', platform);
+    }
+
+    if (process.platform === 'win32') {
+      Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+      try {
+        const mode = (await lstat(root, { bigint: true })).mode & 0o077n;
+        const forcedPosix = requirePrivateDirectory(root);
+        if (mode === 0n) await expect(forcedPosix).resolves.toMatchObject({ canonical: root });
+        else await expect(forcedPosix).rejects.toMatchObject({ code: 'E_PROFILE_DIRECTORY' });
+      } finally {
+        if (platform === undefined) Reflect.deleteProperty(process, 'platform');
+        else Object.defineProperty(process, 'platform', platform);
+      }
+    }
+  });
+
+  it('detects a private staging-parent replacement after secure inspection', async () => {
+    const root = await temporary();
+    const replacementSource = `${root}.original`;
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    try {
+      await expect(
+        requirePrivateDirectory(root, {
+          afterPrivateDirectoryInspection: async (path: string) => {
+            await rename(path, replacementSource);
+            roots.push(replacementSource);
+            await mkdir(path, { mode: 0o700 });
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'E_PROFILE_FILE_CHANGED' });
     } finally {
       if (platform === undefined) Reflect.deleteProperty(process, 'platform');
       else Object.defineProperty(process, 'platform', platform);
