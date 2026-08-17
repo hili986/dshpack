@@ -1,10 +1,21 @@
 import type { Dirent } from 'node:fs';
 import { type CommandReport, diagnostic, resolveDshHomeValue } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
-import { inspectMetadata, inspectProfile } from './contracts.js';
-import { bindSecureRoot, readDirectory, type SafePathResult } from './safe-fs.js';
+import {
+  inspectMetadata,
+  inspectProfile,
+  isReservedProfileName,
+  MODULE_FALLBACK,
+} from './contracts.js';
+import {
+  bindSecureRoot,
+  type DirectoryBinding,
+  readDirectory,
+  readText,
+  type SafePathResult,
+} from './safe-fs.js';
 
-export type ProfileStatus = 'tracked' | 'untracked' | 'broken';
+export type ProfileStatus = 'tracked' | 'untracked' | 'reserved' | 'broken';
 
 export type ListedProfile =
   | {
@@ -14,6 +25,7 @@ export type ListedProfile =
       installedAt: string;
     }
   | { profile: string; status: 'untracked' }
+  | { profile: string; status: 'reserved'; reason: string }
   | { profile: string; status: 'broken'; reason: string };
 
 export interface ListMetadata {
@@ -43,6 +55,23 @@ function entries(result: SafePathResult<Dirent<string>[]>): Dirent<string>[] | u
 
 function sortNames(names: Iterable<string>): string[] {
   return [...names].sort();
+}
+
+/**
+ * dsh decides a directory is a profile by exactly one test — it holds a `package.json`
+ * (`loadProfile` in its `app-boot/src/profile.ts`). Anything else under `profiles/` was
+ * put there by some other tool and is none of our business to grade.
+ *
+ * `refused` is deliberately not folded into `absent`: a junction or a swapped path is a
+ * finding, and dropping it for looking manifest-less would hide exactly what matters.
+ */
+async function profileManifest(
+  home: DirectoryBinding,
+  profile: string,
+): Promise<'present' | 'absent' | 'refused'> {
+  const result = await readText(home, ['profiles', profile, 'package.json']);
+  if (result.ok) return 'present';
+  return result.kind === 'missing' ? 'absent' : 'refused';
 }
 
 export async function listProfiles(input: ListInput): Promise<CommandReport<ListMetadata>> {
@@ -78,9 +107,21 @@ export async function listProfiles(input: ListInput): Promise<CommandReport<List
       EXIT_CODES.ENVIRONMENT,
     );
 
-  const names = new Set(profileEntries.map(({ name }) => name));
+  const names = new Set<string>();
+  for (const entry of profileEntries) {
+    // A plain file next to the profiles is somebody's scratch note, and the launcher's
+    // module fallback is not a profile either — dsh refuses that name outright. Anything
+    // that is neither file nor directory stays in, so inspection gets to report it.
+    if (entry.isFile() || entry.name === MODULE_FALLBACK) continue;
+    names.add(entry.name);
+  }
+  const claimed = new Set<string>();
   for (const marker of markerEntries)
-    if (marker.name.endsWith('.json')) names.add(marker.name.slice(0, -'.json'.length));
+    if (marker.name.endsWith('.json')) {
+      const name = marker.name.slice(0, -'.json'.length);
+      claimed.add(name);
+      names.add(name);
+    }
   if (
     names.size === 0 &&
     ((!profileResult.ok && profileResult.kind === 'security') ||
@@ -94,6 +135,10 @@ export async function listProfiles(input: ListInput): Promise<CommandReport<List
 
   const profiles: ListedProfile[] = [];
   for (const profile of sortNames(names)) {
+    // Silence is only safe for directories we never claimed; if dshpack recorded an
+    // install here, a directory that is no longer a profile is exactly what must be said.
+    if (!claimed.has(profile) && (await profileManifest(home.value, profile)) === 'absent')
+      continue;
     const profileState = await inspectProfile(dshHome, profile);
     const metadataState = await inspectMetadata(dshHome, profile);
     if (profileState.status === 'missing') {
@@ -109,7 +154,11 @@ export async function listProfiles(input: ListInput): Promise<CommandReport<List
       continue;
     }
     if (metadataState.status === 'missing') {
-      profiles.push({ profile, status: 'untracked' });
+      profiles.push(
+        isReservedProfileName(profile)
+          ? { profile, status: 'reserved', reason: 'dsh 保留 profile，dshpack 不接管。' }
+          : { profile, status: 'untracked' },
+      );
       continue;
     }
     if (metadataState.status === 'broken') {

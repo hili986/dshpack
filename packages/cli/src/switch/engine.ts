@@ -15,7 +15,8 @@ import {
   inspectMetadata,
   inspectPreset,
   inspectProfile,
-  isSafeProfileName,
+  isInstallableProfileName,
+  isReservedProfileName,
 } from '../list/contracts.js';
 import { revalidateDirectory } from '../list/safe-fs.js';
 import { inspectCurrentAgentPresets, updateSelectedPreset } from './settings.js';
@@ -281,7 +282,9 @@ export async function switchProfile(
       resolution.report.exitCode,
     );
   }
-  if (!isSafeProfileName(input.profile)) {
+  // switch only inspects and prints a launch command, so it takes no ownership: dsh's own
+  // reserved profiles are legitimate targets here even though install refuses to own them.
+  if (!isInstallableProfileName(input.profile) && !isReservedProfileName(input.profile)) {
     const unsafe = isUnsafeProfileInput(input.profile);
     return report(
       input,

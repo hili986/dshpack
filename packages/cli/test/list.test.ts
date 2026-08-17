@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   inspectMetadata,
   inspectProfile,
-  isSafeProfileName,
+  isAddressableProfileName,
+  isInstallableProfileName,
+  isReservedProfileName,
+  MODULE_FALLBACK,
   presetExists,
 } from '../src/list/contracts.js';
 import { listProfiles } from '../src/list/engine.js';
@@ -117,6 +120,69 @@ describe('listProfiles', () => {
     expect(await snapshot(root)).toEqual(before);
   });
 
+  it('lists a real dsh home the way dsh reads it, not the way a name check guesses', async () => {
+    // Shape taken from a live DSH_HOME: pnpm's module fallback, an installed pack, and
+    // the profile dsh ships and the user launches every day.
+    const root = await home();
+    await profile(root, 'research-writing');
+    await installed(root, 'research-writing', marker('research-writing'));
+    await profile(root, 'web');
+    // Give the fallback a manifest of its own: dsh rejects the name outright, so the
+    // structural test must not be what saves us here, or the name rule goes untested.
+    await profile(root, MODULE_FALLBACK);
+    await mkdir(join(root, 'profiles', MODULE_FALLBACK, 'dsh-at-file'), { recursive: true });
+
+    const report = await listProfiles({ dshHome: root });
+
+    expect(report.exitCode).toBe(0);
+    expect(report.metadata.profiles).toEqual([
+      expect.objectContaining({ profile: 'research-writing', status: 'tracked' }),
+      expect.objectContaining({ profile: 'web', status: 'reserved' }),
+    ]);
+  });
+
+  it('leaves directories that were never profiles out instead of grading them', async () => {
+    const root = await home();
+    await profile(root, 'real');
+    // A bare directory and a loose file: some other tool put them here.
+    await mkdir(join(root, 'profiles', 'stray-dir'), { recursive: true });
+    await writeFile(join(root, 'profiles', 'notes.md'), '# scratch\n', 'utf8');
+
+    const report = await listProfiles({ dshHome: root });
+
+    expect(report.metadata.profiles).toEqual([
+      expect.objectContaining({ profile: 'real', status: 'untracked' }),
+    ]);
+  });
+
+  it('reports a linked profile rather than dropping it for looking manifest-less', async () => {
+    const root = await home();
+    await profile(root, 'real');
+    const target = join(root, 'elsewhere');
+    await mkdir(target, { recursive: true });
+    await symlink(target, join(root, 'profiles', 'linked'), 'junction');
+
+    const report = await listProfiles({ dshHome: root });
+
+    // Skipping it would be the quiet failure: a junction under profiles/ is a finding.
+    expect(report.metadata.profiles).toEqual([
+      expect.objectContaining({ profile: 'linked', status: 'broken' }),
+      expect.objectContaining({ profile: 'real', status: 'untracked' }),
+    ]);
+  });
+
+  it('still reports a directory dshpack claimed that stopped being a profile', async () => {
+    const root = await home();
+    await mkdir(join(root, 'profiles', 'gutted'), { recursive: true });
+    await installed(root, 'gutted', marker('gutted'));
+
+    const report = await listProfiles({ dshHome: root });
+
+    expect(report.metadata.profiles).toEqual([
+      expect.objectContaining({ profile: 'gutted', status: 'broken' }),
+    ]);
+  });
+
   it('marks malformed metadata, invalid profiles, and orphan markers broken', async () => {
     const root = await home();
     await profile(root, 'bad-meta');
@@ -132,7 +198,7 @@ describe('listProfiles', () => {
       expect.objectContaining({ profile: 'bad-meta', status: 'broken' }),
       expect.objectContaining({ profile: 'bad-profile', status: 'broken' }),
       expect.objectContaining({ profile: 'orphan', status: 'broken' }),
-      expect.objectContaining({ profile: 'web', status: 'broken' }),
+      expect.objectContaining({ profile: 'web', status: 'reserved' }),
     ]);
     expect(
       report.metadata.profiles.map((entry) => ('reason' in entry ? entry.reason : undefined)),
@@ -140,7 +206,7 @@ describe('listProfiles', () => {
       'installed metadata 的 profile 与文件名不一致。',
       'profile package.json.name 与最终目录名不一致。',
       'installed metadata 对应的 profile 不存在。',
-      'profile 名称不符合安全规则。',
+      'dsh 保留 profile，dshpack 不接管。',
     ]);
   });
 
@@ -207,10 +273,34 @@ describe('listProfiles', () => {
 });
 
 describe('profile and metadata contracts', () => {
-  it('accepts only non-reserved 3–64 character kebab-case profile names', () => {
-    expect(isSafeProfileName('demo-profile')).toBe(true);
-    for (const name of ['ab', `${'a'.repeat(64)}b`, 'Bad', 'bad--name', 'web', 'headless'])
-      expect(isSafeProfileName(name)).toBe(false);
+  it('owns only non-reserved 3–64 character kebab-case profile names', () => {
+    expect(isInstallableProfileName('demo-profile')).toBe(true);
+    for (const name of [
+      'ab',
+      `${'a'.repeat(64)}b`,
+      'Bad',
+      'bad--name',
+      'web',
+      'headless',
+      'node_modules',
+      '..',
+      'a/b',
+      'a\\b',
+    ])
+      expect(isInstallableProfileName(name)).toBe(false);
+  });
+
+  it('separates a name dshpack may own from a name that merely addresses a directory', () => {
+    // web is dsh's own profile: unownable, but a perfectly ordinary directory name.
+    for (const name of ['web', 'headless', 'node_modules', 'Bad', 'ab']) {
+      expect(isInstallableProfileName(name)).toBe(false);
+      expect(isAddressableProfileName(name)).toBe(true);
+    }
+    for (const name of ['', '.', '..', 'a/b', 'a\\b'])
+      expect(isAddressableProfileName(name)).toBe(false);
+    expect(isReservedProfileName('web')).toBe(true);
+    expect(isReservedProfileName('headless')).toBe(true);
+    expect(isReservedProfileName('demo-profile')).toBe(false);
   });
 
   it('rejects non-directories, junctions, and missing official base files', async () => {

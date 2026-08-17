@@ -78,7 +78,7 @@ describe('list command registration', () => {
     expect(io.stderr).toEqual([]);
   });
 
-  it('renders tracked, untracked, broken, and empty human reports', async () => {
+  it('renders tracked, untracked, reserved, broken, and empty human reports', async () => {
     const io = capture();
     const run = vi
       .fn()
@@ -95,6 +95,7 @@ describe('list command registration', () => {
             },
             { profile: 'beta', status: 'untracked' },
             { profile: 'gamma', status: 'broken', reason: 'bad marker' },
+            { profile: 'web', status: 'reserved', reason: 'dsh 保留 profile，dshpack 不接管。' },
           ],
         },
       })
@@ -109,6 +110,9 @@ describe('list command registration', () => {
     expect(io.stdout.join('')).toContain('alpha  tracked  alpha-pack@1.0.0');
     expect(io.stdout.join('')).toContain('beta  untracked');
     expect(io.stdout.join('')).toContain('gamma  broken  bad marker');
+    // A reserved profile must not read as damaged: the word broken is the whole bug.
+    expect(io.stdout.join('')).toContain('web  reserved  dsh 保留 profile，dshpack 不接管。');
+    expect(io.stdout.join('')).not.toContain('web  broken');
     expect(io.stdout.join('')).toContain('未发现 profile。');
   });
 });

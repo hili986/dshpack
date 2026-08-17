@@ -16,7 +16,18 @@ import {
 export type { InstalledMetadataV0, InstalledPluginMetadata } from './metadata-contract.js';
 
 export const PROFILE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
-const RESERVED_PROFILES = new Set(['web', 'headless', '.', '..']);
+/**
+ * dsh ships and auto-creates these two profiles (`PROFILE_TEMPLATES` in its
+ * `app-boot/src/profile.ts`). They are ordinary, healthy profiles — dshpack simply
+ * declines to take them over, which is a statement about ownership, not about health.
+ */
+const RESERVED_PROFILES = new Set(['web', 'headless']);
+/**
+ * `profiles/node_modules` is the flat module fallback dsh's launcher maintains, and dsh
+ * rejects the name outright in `resolveProfileDir`. It is not a profile in any state.
+ */
+export const MODULE_FALLBACK = 'node_modules';
+const TRAVERSAL_NAMES = new Set(['', '.', '..']);
 const PRESET_NAME = /^[a-z0-9][a-z0-9-]*$/u;
 const RESERVED_PRESETS = new Set(['standard', 'code', 'minimal', 'cordis']);
 const SHA256 = /^sha256-[A-Za-z0-9_-]{43}$/u;
@@ -55,9 +66,28 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
 }
 
-export function isSafeProfileName(name: string): boolean {
+export function isReservedProfileName(name: string): boolean {
+  return RESERVED_PROFILES.has(name);
+}
+
+/** Whether `name` addresses a directory inside `profiles/` instead of escaping it. */
+export function isAddressableProfileName(name: string): boolean {
+  return !TRAVERSAL_NAMES.has(name) && !name.includes('/') && !name.includes('\\');
+}
+
+/**
+ * Whether dshpack may create and own a profile under `name`. This answers "can we
+ * install here", never "is the profile that already exists any good" — dsh accepts far
+ * more than this, so judging existing profiles by this rule mislabels healthy ones.
+ */
+export function isInstallableProfileName(name: string): boolean {
   return (
-    name.length >= 3 && name.length <= 64 && PROFILE_NAME.test(name) && !RESERVED_PROFILES.has(name)
+    name.length >= 3 &&
+    name.length <= 64 &&
+    PROFILE_NAME.test(name) &&
+    !isReservedProfileName(name) &&
+    name !== MODULE_FALLBACK &&
+    isAddressableProfileName(name)
   );
 }
 
@@ -78,7 +108,7 @@ export async function inspectProfile(
   profile: string,
   hooks: SafePathHooks = {},
 ): Promise<ProfileInspection> {
-  if (!isSafeProfileName(profile)) return broken('profile 名称不符合安全规则。');
+  if (!isAddressableProfileName(profile)) return broken('profile 名称不符合安全规则。');
   const root = join(dshHome, 'profiles', profile);
   const home = await bindSecureRoot(dshHome, hooks);
   if (!home.ok)
@@ -294,7 +324,9 @@ function parseInstalledMetadata(value: unknown, profile: string): MetadataInspec
     !isRecord(pack) ||
     !exactKeys(pack, ['name', 'version', 'manifestDigest']) ||
     typeof pack.name !== 'string' ||
-    !isSafeProfileName(pack.name) ||
+    // Install derives the default profile name from the pack name, so a recorded pack
+    // name that could not be a profile name means the record is inconsistent.
+    !isInstallableProfileName(pack.name) ||
     !validSemver(pack.version) ||
     typeof pack.manifestDigest !== 'string' ||
     !SHA256.test(pack.manifestDigest) ||

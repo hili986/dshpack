@@ -6,7 +6,7 @@ import { resolveDshHome, writeReport } from './shared.js';
 
 export const listCommand = {
   name: 'list',
-  description: '只读列出 tracked、untracked 与 broken profiles',
+  description: '只读列出 tracked、untracked、reserved 与 broken profiles',
 } as const;
 
 export type ListRunner = (input: { dshHome: string }) => Promise<CommandReport<ListMetadata>>;
@@ -29,6 +29,7 @@ function renderProfile(profile: ListedProfile): string {
   if (profile.status === 'tracked')
     return `${name}  tracked  ${profile.pack.name}@${profile.pack.version}`;
   if (profile.status === 'broken') return `${name}  broken  ${profile.reason}`;
+  if (profile.status === 'reserved') return `${name}  reserved  ${profile.reason}`;
   return `${name}  untracked`;
 }
 
