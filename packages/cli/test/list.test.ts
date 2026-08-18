@@ -142,6 +142,59 @@ describe('listProfiles', () => {
     ]);
   });
 
+  it('never lists profiles/node_modules, whether bare or carrying a manifest', async () => {
+    const root = await home();
+    const fallback = join(root, 'profiles', MODULE_FALLBACK);
+    await mkdir(fallback, { recursive: true });
+
+    await expect(listProfiles({ dshHome: root })).resolves.toMatchObject({
+      metadata: { profiles: [] },
+    });
+
+    await writeFile(join(fallback, 'package.json'), JSON.stringify({ name: 'pnpm-store' }), 'utf8');
+    await expect(listProfiles({ dshHome: root })).resolves.toMatchObject({
+      metadata: { profiles: [] },
+    });
+  });
+
+  it.each(['web', 'headless'])(
+    'reports initialized reserved profile %s as reserved',
+    async (name) => {
+      const root = await home();
+      await profile(root, name);
+
+      await expect(listProfiles({ dshHome: root })).resolves.toMatchObject({
+        metadata: {
+          profiles: [
+            {
+              profile: name,
+              status: 'reserved',
+              reason: 'dsh 保留 profile，dshpack 不接管。',
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  it('reports a structurally malformed reserved profile as broken', async () => {
+    const root = await home();
+    await profile(root, 'web');
+    await writeFile(join(root, 'profiles', 'web', 'cordis.patch.yml'), 'not: an-array\n', 'utf8');
+
+    await expect(listProfiles({ dshHome: root })).resolves.toMatchObject({
+      metadata: {
+        profiles: [
+          {
+            profile: 'web',
+            status: 'broken',
+            reason: 'profile cordis.patch.yml 顶层必须是 array。',
+          },
+        ],
+      },
+    });
+  });
+
   it('leaves directories that were never profiles out instead of grading them', async () => {
     const root = await home();
     await profile(root, 'real');
