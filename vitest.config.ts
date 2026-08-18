@@ -14,6 +14,15 @@ export default defineConfig({
     // Serial execution keeps the original timeouts deterministic without skipping
     // assertions or weakening any coverage gate.
     maxWorkers: 1,
+    // Vitest's 5s default is a patience budget, not a correctness gate, and it was sized
+    // for tests that only touch memory. These build real pack fixtures, run a full legacy
+    // install, and snapshot whole directory trees; on a clean windows-latest runner that
+    // crossed 5s and turned CI red on `migrate-engine` while every assertion still held.
+    // Raising the wait changes nothing about what is asserted — a genuine deadlock still
+    // fails, 15s later — and it removes a class of flake that was about to spread from one
+    // test to its neighbours. Per-file overrides stay available for anything slower.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     include: ['packages/*/test/**/*.test.ts', 'packages/cli/test/export.e2e.test.ts'],
     exclude: ['packages/cli/test/help.e2e.test.ts', 'packages/cli/test/process.e2e.test.ts'],
     coverage: {

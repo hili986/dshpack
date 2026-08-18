@@ -167,7 +167,9 @@ describe('transaction ownership and serialization', () => {
       value: 'installed',
     });
     expect(adapter.exclusiveCreates).toHaveLength(2);
-    expect(adapter.exclusiveCreates[0]).toMatch(/\\\.setup-[0-9a-f-]+$/u);
+    // The separator is whatever the host uses, so anchoring on `\` passed locally and
+    // failed on ubuntu. What the assertion is actually about is the leaf name.
+    expect(adapter.exclusiveCreates[0]).toMatch(/[\\/]\.setup-[0-9a-f-]+$/u);
     expect(adapter.exclusiveCreates[1]).toBe(skillPath);
     const intent = adapter.events.findIndex(
       (event) => event.startsWith('journal:') && event.includes('"ownership": "pending"'),
