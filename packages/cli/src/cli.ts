@@ -1,5 +1,5 @@
 import { Command, CommanderError } from 'commander';
-
+import { diffCommand, registerDiffCommand } from './commands/diff.js';
 import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
 import { gcCommand, registerGcCommand } from './commands/gc.js';
@@ -11,6 +11,7 @@ import { migrateCommand, registerMigrateCommand } from './commands/migrate.js';
 import { packCommand } from './commands/pack.js';
 import { registerRestoreCommand, restoreCommand } from './commands/restore.js';
 import { diagnostic, writeReport } from './commands/shared.js';
+import { registerStatusCommand, statusCommand } from './commands/status.js';
 import { registerSwitchCommand, switchCommand } from './commands/switch.js';
 import { registerUninstallCommand, uninstallCommand } from './commands/uninstall.js';
 import { registerUpdateCommand, updateCommand } from './commands/update.js';
@@ -30,6 +31,8 @@ const commandDefinitions = [
   uninstallCommand,
   restoreCommand,
   updateCommand,
+  diffCommand,
+  statusCommand,
   validateCommand,
   initCommand,
   packCommand,
@@ -85,7 +88,9 @@ export function createProgram(): Command {
       name === 'switch' ||
       name === 'uninstall' ||
       name === 'restore' ||
-      name === 'update'
+      name === 'update' ||
+      name === 'diff' ||
+      name === 'status'
     )
       continue;
     program
@@ -110,6 +115,8 @@ export function createProgram(): Command {
   registerUninstallCommand(program);
   registerRestoreCommand(program);
   registerUpdateCommand(program);
+  registerDiffCommand(program);
+  registerStatusCommand(program);
 
   return program;
 }

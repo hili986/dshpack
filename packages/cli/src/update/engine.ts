@@ -600,6 +600,9 @@ interface AssetMerge extends UpdateAssetOutcome {
     | { readonly identity: string; readonly files: readonly MetadataAssetFile[] }
     | undefined;
   readonly mergeAction: UpdateAssetOutcome['action'];
+  readonly baseState: AssetState;
+  readonly currentState: AssetState;
+  readonly targetState: AssetState;
 }
 
 /**
@@ -621,7 +624,7 @@ interface SettingsMerge extends UpdateSettingsOutcome {
   readonly target: SettingsState;
 }
 
-interface UpdateMergePlan {
+export interface ProfileDiffPlan {
   readonly marker: MarkerRecord & { readonly metadata: InstalledMetadataV1 };
   readonly assets: readonly AssetMerge[];
   readonly settings: readonly SettingsMerge[];
@@ -632,6 +635,29 @@ interface UpdateMergePlan {
   readonly deferredAssets: readonly DeferredMetadataAsset[];
   readonly conflicts: readonly Diagnostic[];
   readonly profileChanged: boolean;
+}
+
+export interface ProfileDiffPlanInput {
+  readonly dshHome: string;
+  readonly profile: string;
+  readonly runtime: UpdateRuntime;
+  /** A validated target is optional: local drift never opens a SOURCE. */
+  readonly target?: UpdatePreflight;
+}
+
+export class ProfileDiffPlanError extends Error {
+  constructor(readonly report: CommandReport) {
+    super('unable to build a read-only profile diff plan');
+    this.name = 'ProfileDiffPlanError';
+  }
+}
+
+interface MergePlanInput {
+  readonly dshHome: string;
+  readonly profile: string;
+  readonly only?: readonly string[];
+  readonly ours?: boolean;
+  readonly theirs?: boolean;
 }
 
 function updateFailure(
@@ -793,7 +819,11 @@ function profileTargetChanged(
   );
 }
 
-function onlyIncludes(input: UpdateInput, kind: UpdateAssetKind, id: string): boolean {
+function onlyIncludes(
+  input: Pick<MergePlanInput, 'only'>,
+  kind: UpdateAssetKind,
+  id: string,
+): boolean {
   if ((input.only?.length ?? 0) === 0) return true;
   const selectors = new Set(input.only);
   return (
@@ -802,7 +832,7 @@ function onlyIncludes(input: UpdateInput, kind: UpdateAssetKind, id: string): bo
   );
 }
 
-function onlyIncludesSetting(input: UpdateInput, key: string): boolean {
+function onlyIncludesSetting(input: Pick<MergePlanInput, 'only'>, key: string): boolean {
   if ((input.only?.length ?? 0) === 0) return true;
   const selectors = new Set(input.only);
   return selectors.has(`setting:${key}`) || selectors.has(`settings:${key}`);
@@ -850,7 +880,7 @@ function targetAction(
   action: UpdateAssetOutcome['action'],
   target: { readonly present: boolean },
   current: { readonly present: boolean },
-  input: UpdateInput,
+  input: Pick<MergePlanInput, 'ours' | 'theirs'>,
 ): UpdateAssetOutcome['action'] {
   if (action === 'conflict') {
     if (input.ours === true) return 'retain';
@@ -999,12 +1029,12 @@ function deferredAssets(
 }
 
 async function prepareMerge(
-  input: UpdateInput,
+  input: MergePlanInput,
   runtime: UpdateRuntime,
-  preflight: UpdatePreflight,
   marker: MarkerRecord & { readonly metadata: InstalledMetadataV1 },
-): Promise<UpdateMergePlan> {
-  const targets = targetAssets(preflight.material);
+  preflight?: UpdatePreflight,
+): Promise<ProfileDiffPlan> {
+  const targets = preflight === undefined ? [] : targetAssets(preflight.material);
   const bases = marker.metadata.assets.filter(
     (asset): asset is MetadataAsset & { kind: UpdateAssetKind } =>
       asset.kind === 'profile' || asset.kind === 'skill' || asset.kind === 'preset',
@@ -1031,7 +1061,10 @@ async function prepareMerge(
   );
   const profileDeferred = deferredByKey.get(`profile:${input.profile}`);
   const profile = baseByKey.get(`profile:${input.profile}`);
-  const profileChanged = profileTargetChanged(marker.metadata, preflight, profileDeferred);
+  const profileChanged =
+    preflight === undefined
+      ? false
+      : profileTargetChanged(marker.metadata, preflight, profileDeferred);
   const keys = new Set([...mergeBases.keys(), ...targetByKey.keys(), `profile:${input.profile}`]);
   const assets: AssetMerge[] = [];
   const conflicts: Diagnostic[] = [];
@@ -1061,8 +1094,11 @@ async function prepareMerge(
     const current = state(observed?.files);
     const target: AssetState =
       kind === 'profile'
-        ? profileChanged
-          ? { present: true, canonicalValue: `profile:${sha256(stable(preflight.resolution))}` }
+        ? profileChanged && preflight !== undefined
+          ? {
+              present: true,
+              canonicalValue: `profile:${sha256(stable(preflight.resolution))}`,
+            }
           : base
         : state(targetAsset?.files);
     const merged = mergeAssetState(base, current, target);
@@ -1082,10 +1118,13 @@ async function prepareMerge(
       targetAsset,
       observed,
       mergeAction: rawAction,
+      baseState: base,
+      currentState: current,
+      targetState: target,
     });
   }
   const before = await currentSettings(runtime, input.dshHome);
-  const targetSection = targetSettings(preflight.material);
+  const targetSection = preflight === undefined ? {} : targetSettings(preflight.material);
   const settingKeys = new Set([
     ...marker.metadata.settingsContribution.keys.map(({ key }) => key),
     ...Object.keys(targetSection),
@@ -1139,15 +1178,52 @@ async function prepareMerge(
   };
 }
 
+/**
+ * Read-only projection shared by `update` and the `diff` command.
+ * `deferredAssets` stays inside update/ so a caller can inspect a baseline without claiming it.
+ */
+export async function planProfileDiff(input: ProfileDiffPlanInput): Promise<ProfileDiffPlan> {
+  let marker: MarkerRecord & { readonly metadata: InstalledMetadataV1 };
+  if (input.target !== undefined) {
+    marker = input.target.marker;
+  } else {
+    let markerRead: Awaited<ReturnType<typeof readMarker>>;
+    try {
+      markerRead = await readMarker(input.dshHome, input.profile);
+    } catch (error) {
+      throw new ProfileDiffPlanError(updateMarkerFailure(error).report);
+    }
+    if (markerRead.marker === undefined)
+      throw new ProfileDiffPlanError(
+        failure(
+          EXIT_CODES.CONTRACT,
+          diagnostic(
+            'E_DIFF_MARKER_UNTRACKED',
+            'error',
+            '该 profile 没有可用于对比的受跟踪 v1 安装标记。',
+            '先使用 dshpack install 安装，或运行 dshpack migrate 后重试。',
+          ),
+        ).report,
+      );
+    marker = markerRead.marker as MarkerRecord & { readonly metadata: InstalledMetadataV1 };
+  }
+  return prepareMerge(
+    { dshHome: input.dshHome, profile: input.profile },
+    input.runtime,
+    marker,
+    input.target,
+  );
+}
+
 async function dryRunUpdate(
   input: UpdateInput,
   runtime: UpdateRuntime,
   preflight: UpdatePreflight,
   diagnostics: readonly Diagnostic[],
 ): Promise<UpdateReport> {
-  let plan: UpdateMergePlan;
+  let plan: ProfileDiffPlan;
   try {
-    plan = await prepareMerge(input, runtime, preflight, preflight.marker);
+    plan = await prepareMerge(input, runtime, preflight.marker, preflight);
   } catch (error) {
     const known = error instanceof TransactionFailure;
     return {
@@ -1181,7 +1257,7 @@ async function dryRunUpdate(
   };
 }
 
-function writesSettings(plan: UpdateMergePlan): boolean {
+function writesSettings(plan: ProfileDiffPlan): boolean {
   return plan.settings.some(
     (entry) => entry.action === 'update' || entry.action === 'create' || entry.action === 'remove',
   );
@@ -1433,9 +1509,9 @@ async function applyUpdate(
   preflight: UpdatePreflight,
   initialDiagnostics: readonly Diagnostic[],
 ): Promise<UpdateReport> {
-  let preview: UpdateMergePlan;
+  let preview: ProfileDiffPlan;
   try {
-    preview = await prepareMerge(input, runtime, preflight, preflight.marker);
+    preview = await prepareMerge(input, runtime, preflight.marker, preflight);
   } catch (error) {
     const known = error instanceof TransactionFailure;
     const diagnostics = known
@@ -1490,7 +1566,7 @@ async function applyUpdate(
           ),
           ...newlyUnapproved.map((item) => authorizationReviewDiagnostic(item, preflight)),
         ]);
-      const locked = await prepareMerge(input, runtime, preflight, marker);
+      const locked = await prepareMerge(input, runtime, marker, preflight);
       executed = locked;
       if (locked.conflicts.length > 0)
         throw new TransactionFailure(EXIT_CODES.CONTRACT, locked.conflicts);

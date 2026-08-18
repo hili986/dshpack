@@ -26,17 +26,37 @@ export {
 export type { SourceAdapter } from './adapters/source.js';
 export { COMMAND_NAMES, createProgram, runCli } from './cli.js';
 export {
+  type DiffRunner,
+  type DiffRuntimeFactory,
+  diffCommand,
+  registerDiffCommand,
+} from './commands/diff.js';
+export {
   type InstallRunner,
   type InstallRuntimeFactory,
   installCommand,
   registerInstallCommand,
 } from './commands/install.js';
 export {
+  registerStatusCommand,
+  type StatusRunner,
+  type StatusRuntimeFactory,
+  statusCommand,
+} from './commands/status.js';
+export {
   registerUpdateCommand,
   type UpdateRunner,
   type UpdateRuntimeFactory,
   updateCommand,
 } from './commands/update.js';
+export {
+  type DiffInput,
+  type DiffItem,
+  type DiffMetadata,
+  type DiffReport,
+  type DiffRuntime,
+  diffProfile,
+} from './diff/engine.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
 export { installPack } from './install/engine.js';
 export {
@@ -63,6 +83,13 @@ export {
   type RestoreMetadata,
   restoreProfile,
 } from './restore/engine.js';
+export {
+  type StatusInput,
+  type StatusMetadata,
+  type StatusProfile,
+  type StatusReport,
+  statusProfiles,
+} from './status/engine.js';
 export * from './transaction.js';
 export {
   type UninstallDependencies,
