@@ -1602,6 +1602,39 @@ describe('transaction binary state files', () => {
     ).rejects.toThrow(/rollback target exists/u);
   });
 
+  it('refuses to move bounded current or a managed document that no longer holds the rolled-back value', async () => {
+    const dshHome = await home();
+    const current = join(dshHome, '.dshpack', 'generations', 'demo-pack', 'current');
+    const marker = join(dshHome, '.dshpack', 'installed', 'demo-pack.json');
+    const currentBackup = `${current}.backup`;
+    const markerBackup = `${marker}.backup`;
+    await mkdir(dirname(current), { recursive: true });
+    await mkdir(dirname(marker), { recursive: true });
+    await writeFile(current, '7\n');
+    await writeFile(marker, '{"metadataVersion":1,"generation":7}\n');
+    const adapter = createNodeTransactionAdapter();
+    if (
+      adapter.compareAndMoveGenerationCurrent === undefined ||
+      adapter.compareAndMoveManagedDocument === undefined
+    ) {
+      throw new Error('bounded state conditional mutations are required');
+    }
+
+    // Someone else advanced the state after this rollback was planned. Moving anyway would
+    // file the wrong bytes under the backup name and destroy the only record of what to
+    // recover, so the move must decline instead — and decline without touching either path.
+    expect(await adapter.compareAndMoveGenerationCurrent(current, '1\n', currentBackup)).toBe(
+      false,
+    );
+    expect(
+      await adapter.compareAndMoveManagedDocument(marker, '{"metadataVersion":1}\n', markerBackup),
+    ).toBe(false);
+    expect(await readFile(current, 'utf8')).toBe('7\n');
+    expect(await readFile(marker, 'utf8')).toBe('{"metadataVersion":1,"generation":7}\n');
+    await expect(readFile(currentBackup, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(markerBackup, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('rejects invalid UTF-8 through the dedicated bounded current and marker adapters', async () => {
     const dshHome = await home();
     const current = join(dshHome, '.dshpack', 'generations', 'demo-pack', 'current');
