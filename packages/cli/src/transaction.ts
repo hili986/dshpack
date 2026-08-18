@@ -5,6 +5,7 @@ import { DurableDirectoryCreateError, DurableRenameAfterMoveError } from './adap
 import { EXIT_CODES } from './exit-codes.js';
 import {
   createArtifact,
+  deleteManagedDocument,
   deleteStateFile,
   replaceArtifact,
   writeDocument,
@@ -178,21 +179,23 @@ export async function runTransaction<T>(
         ),
       );
     },
-    async replaceArtifact(kind, path) {
+    async replaceArtifact(kind, path, expectedIdentity) {
       return serializeAction(() =>
         replaceArtifact(
           { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
           kind,
           path,
+          expectedIdentity,
         ),
       );
     },
-    async replaceProfile(path) {
+    async replaceProfile(path, expectedIdentity) {
       return serializeAction(() =>
         replaceArtifact(
           { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
           'profile',
           path,
+          expectedIdentity,
         ),
       );
     },
@@ -227,6 +230,16 @@ export async function runTransaction<T>(
           kind,
           path,
           expectedSha256,
+          expectedIdentity,
+        ),
+      );
+    },
+    async deleteManagedDocument(path, expectedDocument, expectedIdentity) {
+      return serializeAction(() =>
+        deleteManagedDocument(
+          { adapter, backupDirectory, journal, lock: requireArtifactLock(), persist },
+          path,
+          expectedDocument,
           expectedIdentity,
         ),
       );
@@ -521,6 +534,9 @@ export async function runTransaction<T>(
         return {
           ...resultBase,
           ok: false,
+          // The mutation journal is already committed.  Preserve the operation's facts so a
+          // caller can report the durable outcome accurately while still surfacing exit 25.
+          value,
           diagnostics: [
             diagnostic(
               'E_TRANSACTION_ARTIFACT_LOCK_RELEASE_FAILED',

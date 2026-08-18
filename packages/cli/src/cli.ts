@@ -9,8 +9,10 @@ import { listCommand, registerListCommand } from './commands/list.js';
 import { lockCommand, registerLockCommand } from './commands/lock.js';
 import { migrateCommand, registerMigrateCommand } from './commands/migrate.js';
 import { packCommand } from './commands/pack.js';
+import { registerRestoreCommand, restoreCommand } from './commands/restore.js';
 import { diagnostic, writeReport } from './commands/shared.js';
 import { registerSwitchCommand, switchCommand } from './commands/switch.js';
+import { registerUninstallCommand, uninstallCommand } from './commands/uninstall.js';
 import { registerValidateCommand, validateCommand } from './commands/validate.js';
 import { EXIT_CODES } from './exit-codes.js';
 import { DSHPACK_VERSION } from './version.js';
@@ -24,6 +26,8 @@ const commandDefinitions = [
   doctorCommand,
   gcCommand,
   migrateCommand,
+  uninstallCommand,
+  restoreCommand,
   validateCommand,
   initCommand,
   packCommand,
@@ -76,7 +80,9 @@ export function createProgram(): Command {
       name === 'install' ||
       name === 'list' ||
       name === 'lock' ||
-      name === 'switch'
+      name === 'switch' ||
+      name === 'uninstall' ||
+      name === 'restore'
     )
       continue;
     program
@@ -98,6 +104,8 @@ export function createProgram(): Command {
   registerListCommand(program);
   registerLockCommand(program);
   registerSwitchCommand(program);
+  registerUninstallCommand(program);
+  registerRestoreCommand(program);
 
   return program;
 }

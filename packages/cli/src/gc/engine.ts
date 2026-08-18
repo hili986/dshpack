@@ -15,7 +15,12 @@ import {
   type SafeFileSnapshot,
   type SafePathHooks,
 } from '../list/safe-fs.js';
-import { isInstallableProfileName, isValidSettingsContribution } from '../metadata/contracts.js';
+import {
+  isCanonicalSha256Sri,
+  isInstallableProfileName,
+  isValidSettingsContribution,
+  parseInstalledMetadata,
+} from '../metadata/contracts.js';
 import { isCanonicalCasStoreShard } from '../metadata/state-storage.js';
 import {
   createNodeTransactionAdapter,
@@ -33,7 +38,6 @@ import { actionId, serializeJournal } from '../transaction-journal.js';
 
 const DEFAULT_KEEP = 10;
 const CURRENT_MAX_BYTES = 128;
-const SHA256 = /^sha256-[A-Za-z0-9_-]{43}$/u;
 const STORE_PREFIX = /^[A-Za-z0-9_-]{2}$/u;
 
 export interface GcInput {
@@ -92,7 +96,8 @@ interface GcQuarantineFile extends PlannedStateFile {
   actionId: string;
 }
 
-class GcFailure extends Error {
+/** A GC/purge failure with an explicit recovery classification for callers sharing its purge phase. */
+export class GcFailure extends Error {
   constructor(
     readonly exitCode: ExitCode,
     readonly code: string,
@@ -120,6 +125,14 @@ function samePath(left: string, right: string): boolean {
 
 function isGcTransactionId(value: string): boolean {
   return /^gc-[A-Za-z0-9][A-Za-z0-9._-]{0,124}$/u.test(value);
+}
+
+function isUninstallPurgeTransactionId(value: string): boolean {
+  return /^uninstall-purge-[A-Za-z0-9][A-Za-z0-9._-]{0,111}$/u.test(value);
+}
+
+function isStatePurgeTransactionId(value: string): boolean {
+  return isGcTransactionId(value) || isUninstallPurgeTransactionId(value);
 }
 
 function isCanonicalActionId(value: string): boolean {
@@ -156,12 +169,18 @@ function journalArtifactPathShape(artifact: unknown, path: string): boolean {
   const leaf = basename(path);
   if (artifact === 'store-block') {
     const prefix = basename(dirname(path));
-    return SHA256.test(leaf) && STORE_PREFIX.test(prefix) && isCanonicalCasStoreShard(prefix, leaf);
+    return (
+      isCanonicalSha256Sri(leaf) &&
+      STORE_PREFIX.test(prefix) &&
+      isCanonicalCasStoreShard(prefix, leaf)
+    );
   }
   return (
-    artifact === 'generation' &&
+    (artifact === 'generation' || artifact === 'generation-current') &&
     isInstallableProfileName(basename(dirname(path))) &&
-    canonicalGenerationSequence(leaf) !== undefined
+    (artifact === 'generation-current'
+      ? leaf === 'current'
+      : canonicalGenerationSequence(leaf) !== undefined)
   );
 }
 
@@ -186,7 +205,7 @@ function journalActionPathsMatch(
   const expectedOld =
     artifact === 'store-block'
       ? join(dshHome, '.dshpack', 'store', basename(dirname(oldPath)), leaf)
-      : artifact === 'generation'
+      : artifact === 'generation' || artifact === 'generation-current'
         ? join(dshHome, '.dshpack', 'generations', basename(dirname(oldPath)), leaf)
         : undefined;
   return (
@@ -202,6 +221,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseGenerationDocument(
   bytes: Buffer,
+  profile: string,
   expectedSequence: number,
 ): {
   restorable: boolean;
@@ -245,7 +265,7 @@ function parseGenerationDocument(
     typeof value.pack.name !== 'string' ||
     typeof value.pack.version !== 'string' ||
     typeof value.pack.manifestDigest !== 'string' ||
-    !SHA256.test(value.pack.manifestDigest) ||
+    !isCanonicalSha256Sri(value.pack.manifestDigest) ||
     !isRecord(value.source) ||
     typeof value.restorable !== 'boolean'
   ) {
@@ -262,6 +282,29 @@ function parseGenerationDocument(
       'generation settings contribution is invalid.',
     );
   }
+  if (value.metadata === null) {
+    if (value.operation !== 'uninstall' && value.operation !== 'restore')
+      fail(
+        EXIT_CODES.CONTRACT,
+        'E_GC_GENERATION_DOCUMENT',
+        'generation metadata does not describe its effective marker state.',
+      );
+  } else {
+    const metadata = parseInstalledMetadata(value.metadata, profile);
+    if (
+      !metadata.ok ||
+      metadata.metadata.metadataVersion !== 1 ||
+      value.operation === 'uninstall' ||
+      metadata.metadata.generation !== expectedSequence ||
+      JSON.stringify(metadata.metadata.settingsContribution) !==
+        JSON.stringify(value.settingsContribution)
+    )
+      fail(
+        EXIT_CODES.CONTRACT,
+        'E_GC_GENERATION_DOCUMENT',
+        'generation metadata does not describe its effective marker state.',
+      );
+  }
   if (!Array.isArray(value.entries))
     fail(EXIT_CODES.CONTRACT, 'E_GC_GENERATION_DOCUMENT', 'generation entries are invalid.');
   const targets = new Set<string>();
@@ -270,7 +313,7 @@ function parseGenerationDocument(
       !isRecord(entry) ||
       typeof entry.target !== 'string' ||
       typeof entry.sha256 !== 'string' ||
-      !SHA256.test(entry.sha256)
+      !isCanonicalSha256Sri(entry.sha256)
     ) {
       fail(EXIT_CODES.CONTRACT, 'E_GC_GENERATION_DOCUMENT', 'generation entry is invalid.');
     }
@@ -312,7 +355,9 @@ function parseCurrent(bytes: Buffer): number {
 
 interface ParsedGcQuarantineJournal {
   state: 'committed' | 'rolled-back';
+  purpose: 'gc' | 'uninstall-purge';
   actions: readonly GcQuarantineFile[];
+  actionIds: ReadonlySet<string>;
   dshHome: string;
   backupDirectory: string;
 }
@@ -343,7 +388,7 @@ function parseGcQuarantineJournal(
   if (
     !isRecord(value) ||
     value.version !== 0 ||
-    value.purpose !== 'gc' ||
+    (value.purpose !== 'gc' && value.purpose !== 'uninstall-purge') ||
     value.txid !== txid ||
     typeof value.dshHome !== 'string' ||
     !isAbsolute(value.dshHome) ||
@@ -360,7 +405,9 @@ function parseGcQuarantineJournal(
   if (value.state === 'rolled-back') {
     return {
       state: 'rolled-back',
+      purpose: value.purpose,
       actions: [],
+      actionIds: new Set(),
       dshHome: value.dshHome,
       backupDirectory: value.backupDirectory,
     };
@@ -393,12 +440,44 @@ function parseGcQuarantineJournal(
     );
   }
   const actionIds = new Set<string>();
-  const actions = value.actions.map((action, index) => {
+  for (const action of value.actions) {
+    if (!isRecord(action) || typeof action.id !== 'string' || !isCanonicalActionId(action.id)) {
+      fail(EXIT_CODES.CONTRACT, 'E_GC_QUARANTINE_JOURNAL', 'GC quarantine action is invalid.');
+    }
+    if (actionIds.has(action.id)) {
+      fail(
+        EXIT_CODES.CONTRACT,
+        'E_GC_QUARANTINE_JOURNAL',
+        'GC quarantine action id is duplicated.',
+      );
+    }
+    actionIds.add(action.id);
+  }
+  const eligible = value.actions.filter(
+    (action) =>
+      isRecord(action) &&
+      action.kind === 'replace' &&
+      action.phase === 'applied' &&
+      (action.artifact === 'store-block' ||
+        action.artifact === 'generation' ||
+        action.artifact === 'generation-current'),
+  );
+  if (value.purpose === 'gc' && eligible.length !== value.actions.length) {
+    fail(
+      EXIT_CODES.CONTRACT,
+      'E_GC_QUARANTINE_JOURNAL',
+      'GC quarantine journal has a non-state collection action.',
+    );
+  }
+  const stateActionIds = new Set<string>();
+  const actions = eligible.map((action, index) => {
     if (
       !isRecord(action) ||
       action.kind !== 'replace' ||
       action.phase !== 'applied' ||
-      (action.artifact !== 'store-block' && action.artifact !== 'generation') ||
+      (action.artifact !== 'store-block' &&
+        action.artifact !== 'generation' &&
+        action.artifact !== 'generation-current') ||
       typeof action.id !== 'string' ||
       !isCanonicalActionId(action.id) ||
       !isRecord(action.old) ||
@@ -408,7 +487,7 @@ function parseGcQuarantineJournal(
       typeof action.old.path !== 'string' ||
       !isAbsolute(action.old.path) ||
       typeof action.old.contentSha256 !== 'string' ||
-      !SHA256.test(action.old.contentSha256) ||
+      !isCanonicalSha256Sri(action.old.contentSha256) ||
       typeof action.new.preservedAt !== 'string' ||
       !isAbsolute(action.new.preservedAt) ||
       !isCanonicalActionId(basename(action.new.preservedAt)) ||
@@ -427,14 +506,14 @@ function parseGcQuarantineJournal(
         `GC quarantine journal action ${String(index)} is invalid.`,
       );
     }
-    if (actionIds.has(action.id)) {
+    if (stateActionIds.has(action.id)) {
       fail(
         EXIT_CODES.CONTRACT,
         'E_GC_QUARANTINE_JOURNAL',
         `GC quarantine journal action ${String(index)} duplicates an action id.`,
       );
     }
-    actionIds.add(action.id);
+    stateActionIds.add(action.id);
     const path = join(dshHome, '.dshpack', 'backups', txid, 'old', action.id);
     return {
       actionId: action.id,
@@ -446,7 +525,9 @@ function parseGcQuarantineJournal(
   });
   return {
     state: 'committed',
+    purpose: value.purpose,
     actions,
+    actionIds,
     dshHome: value.dshHome,
     backupDirectory: value.backupDirectory,
   };
@@ -669,7 +750,7 @@ async function scanPlan(
         size: document.value.bytes.byteLength,
         maximumBytes: MAX_TRANSACTION_STATE_BYTES,
       });
-      const parsed = parseGenerationDocument(document.value.bytes, sequence);
+      const parsed = parseGenerationDocument(document.value.bytes, profile, sequence);
       const relative = join('.dshpack', 'generations', profile, entry.name);
       const manifest: GenerationManifest = {
         path: join(dshHome, relative),
@@ -737,7 +818,7 @@ async function scanPlan(
       if (
         !entry.isFile() ||
         entry.isSymbolicLink() ||
-        !SHA256.test(entry.name) ||
+        !isCanonicalSha256Sri(entry.name) ||
         !isCanonicalCasStoreShard(prefixEntry.name, entry.name)
       )
         fail(EXIT_CODES.SECURITY, 'E_GC_STORE_LAYOUT', 'CAS store contains an unsafe block entry.');
@@ -807,6 +888,7 @@ async function scanPlan(
 async function scanGcQuarantine(
   dshHome: string,
   bindRoot: typeof bindSecureRoot = bindSecureRoot,
+  onlyTxid?: string,
 ): Promise<readonly GcQuarantineFile[]> {
   const home = await bindRoot(dshHome);
   if (!home.ok) {
@@ -821,11 +903,14 @@ async function scanGcQuarantine(
       ? []
       : safeReadFailure(backups.kind, 'GC quarantine root');
   const payloads: GcQuarantineFile[] = [];
+  let foundRequestedTransaction = onlyTxid === undefined;
   for (const entry of [...entries].sort((left, right) =>
     left.name.localeCompare(right.name, 'en'),
   )) {
-    if (!entry.name.startsWith('gc-')) continue;
-    if (!entry.isDirectory() || entry.isSymbolicLink() || !isGcTransactionId(entry.name)) {
+    if (onlyTxid !== undefined && entry.name !== onlyTxid) continue;
+    foundRequestedTransaction = true;
+    if (!entry.name.startsWith('gc-') && !entry.name.startsWith('uninstall-purge-')) continue;
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !isStatePurgeTransactionId(entry.name)) {
       fail(
         EXIT_CODES.SECURITY,
         'E_GC_QUARANTINE_LAYOUT',
@@ -860,17 +945,22 @@ async function scanGcQuarantine(
     const actionsById = new Map(parsed.actions.map((action) => [action.actionId, action]));
     for (const payload of old.value) {
       const actionId = gcQuarantineActionId(payload.name);
-      if (
-        !payload.isFile() ||
-        payload.isSymbolicLink() ||
-        actionId === undefined ||
-        !actionsById.has(actionId) ||
-        namesByAction.has(actionId)
-      ) {
+      if (actionId === undefined || !parsed.actionIds.has(actionId)) {
         fail(
           EXIT_CODES.CONTRACT,
           'E_GC_QUARANTINE_JOURNAL',
           'GC quarantine payload directory has an invalid action slot.',
+        );
+      }
+      // Uninstall-purge journals also back up user artifacts and marker/settings documents.
+      // They remain recoverable; only immutable state deletion payloads are eligible for this
+      // second permanent collection phase.
+      if (!actionsById.has(actionId)) continue;
+      if (!payload.isFile() || payload.isSymbolicLink() || namesByAction.has(actionId)) {
+        fail(
+          EXIT_CODES.CONTRACT,
+          'E_GC_QUARANTINE_JOURNAL',
+          'GC quarantine state payload directory has an invalid action slot.',
         );
       }
       namesByAction.set(actionId, payload.name);
@@ -902,6 +992,12 @@ async function scanGcQuarantine(
       });
     }
   }
+  if (!foundRequestedTransaction)
+    fail(
+      EXIT_CODES.CONTRACT,
+      'E_GC_QUARANTINE_JOURNAL',
+      'committed state-collection quarantine is missing.',
+    );
   return payloads;
 }
 
@@ -937,19 +1033,20 @@ function stateReadFailure(error: unknown): never {
  * A committed transaction first keeps deleted bytes in `old` so rollback remains possible.
  * This second, lease-protected phase removes only payloads proven identical to that journal.
  */
-async function purgeGcQuarantine(
+export async function purgeCommittedStateQuarantine(
   dshHome: string,
   adapter: TransactionAdapter,
+  onlyTxid?: string,
   bindRoot: typeof bindSecureRoot = bindSecureRoot,
 ): Promise<void> {
-  const observed = await scanGcQuarantine(dshHome, bindRoot);
+  const observed = await scanGcQuarantine(dshHome, bindRoot, onlyTxid);
   if (observed.length === 0) return;
   let lock: Awaited<ReturnType<TransactionAdapter['acquireArtifactLock']>> | undefined;
   let failure: unknown;
   let removed = 0;
   try {
     lock = await adapter.acquireArtifactLock(dshHome);
-    const locked = await scanGcQuarantine(dshHome, bindRoot);
+    const locked = await scanGcQuarantine(dshHome, bindRoot, onlyTxid);
     if (adapter.purgeGcQuarantineFile === undefined) {
       fail(
         EXIT_CODES.INTERNAL,
@@ -1172,7 +1269,7 @@ export async function runGc(
     };
   if (initial.deletedGenerations.length === 0 && initial.deletedBlocks.length === 0) {
     try {
-      await purgeGcQuarantine(normalized.dshHome, adapter, bindRoot);
+      await purgeCommittedStateQuarantine(normalized.dshHome, adapter, undefined, bindRoot);
     } catch (error) {
       return error instanceof GcFailure && error.physicalProgress
         ? pendingPurgeReport(normalized, initial, error)
@@ -1292,7 +1389,7 @@ export async function runGc(
     };
   }
   try {
-    await purgeGcQuarantine(normalized.dshHome, adapter, bindRoot);
+    await purgeCommittedStateQuarantine(normalized.dshHome, adapter, undefined, bindRoot);
   } catch (error) {
     return pendingPurgeReport(normalized, transaction.value as GcPlan, error);
   }

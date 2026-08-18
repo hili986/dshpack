@@ -145,7 +145,12 @@ export type TransactionDirectoryArtifactKind =
   | TransactionUserArtifactKind
   | TransactionStateDirectoryKind;
 export type TransactionStateFileKind = 'store-block' | 'generation';
-export type TransactionArtifactKind = TransactionDirectoryArtifactKind | TransactionStateFileKind;
+/** Immutable files which may be journaled away by a destructive state operation. */
+export type TransactionStateDeletionKind = TransactionStateFileKind | 'generation-current';
+export type TransactionArtifactKind =
+  | TransactionDirectoryArtifactKind
+  | TransactionStateDeletionKind
+  | 'managed-document';
 export type TransactionMutationKind =
   | TransactionArtifactKind
   | 'settings'
@@ -241,8 +246,8 @@ export type TransactionJournalAction =
 export interface TransactionJournal {
   version: 0;
   txid: string;
-  /** Only GC transactions may create a quarantine eligible for permanent collection. */
-  purpose?: 'gc';
+  /** Only state-collection transactions may create a quarantine eligible for permanent collection. */
+  purpose?: 'gc' | 'uninstall-purge';
   dshHome: string;
   backupDirectory: string;
   state: TransactionState;
@@ -266,16 +271,27 @@ export interface TransactionContext {
     path: string,
     apply: () => Promise<void>,
   ): Promise<void>;
-  replaceArtifact(kind: TransactionUserArtifactKind, path: string): Promise<void>;
-  replaceProfile(path: string): Promise<void>;
+  /** Move a planned user artifact only if its locked-scan identity is still current. */
+  replaceArtifact(
+    kind: TransactionUserArtifactKind,
+    path: string,
+    expectedIdentity?: string,
+  ): Promise<void>;
+  replaceProfile(path: string, expectedIdentity?: string): Promise<void>;
   artifactIdentity(kind: TransactionUserArtifactKind, path: string): Promise<string>;
   readStateBytes(path: string): Promise<Uint8Array | undefined>;
   writeStateFile(kind: TransactionStateFileKind, path: string, bytes: Uint8Array): Promise<boolean>;
   /** Remove an immutable generation or CAS block through the transaction journal. */
   deleteStateFile(
-    kind: TransactionStateFileKind,
+    kind: TransactionStateDeletionKind,
     path: string,
     expectedSha256: string,
+    expectedIdentity: string,
+  ): Promise<void>;
+  /** Move a pre-read installed marker into this transaction's backup with exact CAS facts. */
+  deleteManagedDocument(
+    path: string,
+    expectedDocument: string,
     expectedIdentity: string,
   ): Promise<void>;
   readGenerationCurrent(path: string): Promise<string | undefined>;
@@ -312,7 +328,7 @@ export interface RunTransactionOptions {
   adapter: TransactionAdapter;
   dshHome: string;
   txid: string;
-  purpose?: 'gc';
+  purpose?: 'gc' | 'uninstall-purge';
 }
 
 export class TransactionFailure extends Error {

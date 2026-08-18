@@ -16,6 +16,7 @@ import {
   TransactionFailure,
   type TransactionJournal,
   type TransactionMutationKind,
+  type TransactionStateDeletionKind,
   type TransactionStateDirectoryKind,
   type TransactionStateFileKind,
   TransactionStateReadLimitError,
@@ -270,7 +271,7 @@ export async function writeStateFile(
 /** Move a verified immutable state file aside so rollback can restore its exact original bytes. */
 export async function deleteStateFile(
   options: ActionOptions,
-  kind: TransactionStateFileKind,
+  kind: TransactionStateDeletionKind,
   path: string,
   expectedSha256: string,
   expectedIdentity: string,
@@ -352,19 +353,107 @@ export async function deleteStateFile(
   await persist();
 }
 
+/**
+ * Remove an installed marker only after proving the caller's secure text and identity are still
+ * current. The marker is renamed into the transaction backup, never unlinked directly.
+ */
+export async function deleteManagedDocument(
+  options: ActionOptions,
+  path: string,
+  expectedDocument: string,
+  expectedIdentity: string,
+): Promise<void> {
+  const { adapter, backupDirectory, journal, lock, persist } = options;
+  if (adapter.readManagedDocument === undefined) {
+    throw new TransactionFailure(EXIT_CODES.INTERNAL, [
+      diagnostic(
+        'E_TRANSACTION_STATE_ADAPTER',
+        'transaction adapter does not support bounded installed metadata reads.',
+        'Use the production transaction adapter or explicitly provide a bounded reader in tests.',
+        path,
+      ),
+    ]);
+  }
+  await adapter.validateMutationPath(lock, 'managed-document', path);
+  const current = await adapter.readManagedDocument(path);
+  const identity = await adapter.pathIdentity(path);
+  if (current !== expectedDocument || identity !== expectedIdentity) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_MANAGED_DOCUMENT_CHANGED',
+        'installed metadata changed after the caller captured its secure snapshot.',
+        'Read the installed metadata again and retry the operation.',
+        path,
+      ),
+    ]);
+  }
+  const id = actionId(journal.actions.length + 1);
+  const preservedAt = join(backupDirectory, 'old', id);
+  const contentSha256 = sha256(Buffer.from(expectedDocument, 'utf8'));
+  await adapter.ensureDirectory(dirname(preservedAt));
+  const action: ReplaceJournalAction = {
+    id,
+    kind: 'replace',
+    artifact: 'managed-document',
+    phase: 'planned',
+    old: {
+      path,
+      exists: true,
+      identity,
+      contentSha256,
+    },
+    new: { path, exists: false, preservedAt },
+  };
+  journal.actions.push(action);
+  await persist();
+  const moved = await adapter.moveArtifactPath(
+    lock,
+    'managed-document',
+    path,
+    preservedAt,
+    'to-backup',
+    expectedIdentity,
+    { contentSha256 },
+  );
+  if (!moved) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_MANAGED_DOCUMENT_CHANGED',
+        'installed metadata changed while it was being removed.',
+        'Read the installed metadata again and retry the operation.',
+        path,
+      ),
+    ]);
+  }
+  action.phase = 'applied';
+  await persist();
+}
+
 export async function replaceArtifact(
   options: ActionOptions,
   kind: TransactionDirectoryArtifactKind,
   path: string,
+  expectedIdentity?: string,
 ): Promise<void> {
   const { adapter, backupDirectory, journal, lock, persist } = options;
   await adapter.validateMutationPath(lock, kind, path);
-  if (!(await adapter.pathExists(path))) {
+  const identity = await adapter.pathIdentity(path);
+  if (identity === undefined) {
     throw new TransactionFailure(EXIT_CODES.PROFILE_CONFLICT_OR_LOCK, [
       diagnostic(
         'E_TRANSACTION_REPLACE_MISSING',
         `replace 目标 ${kind} 不存在。`,
         '移除 replace 选项，或确认目标路径。',
+        path,
+      ),
+    ]);
+  }
+  if (expectedIdentity !== undefined && identity !== expectedIdentity) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_REPLACE_CHANGED',
+        `planned ${kind} changed after the locked uninstall scan.`,
+        'Rebuild the uninstall plan; the replacement was not removed.',
         path,
       ),
     ]);
@@ -377,13 +466,24 @@ export async function replaceArtifact(
     kind: 'replace',
     artifact: kind,
     phase: 'planned',
-    old: { path, exists: true },
+    // Persist the observed directory identity as the rollback CAS too.  A failed forward
+    // move must not restore a different payload that appeared in the quarantine meanwhile.
+    old: { path, exists: true, identity },
     new: { path, exists: false, preservedAt },
   };
   journal.actions.push(action);
   // This durable journal entry must precede the only forward rename.
   await persist();
-  await adapter.moveArtifactPath(lock, kind, path, preservedAt, 'to-backup');
+  if (!(await adapter.moveArtifactPath(lock, kind, path, preservedAt, 'to-backup', identity))) {
+    throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+      diagnostic(
+        'E_TRANSACTION_REPLACE_CHANGED',
+        `planned ${kind} changed while it was being removed.`,
+        'Rebuild the uninstall plan; the replacement was not removed.',
+        path,
+      ),
+    ]);
+  }
   action.phase = 'applied';
   await persist();
 }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -5,6 +6,7 @@ import { type PackLock, validateLockValue, validatePackPath } from '@dshpack/cor
 import { valid } from 'semver';
 import { isAgentPresetLeafKey } from '../adapters/settings.js';
 import { assertPortableSnapshotPath, portableSnapshotPathKey } from '../install/snapshot-path.js';
+import { decodeCanonicalSettingsValue } from './state-storage.js';
 
 export const PROFILE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 export const MODULE_FALLBACK = 'node_modules';
@@ -21,6 +23,34 @@ const GITHUB_REPO = /^[A-Za-z0-9._-]+$/u;
 const TXID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 const IDENTITY = /^\d+:\d+:\d+$/u;
+
+/**
+ * Accept only the one base64url spelling of a 32-byte SHA-256 SRI value.
+ * A regexp alone admits non-zero base64 pad bits, which aliases a different
+ * on-disk filename to the same digest bytes.
+ */
+export function isCanonicalSha256Sri(value: unknown): value is string {
+  if (typeof value !== 'string' || !SHA256.test(value)) return false;
+  const encoded = value.slice('sha256-'.length);
+  try {
+    const bytes = Buffer.from(encoded, 'base64url');
+    return bytes.byteLength === 32 && bytes.toString('base64url') === encoded;
+  } catch {
+    return false;
+  }
+}
+
+/** Accept only the one base64 spelling of a 64-byte SHA-512 SRI value. */
+export function isCanonicalSha512Sri(value: unknown): value is string {
+  if (typeof value !== 'string' || !SHA512.test(value)) return false;
+  const encoded = value.slice('sha512-'.length);
+  try {
+    const bytes = Buffer.from(encoded, 'base64');
+    return bytes.byteLength === 64 && bytes.toString('base64') === encoded;
+  } catch {
+    return false;
+  }
+}
 
 export interface InstalledPluginMetadata {
   name: string;
@@ -68,7 +98,7 @@ export interface MetadataAsset {
 
 export interface SettingsContribution {
   namespace: 'agent-presets';
-  keys: readonly { key: string; valueSha256: string }[];
+  keys: readonly { key: string; valueSha256: string; canonicalValue: string }[];
 }
 
 export interface InstalledMetadataV1 extends Omit<InstalledMetadataV0, 'metadataVersion'> {
@@ -155,7 +185,7 @@ function validSource(value: unknown): value is Record<string, unknown> {
       exactKeys(value, ['kind', 'url', 'integrity']) &&
       validHttps(value.url) &&
       typeof value.integrity === 'string' &&
-      SHA512.test(value.integrity)
+      isCanonicalSha512Sri(value.integrity)
     );
   if (
     value.kind !== 'github' ||
@@ -194,7 +224,7 @@ function validIntegrity(value: unknown): value is Record<string, unknown> {
     );
   if (!exactKeys(value, ['kind', 'value']) || typeof value.value !== 'string') return false;
   if (value.kind === 'git-commit') return COMMIT.test(value.value);
-  return (value.kind === 'npm-sri' || value.kind === 'sha512') && SHA512.test(value.value);
+  return (value.kind === 'npm-sri' || value.kind === 'sha512') && isCanonicalSha512Sri(value.value);
 }
 
 function validPluginFact(value: unknown): boolean {
@@ -210,7 +240,7 @@ function validPluginFact(value: unknown): boolean {
     typeof value.name !== 'string' ||
     !NPM_PACKAGE.test(value.name) ||
     typeof value.packageJsonSha512 !== 'string' ||
-    !SHA512.test(value.packageJsonSha512) ||
+    !isCanonicalSha512Sri(value.packageJsonSha512) ||
     typeof value.bundlePatch !== 'string' ||
     !validatePackPath(value.bundlePatch.replace(/^\.\//u, '')).ok ||
     !validResolved(value.actualResolved) ||
@@ -324,9 +354,9 @@ function validV0(value: unknown): value is InstalledMetadataV0 {
     isInstallableProfileName(pack.name) &&
     validSemver(pack.version) &&
     typeof pack.manifestDigest === 'string' &&
-    SHA256.test(pack.manifestDigest) &&
+    isCanonicalSha256Sri(pack.manifestDigest) &&
     typeof value.planDigest === 'string' &&
-    SHA256.test(value.planDigest) &&
+    isCanonicalSha256Sri(value.planDigest) &&
     validInstalledAt(value.installedAt) &&
     typeof value.txid === 'string' &&
     TXID.test(value.txid) &&
@@ -397,7 +427,7 @@ function validAssetFile(value: unknown): value is MetadataAssetFile {
     typeof value.path === 'string' &&
     isPortableAssetPath(value.path) &&
     typeof value.sha256 === 'string' &&
-    SHA256.test(value.sha256) &&
+    isCanonicalSha256Sri(value.sha256) &&
     typeof value.bytes === 'number' &&
     Number.isSafeInteger(value.bytes) &&
     value.bytes >= 0
@@ -447,17 +477,32 @@ export function isValidSettingsContribution(value: unknown): value is SettingsCo
   )
     return false;
   const keys = new Set<string>();
+  let previousKey: string | undefined;
   return value.keys.every((entry) => {
     if (
       !isRecord(entry) ||
-      !exactKeys(entry, ['key', 'valueSha256']) ||
+      !exactKeys(entry, ['key', 'valueSha256', 'canonicalValue']) ||
       !isAgentPresetLeafKey(entry.key) ||
       typeof entry.valueSha256 !== 'string' ||
-      !SHA256.test(entry.valueSha256) ||
-      keys.has(entry.key)
+      !isCanonicalSha256Sri(entry.valueSha256) ||
+      typeof entry.canonicalValue !== 'string' ||
+      keys.has(entry.key) ||
+      (previousKey !== undefined && previousKey >= entry.key)
     )
       return false;
+    const calculated = `sha256-${createHash('sha256')
+      .update(Buffer.from(entry.canonicalValue))
+      .digest('base64url')}`;
+    // Fail closed in the order persisted callers need: first prove the bytes match their digest,
+    // then require that those bytes are a single strictly decodable canonical value.
+    if (calculated !== entry.valueSha256) return false;
+    try {
+      decodeCanonicalSettingsValue(entry.canonicalValue);
+    } catch {
+      return false;
+    }
     keys.add(entry.key);
+    previousKey = entry.key;
     return true;
   });
 }
@@ -604,7 +649,9 @@ export function countMetadataAssetTargetReferences(
       legacyProfiles.push(entry.profile);
       continue;
     }
-    v1Assets.push([...entry.assets]);
+    // A skip records an observed pre-existing target, not a write performed by this
+    // installation. It must never keep another profile's asset permanently alive.
+    v1Assets.push(entry.assets.filter((asset) => asset.action !== 'skip'));
   }
   return { counts: countTargetReferences(v1Assets), legacyProfiles };
 }

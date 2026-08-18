@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -11,14 +12,21 @@ import {
   countTargetReferences,
   type InstalledMetadataV0,
   type InstalledMetadataV1,
+  isCanonicalSha256Sri,
+  isCanonicalSha512Sri,
   type MetadataAsset,
   parseInstalledMetadata,
 } from '../src/metadata/contracts.js';
+import { settingsContribution } from '../src/metadata/state-storage.js';
 import { GENERATED_BY } from '../src/version.js';
 
-const SHA256_A = `sha256-${'a'.repeat(43)}`;
-const SHA256_B = `sha256-${'b'.repeat(43)}`;
-const SHA512 = `sha512-${'a'.repeat(86)}==`;
+function sri(algorithm: 'sha256' | 'sha512', value: string): string {
+  return `${algorithm}-${createHash(algorithm).update(value).digest('base64url')}`;
+}
+
+const SHA256_A = sri('sha256', 'metadata fixture A');
+const SHA256_B = sri('sha256', 'metadata fixture B');
+const SHA512 = `sha512-${createHash('sha512').update('metadata fixture SHA-512').digest('base64')}`;
 
 function v0(profile = 'demo-pack'): InstalledMetadataV0 {
   return {
@@ -58,10 +66,7 @@ function v1(profile = 'demo-pack'): InstalledMetadataV1 {
         files: [{ path: 'SKILL.md', sha256: SHA256_A, bytes: 4096 }],
       },
     ],
-    settingsContribution: {
-      namespace: 'agent-presets',
-      keys: [{ key: 'custom', valueSha256: SHA256_B }],
-    },
+    settingsContribution: settingsContribution({ custom: 'installed value' }),
     generation: 3,
     installedBy: GENERATED_BY,
   };
@@ -111,6 +116,31 @@ function firstAssetFile(asset: MetadataAsset): MetadataAsset['files'][number] {
   const file = asset.files.at(0);
   if (file === undefined) throw new Error('asset fixture needs one file');
   return file;
+}
+
+function settingEntry(key: string, value: unknown) {
+  const entry = settingsContribution({ [key]: value }).keys[0];
+  if (entry === undefined) throw new Error('settings fixture needs one contribution entry');
+  return entry;
+}
+
+function sha256PadBitAlias(digest: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const last = digest.at(-1);
+  if (last === undefined) throw new Error('SHA-256 fixture is empty');
+  const index = alphabet.indexOf(last);
+  if (index < 0 || index % 4 !== 0) throw new Error('SHA-256 fixture is not canonical');
+  return `${digest.slice(0, -1)}${alphabet[index + 1]}`;
+}
+
+function sha512PadBitAlias(digest: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const lastBase64Character = digest.length - 3;
+  const character = digest[lastBase64Character];
+  if (character === undefined) throw new Error('SHA-512 fixture is empty');
+  const index = alphabet.indexOf(character);
+  if (index < 0 || index % 16 !== 0) throw new Error('SHA-512 fixture is not canonical');
+  return `${digest.slice(0, lastBase64Character)}${alphabet[index + 1]}==`;
 }
 
 describe('installed metadata v1 contract', () => {
@@ -194,6 +224,116 @@ describe('installed metadata v1 contract', () => {
       metadata,
       mode: 'full',
     });
+  });
+
+  it('rejects SHA-256 SRI pad-bit aliases in persisted settings contributions', () => {
+    const metadata = v1();
+    const entry = settingEntry('alias-check', 'value');
+    const alias = sha256PadBitAlias(entry.valueSha256);
+    metadata.settingsContribution = {
+      namespace: 'agent-presets',
+      keys: [{ ...entry, valueSha256: alias }],
+    };
+
+    expect(isCanonicalSha256Sri(entry.valueSha256)).toBe(true);
+    expect(isCanonicalSha256Sri(alias)).toBe(false);
+    expect(parseInstalledMetadata(metadata, metadata.profile)).toEqual({ ok: false });
+  });
+
+  it.each([
+    [
+      'pack manifestDigest',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        metadata.pack = { ...metadata.pack, manifestDigest: alias };
+      },
+    ],
+    [
+      'planDigest',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        metadata.planDigest = alias;
+      },
+    ],
+    [
+      'asset file sha256',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        const asset = firstAsset(metadata);
+        metadata.assets = [{ ...asset, files: [{ ...firstAssetFile(asset), sha256: alias }] }];
+      },
+    ],
+  ])('rejects a SHA-256 pad-bit alias in persisted $name', (_name, mutate) => {
+    const metadata = v1();
+    const alias = sha256PadBitAlias(SHA256_A);
+    mutate(metadata, alias);
+
+    expect(isCanonicalSha256Sri(SHA256_A)).toBe(true);
+    expect(isCanonicalSha256Sri(alias)).toBe(false);
+    expect(parseInstalledMetadata(metadata, metadata.profile)).toEqual({ ok: false });
+  });
+
+  it.each([
+    [
+      'HTTPS source integrity',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        metadata.source = {
+          kind: 'https',
+          url: 'https://example.test/demo-pack.tgz',
+          integrity: alias,
+        };
+      },
+    ],
+    [
+      'plugin packageJsonSha512',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        const plugin = withPlugin({ version: '1.2.3' }, { kind: 'npm-sri', value: SHA512 });
+        metadata.plugins = plugin.plugins.map((entry) => ({ ...entry, packageJsonSha512: alias }));
+        metadata.effectiveLock = plugin.effectiveLock;
+      },
+    ],
+    [
+      'plugin npm-sri integrity',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        const plugin = withPlugin({ version: '1.2.3' }, { kind: 'npm-sri', value: SHA512 });
+        metadata.plugins = plugin.plugins.map((entry) => ({
+          ...entry,
+          actualIntegrity: { kind: 'npm-sri', value: alias },
+        }));
+        metadata.effectiveLock = plugin.effectiveLock;
+      },
+    ],
+    [
+      'plugin sha512 integrity',
+      (metadata: InstalledMetadataV1, alias: string) => {
+        const plugin = withPlugin(
+          { url: 'https://example.test/plugin.tgz' },
+          { kind: 'sha512', value: SHA512 },
+        );
+        metadata.plugins = plugin.plugins.map((entry) => ({
+          ...entry,
+          actualIntegrity: { kind: 'sha512', value: alias },
+        }));
+        metadata.effectiveLock = plugin.effectiveLock;
+      },
+    ],
+  ])('rejects a SHA-512 pad-bit alias in persisted $name', (_name, mutate) => {
+    const metadata = v1();
+    const alias = sha512PadBitAlias(SHA512);
+    mutate(metadata, alias);
+
+    expect(isCanonicalSha512Sri(SHA512)).toBe(true);
+    expect(isCanonicalSha512Sri(alias)).toBe(false);
+    expect(parseInstalledMetadata(metadata, metadata.profile)).toEqual({ ok: false });
+  });
+
+  it('rejects persisted settings contributions whose keys are not canonical-key ordered', () => {
+    const metadata = v1();
+    const first = settingEntry('a-key', 1);
+    const second = settingEntry('b-key', 2);
+    metadata.settingsContribution = {
+      namespace: 'agent-presets',
+      keys: [second, first],
+    };
+
+    expect(parseInstalledMetadata(metadata, metadata.profile)).toEqual({ ok: false });
   });
 
   it('rejects non-records, unsupported versions, and marker/profile mismatches', () => {
@@ -336,10 +476,7 @@ describe('installed metadata v1 contract', () => {
         ...metadata,
         settingsContribution: {
           namespace: 'agent-presets',
-          keys: [
-            { key: 'duplicate', valueSha256: SHA256_A },
-            { key: 'duplicate', valueSha256: SHA256_B },
-          ],
+          keys: [settingEntry('duplicate', 'first'), settingEntry('duplicate', 'second')],
         },
       },
       {
@@ -350,14 +487,19 @@ describe('installed metadata v1 contract', () => {
         ...metadata,
         settingsContribution: {
           namespace: 'agent-presets',
-          keys: [{ key: 'bad-hash', valueSha256: 'sha256-short' }],
+          keys: [
+            {
+              ...settingEntry('bad-hash', 'value'),
+              valueSha256: 'sha256-short',
+            },
+          ],
         },
       },
       {
         ...metadata,
         settingsContribution: {
           namespace: 'agent-presets',
-          keys: [{ key: 1, valueSha256: SHA256_A }],
+          keys: [{ ...settingEntry('custom', 'value'), key: 1 }],
         },
       },
     ];
@@ -368,15 +510,12 @@ describe('installed metadata v1 contract', () => {
 
   it('preserves every M0-accepted agent-presets leaf key and rejects only exact duplicates', () => {
     const metadata = v1();
-    const contribution = {
-      namespace: 'agent-presets' as const,
-      keys: [
-        { key: 'bad/key', valueSha256: SHA256_A },
-        { key: 'snake_case', valueSha256: SHA256_B },
-        { key: 'Upper', valueSha256: SHA256_A },
-        { key: 'upper', valueSha256: SHA256_B },
-      ],
-    };
+    const contribution = settingsContribution({
+      'bad/key': 'slash',
+      snake_case: 'underscore',
+      Upper: 'upper-case',
+      upper: 'lower-case',
+    });
 
     expect(
       parseInstalledMetadata({ ...metadata, settingsContribution: contribution }, metadata.profile),
@@ -387,7 +526,7 @@ describe('installed metadata v1 contract', () => {
           ...metadata,
           settingsContribution: {
             ...contribution,
-            keys: [...contribution.keys, { key: 'bad/key', valueSha256: SHA256_B }],
+            keys: [...contribution.keys, contribution.keys[0]],
           },
         },
         metadata.profile,
@@ -598,5 +737,17 @@ describe('metadata management predicates', () => {
     expect(
       countTargetReferences([[{ target: 'skills/shared' }], [{ target: 'skills/SHARED' }]]),
     ).toEqual(new Map([['skills/shared', 2]]));
+  });
+
+  it('does not treat a skipped asset observation as an ownership reference', () => {
+    const owner = v1('owner-pack');
+    const skipped = v1('observer-pack');
+    const skippedAsset = firstAsset(skipped);
+    skipped.assets = [{ ...skippedAsset, action: 'skip' }];
+
+    expect(countMetadataAssetTargetReferences([owner, skipped])).toEqual({
+      counts: new Map([['skills/paper-outline', 1]]),
+      legacyProfiles: [],
+    });
   });
 });

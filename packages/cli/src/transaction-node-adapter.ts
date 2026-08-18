@@ -26,7 +26,7 @@ import {
   readBoundedRegularFile,
   SnapshotCaptureError,
 } from './install/snapshot-capture.js';
-import { isInstallableProfileName } from './metadata/contracts.js';
+import { isCanonicalSha256Sri, isInstallableProfileName } from './metadata/contracts.js';
 import {
   casStoreShard,
   isCanonicalCasStoreShard,
@@ -54,9 +54,10 @@ const ARTIFACT_ROOTS: Record<TransactionArtifactKind, string> = {
   'installed-directory': '.dshpack/installed',
   'store-block': '.dshpack/store',
   generation: '.dshpack/generations',
+  'generation-current': '.dshpack/generations',
+  'managed-document': '.dshpack/installed',
 };
 
-const STORE_DIGEST = /^sha256-[A-Za-z0-9_-]{43}$/u;
 const MAX_GENERATION_CURRENT_BYTES = 128;
 const SETUP_DIRECTORY = /^\.setup-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u;
 const SETUP_JOURNAL_TEMPORARY = /^journal\.json\.[0-9a-f]{12}\.tmp$/u;
@@ -90,6 +91,12 @@ function gcQuarantineActionId(leaf: string): string | undefined {
 
 function isGcTransactionId(value: string): boolean {
   return /^gc-[A-Za-z0-9][A-Za-z0-9._-]{0,124}$/u.test(value);
+}
+
+function isStatePurgeTransactionId(value: string): boolean {
+  return (
+    isGcTransactionId(value) || /^uninstall-purge-[A-Za-z0-9][A-Za-z0-9._-]{0,111}$/u.test(value)
+  );
 }
 
 function unwrapSettingsResult<T>(result: Result<T>): T {
@@ -262,7 +269,7 @@ async function validateMutationPath(
       parts.length !== 2 ||
       parts.some((part) => part === '' || part === '.' || part === '..') ||
       digest === undefined ||
-      !STORE_DIGEST.test(digest) ||
+      !isCanonicalSha256Sri(digest) ||
       !isCanonicalCasStoreShard(parts[0] ?? '', digest)
     ) {
       throw failure;
@@ -542,7 +549,7 @@ async function recoverTransactionSetupDirectories(
   }
 }
 
-/** Restrict permanent removal to an immutable payload from a committed GC action. */
+/** Restrict permanent removal to an immutable payload from a committed state-collection action. */
 async function validateGcQuarantinePath(
   lock: TransactionArtifactLock,
   path: string,
@@ -554,7 +561,7 @@ async function validateGcQuarantinePath(
   const failure = scopeFailure('E_TRANSACTION_GC_QUARANTINE_SCOPE', path);
   if (
     parts.length !== 3 ||
-    !isGcTransactionId(parts[0] ?? '') ||
+    !isStatePurgeTransactionId(parts[0] ?? '') ||
     parts[1] !== 'old' ||
     gcQuarantineActionId(parts[2] ?? '') === undefined
   ) {

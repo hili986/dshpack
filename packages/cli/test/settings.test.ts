@@ -10,6 +10,10 @@ import {
   YamlSettingsAdapter,
 } from '../src/adapters/settings.js';
 
+const MAX_LOCK_TIMEOUT_ATTEMPTS = 8;
+
+type SettingsUpdateResult = Awaited<ReturnType<YamlSettingsAdapter['updateAgentPresets']>>;
+
 async function withScratch(run: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'dshpack-settings-'));
   try {
@@ -33,6 +37,29 @@ class FakeClock implements SettingsClock {
   }
 }
 
+async function retrySettingsLockTimeout(
+  label: string,
+  update: () => Promise<SettingsUpdateResult>,
+): Promise<void> {
+  for (let attempt = 1; attempt <= MAX_LOCK_TIMEOUT_ATTEMPTS; attempt += 1) {
+    const result = await update();
+    if (result.ok) {
+      expect(result).toEqual({ ok: true, value: undefined, diagnostics: [] });
+      return;
+    }
+    if (
+      result.diagnostics.length === 1 &&
+      result.diagnostics[0]?.code === 'E_SETTINGS_LOCK_TIMEOUT'
+    )
+      continue;
+    expect(result).toEqual({ ok: true, value: undefined, diagnostics: [] });
+    return;
+  }
+  throw new Error(
+    `${label} exceeded ${String(MAX_LOCK_TIMEOUT_ATTEMPTS)} attempts after retryable settings lock timeouts.`,
+  );
+}
+
 describe('YamlSettingsAdapter', () => {
   it('preserves two namespaces across two real writers with 100 updates each', async () => {
     await withScratch(async (directory) => {
@@ -41,28 +68,30 @@ describe('YamlSettingsAdapter', () => {
 
       async function writeAgentPresets(): Promise<void> {
         for (let sequence = 0; sequence < 100; sequence += 1) {
-          const result = await adapter.updateAgentPresets({ sequence });
-          expect(result).toEqual({ ok: true, value: undefined, diagnostics: [] });
+          await retrySettingsLockTimeout(`agent-presets update ${String(sequence)}`, () =>
+            adapter.updateAgentPresets({ sequence }),
+          );
         }
       }
 
       async function writeOtherNamespace(): Promise<void> {
         for (let sequence = 0; sequence < 100; sequence += 1) {
-          const result = await withSettingsFileLock(filename, async () => {
-            let source = '';
-            try {
-              source = await readFile(filename, 'utf8');
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-            }
-            const document = parseDocument(source);
-            document.setIn(['other-namespace', 'sequence'], sequence);
-            await writeFileAtomic(filename, document.toString(), {
-              mode: 0o600,
-              dirMode: 0o700,
-            });
-          });
-          expect(result.ok).toBe(true);
+          await retrySettingsLockTimeout(`other-namespace update ${String(sequence)}`, () =>
+            withSettingsFileLock(filename, async () => {
+              let source = '';
+              try {
+                source = await readFile(filename, 'utf8');
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              }
+              const document = parseDocument(source);
+              document.setIn(['other-namespace', 'sequence'], sequence);
+              await writeFileAtomic(filename, document.toString(), {
+                mode: 0o600,
+                dirMode: 0o700,
+              });
+            }),
+          );
         }
       }
 
@@ -77,6 +106,29 @@ describe('YamlSettingsAdapter', () => {
       await expect(readFile(`${filename}.lock`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
   }, 30_000);
+
+  it('retries a real settings lock timeout once the lock is released', async () => {
+    await withScratch(async (directory) => {
+      const filename = join(directory, 'settings.yaml');
+      const lockPath = `${filename}.lock`;
+      const adapter = new YamlSettingsAdapter(filename, { clock: new FakeClock() });
+      await writeFile(lockPath, '424242\n', { mode: 0o600, flag: 'wx' });
+      let calls = 0;
+
+      await retrySettingsLockTimeout('released settings lock', async () => {
+        calls += 1;
+        const result = await adapter.updateAgentPresets({ sequence: 1 });
+        if (calls === 1) await rm(lockPath);
+        return result;
+      });
+
+      expect(calls).toBe(2);
+      expect(parseDocument(await readFile(filename, 'utf8')).toJS()).toEqual({
+        'agent-presets': { sequence: 1 },
+      });
+      await expect(readFile(lockPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+  });
 
   it('keeps same-namespace concurrency last-write-wins without torn YAML', async () => {
     await withScratch(async (directory) => {

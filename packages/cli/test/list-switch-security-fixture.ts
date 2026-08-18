@@ -1,12 +1,13 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { PackLock } from '@dshpack/core';
 
-export const SHA256_A = `sha256-${'a'.repeat(43)}`;
-export const SHA256_B = `sha256-${'b'.repeat(43)}`;
-export const SHA512 = `sha512-${'A'.repeat(86)}==`;
+export const SHA256_A = `sha256-${createHash('sha256').update('list-switch fixture A').digest('base64url')}`;
+export const SHA256_B = `sha256-${createHash('sha256').update('list-switch fixture B').digest('base64url')}`;
+export const SHA512 = `sha512-${createHash('sha512').update('list-switch fixture SHA-512').digest('base64')}`;
 
 export interface SecurityMarker {
   metadataVersion: number;

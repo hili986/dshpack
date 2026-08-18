@@ -15,10 +15,17 @@ import {
 
 class MemoryTransactionAdapter implements TransactionAdapter {
   readonly entries = new Map<string, string>();
+  readonly identities = new Map<string, string>();
   readonly atomicWrites: Array<{ path: string; contents: string }> = [];
   readonly exclusiveCreates: string[] = [];
   failRename: ((from: string, to: string) => Error | undefined) | undefined;
   failAtomicWrite: ((path: string, contents: string) => Error | undefined) | undefined;
+  #nextIdentity = 0;
+
+  #newIdentity(): string {
+    this.#nextIdentity += 1;
+    return `memory-${this.#nextIdentity}`;
+  }
 
   async acquireArtifactLock(dshHome: string): Promise<TransactionArtifactLock> {
     return { dshHome, lockPath: `${dshHome}.lock`, release: async () => {} };
@@ -49,7 +56,7 @@ class MemoryTransactionAdapter implements TransactionAdapter {
   }
 
   async pathIdentity(path: string): Promise<string | undefined> {
-    return this.entries.has(path) ? path : undefined;
+    return this.entries.has(path) ? this.identities.get(path) : undefined;
   }
 
   async moveArtifactPath(
@@ -60,9 +67,10 @@ class MemoryTransactionAdapter implements TransactionAdapter {
     direction: TransactionArtifactMoveDirection,
     expectedIdentity?: string,
   ): Promise<boolean> {
+    const sourcePath = direction === 'to-backup' ? artifactPath : backupPath;
     if (
       expectedIdentity !== undefined &&
-      (await this.pathIdentity(artifactPath)) !== expectedIdentity
+      (await this.pathIdentity(sourcePath)) !== expectedIdentity
     )
       return false;
     await this.rename(
@@ -77,6 +85,7 @@ class MemoryTransactionAdapter implements TransactionAdapter {
     if (this.entries.has(path)) return false;
     this.entries.set(dirname(path), '<directory>');
     this.entries.set(path, '<directory>');
+    this.identities.set(path, this.#newIdentity());
     return true;
   }
 
@@ -103,6 +112,7 @@ class MemoryTransactionAdapter implements TransactionAdapter {
     if (failure !== undefined) throw failure;
     this.entries.set(dirname(path), '<directory>');
     this.entries.set(path, contents);
+    this.identities.set(path, this.#newIdentity());
     this.atomicWrites.push({ path, contents });
   }
 
@@ -115,6 +125,9 @@ class MemoryTransactionAdapter implements TransactionAdapter {
     this.entries.set(dirname(to), '<directory>');
     this.entries.set(to, contents);
     this.entries.delete(from);
+    const identity = this.identities.get(from);
+    this.identities.delete(from);
+    if (identity !== undefined) this.identities.set(to, identity);
   }
 
   async validateMutationPath(): Promise<void> {}
@@ -126,6 +139,7 @@ class MemoryTransactionAdapter implements TransactionAdapter {
   async removeDirectoryIfEmpty(path: string): Promise<boolean> {
     if (this.entries.get(path) !== '<directory>') return false;
     this.entries.delete(path);
+    this.identities.delete(path);
     return true;
   }
 
@@ -133,6 +147,7 @@ class MemoryTransactionAdapter implements TransactionAdapter {
     if (this.entries.has(path)) throw new Error(`exists: ${path}`);
     this.entries.set(dirname(path), '<directory>');
     this.entries.set(path, contents);
+    this.identities.set(path, this.#newIdentity());
   }
 
   populate(path: string, contents = '<artifact>'): void {
@@ -225,7 +240,8 @@ describe('runTransaction', () => {
     const replaceAction = result.journal.actions[0];
     expect(replaceAction?.kind).toBe('replace');
     if (replaceAction?.kind === 'replace') {
-      expect(replaceAction.old).toEqual({ path: profilePath, exists: true });
+      expect(replaceAction.old).toMatchObject({ path: profilePath, exists: true });
+      expect(replaceAction.old.identity).toBeDefined();
       expect(replaceAction.new).toEqual({
         path: profilePath,
         exists: false,

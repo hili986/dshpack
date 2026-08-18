@@ -140,6 +140,8 @@ describe('implemented command registration', () => {
   it('registers migrate as an implemented command instead of the generic placeholder', () => {
     expect(COMMAND_NAMES).toContain('migrate');
     expect(createProgram().commands.some((command) => command.name() === 'migrate')).toBe(true);
+    expect(COMMAND_NAMES).toContain('uninstall');
+    expect(createProgram().commands.some((command) => command.name() === 'uninstall')).toBe(true);
   });
 });
 

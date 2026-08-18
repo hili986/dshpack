@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -168,6 +168,38 @@ describe('managed transaction actions', () => {
         throw new Error('missing managed document action');
       }
       expect(await readFile(action.new.rollbackPath, 'utf8')).toBe(replacement);
+    });
+  });
+
+  it('restores a transaction-bound deleted installed marker byte-for-byte on rollback', async () => {
+    await withHome(async (home) => {
+      const record = join(home, '.dshpack', 'installed', 'demo-pack.json');
+      const original = '{\n  "metadataVersion": 1\n}\n';
+      await mkdir(join(home, '.dshpack', 'installed'), { recursive: true });
+      await writeFile(record, original, 'utf8');
+      const stats = await lstat(record, { bigint: true });
+      const identity = `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
+
+      const result = await runTransaction(
+        { adapter: createNodeTransactionAdapter(), dshHome: home, txid: 'record-delete' },
+        async (transaction) => {
+          await transaction.deleteManagedDocument(record, original, identity);
+          await expect(readFile(record, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+          throw injected;
+        },
+      );
+
+      expect(result).toMatchObject({ ok: false, status: 'rolled-back', exitCode: 23 });
+      expect(await readFile(record, 'utf8')).toBe(original);
+      expect(result.journal.actions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifact: 'managed-document',
+            kind: 'replace',
+            phase: 'rolled-back',
+          }),
+        ]),
+      );
     });
   });
 

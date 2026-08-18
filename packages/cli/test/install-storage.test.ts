@@ -165,6 +165,7 @@ describe('install CAS and generation persistence', () => {
           {
             key: 'custom',
             valueSha256: expect.stringMatching(/^sha256-[A-Za-z0-9_-]{43}$/u),
+            canonicalValue: expect.any(String),
           },
         ],
       },
@@ -274,7 +275,7 @@ describe('install CAS and generation persistence', () => {
     );
   });
 
-  it('records a skipped shared asset for reference counting without snapshotting it into this generation', async () => {
+  it('excludes a skipped observation from ownership reference counting while not snapshotting it', async () => {
     const dshHome = await home();
     const first = await installPack(
       {
@@ -318,7 +319,7 @@ describe('install CAS and generation persistence', () => {
     ]);
     expect(
       countMetadataAssetTargetReferences([firstMarker, secondMarker]).counts.get('skills/notes'),
-    ).toBe(2);
+    ).toBe(1);
 
     const generation = await readJson<Generation>(generationPath(dshHome, 'shared-owner-b', 1));
     expect(generation.entries.some((entry) => entry.target.startsWith('skills/notes/'))).toBe(

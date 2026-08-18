@@ -122,7 +122,10 @@ export async function rollbackAction(
       throw new Error(`owned artifact identity was not recorded: ${action.new.path}`);
     }
     const stateCondition =
-      action.artifact === 'store-block' || action.artifact === 'generation'
+      action.artifact === 'store-block' ||
+      action.artifact === 'generation' ||
+      action.artifact === 'generation-current' ||
+      action.artifact === 'managed-document'
         ? action.new.contentSha256 === undefined
           ? undefined
           : { contentSha256: action.new.contentSha256 }
@@ -130,7 +133,10 @@ export async function rollbackAction(
           ? { empty: true as const }
           : undefined;
     if (
-      (action.artifact === 'store-block' || action.artifact === 'generation') &&
+      (action.artifact === 'store-block' ||
+        action.artifact === 'generation' ||
+        action.artifact === 'generation-current' ||
+        action.artifact === 'managed-document') &&
       stateCondition === undefined
     ) {
       throw new Error(`owned state content cannot be verified: ${action.new.path}`);
@@ -230,7 +236,10 @@ export async function rollbackAction(
   if (preserved && occupied) throw new Error(`restore target still exists: ${action.old.path}`);
   if (preserved) {
     const stateCondition =
-      action.artifact === 'store-block' || action.artifact === 'generation'
+      action.artifact === 'store-block' ||
+      action.artifact === 'generation' ||
+      action.artifact === 'generation-current' ||
+      action.artifact === 'managed-document'
         ? action.old.contentSha256 === undefined
           ? undefined
           : { contentSha256: action.old.contentSha256 }

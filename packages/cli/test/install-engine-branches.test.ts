@@ -8,6 +8,7 @@ import { DshProcessError } from '../src/adapters/process.js';
 import { SourceError } from '../src/adapters/source.js';
 import { diagnostic } from '../src/commands/shared.js';
 import { installPack } from '../src/install/engine.js';
+import { materialText } from '../src/install/engine-apply.js';
 import { InstallProfileError } from '../src/install/profile-common.js';
 import { TransactionFailure } from '../src/transaction.js';
 import { enginePack, fakeRuntime } from './install-engine-fixture.js';
@@ -348,5 +349,85 @@ describe('install engine boundary branches', () => {
     await expect(
       readFile(join(dshHome, 'profiles', 'engine-pack', 'package.json')),
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails closed when the recorded settings fragment is absent from immutable material', async () => {
+    const fake = fakeRuntime();
+    const read = fake.runtime.readValidatedPack;
+    fake.runtime.readValidatedPack = async (root) => {
+      const value = await read(root);
+      return value.material === undefined
+        ? value
+        : {
+            ...value,
+            material: {
+              ...value.material,
+              files: value.material.files.filter(
+                ({ path }) => path !== 'settings/agent-presets.yml',
+              ),
+            },
+          };
+    };
+    const dshHome = await home();
+
+    const result = await installPack(
+      { source: await enginePack({ assets: true }), dshHome, yes: true, interactive: false },
+      fake.runtime,
+    );
+
+    expect(result).toMatchObject({ exitCode: 30, metadata: { status: 'not-started' } });
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'E_SETTINGS_SOURCE_MISSING' })]),
+    );
+  });
+
+  it('keeps the apply-layer immutable-payload guard fail-closed even for a forged material object', () => {
+    expect(() => materialText({ files: [] } as never, 'settings/agent-presets.yml')).toThrow(
+      /E_INSTALL_PAYLOAD|payload|快照缺少/u,
+    );
+  });
+
+  it('rolls back a silent red doctor but preserves a foreign warning without a hint', async () => {
+    const silent = fakeRuntime();
+    silent.runtime.runDoctor = async () => ({
+      diagnostics: [],
+      exitCode: 30,
+      metadata: { sideEffects: [] },
+    });
+    const silentResult = await installPack(
+      { source: await enginePack(), dshHome: await home(), yes: true, interactive: false },
+      silent.runtime,
+    );
+    expect(silentResult).toMatchObject({ exitCode: 24, metadata: { status: 'rolled-back' } });
+
+    const foreign = fakeRuntime();
+    foreign.runtime.runDoctor = async ({ dshHome }) => ({
+      diagnostics: [
+        {
+          code: 'DSH_TEST_FOREIGN',
+          severity: 'error' as const,
+          message: 'foreign state needs attention',
+          evidence: 'local' as const,
+          path: join(dshHome, 'skills', 'outside', 'SKILL.md'),
+        },
+      ],
+      exitCode: 30,
+      metadata: { sideEffects: [] },
+    });
+    const foreignResult = await installPack(
+      {
+        source: await enginePack({ assets: true }),
+        dshHome: await home(),
+        yes: true,
+        interactive: false,
+      },
+      foreign.runtime,
+    );
+    expect(foreignResult).toMatchObject({ exitCode: 0, metadata: { status: 'installed' } });
+    expect(foreignResult.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'I_DOCTOR_PREEXISTING', hint: expect.any(String) }),
+      ]),
+    );
   });
 });

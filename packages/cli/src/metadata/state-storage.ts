@@ -7,10 +7,51 @@ import { captureSourceDirectory, SnapshotCaptureError } from '../install/snapsho
 import { portableSnapshotPathKey } from '../install/snapshot-path.js';
 import type { InstallPlan } from '../install/types.js';
 import type { TransactionContext } from '../transaction.js';
-import type { MetadataAsset, MetadataAssetAction, SettingsContribution } from './contracts.js';
+import { MAX_TRANSACTION_STATE_BYTES } from '../transaction-types.js';
+import {
+  type InstalledMetadataV1,
+  isValidSettingsContribution,
+  type MetadataAsset,
+  type MetadataAssetAction,
+  parseInstalledMetadata,
+  type SettingsContribution,
+} from './contracts.js';
 
 const SHA256_PREFIX = 'sha256-';
 const CURRENT = 'current';
+// Bound parsing work and allocations from untrusted persisted settings.  In
+// particular, a small `length` token must never allocate a huge sparse Array.
+const MAX_CANONICAL_SETTINGS_DEPTH = 32;
+const MAX_CANONICAL_SETTINGS_NODES = 4_096;
+const MAX_CANONICAL_SETTINGS_PROPERTIES = 4_096;
+const MAX_CANONICAL_SETTINGS_ARRAY_LENGTH = 16_384;
+const MAX_CANONICAL_SETTINGS_BYTES = 64 * 1024;
+
+interface CanonicalSettingsBudget {
+  nodes: number;
+  properties: number;
+}
+
+function consumeCanonicalSettingsNode(budget: CanonicalSettingsBudget): void {
+  budget.nodes += 1;
+  if (budget.nodes > MAX_CANONICAL_SETTINGS_NODES)
+    throw new TypeError('settings canonical value exceeds the node limit');
+}
+
+function consumeCanonicalSettingsProperty(budget: CanonicalSettingsBudget): void {
+  budget.properties += 1;
+  if (budget.properties > MAX_CANONICAL_SETTINGS_PROPERTIES)
+    throw new TypeError('settings canonical value exceeds the property limit');
+}
+
+function canonicalSettingsByteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8');
+}
+
+function assertCanonicalSettingsByteLimit(value: string): void {
+  if (canonicalSettingsByteLength(value) > MAX_CANONICAL_SETTINGS_BYTES)
+    throw new TypeError('settings canonical value exceeds the byte limit');
+}
 
 /**
  * Runtime dependencies are reproducible from the profile lock, not owned snapshot content.
@@ -42,6 +83,8 @@ export interface GenerationDocument {
   source: Record<string, unknown>;
   entries: readonly StoredGenerationEntry[];
   settingsContribution: SettingsContribution;
+  /** The complete effective marker at this generation, or no marker after uninstall. */
+  metadata: InstalledMetadataV1 | null;
   restorable: boolean;
 }
 
@@ -49,6 +92,7 @@ export interface GenerationDocumentInput {
   operation: GenerationOperation;
   pack: GenerationDocument['pack'];
   source: GenerationDocument['source'];
+  metadata: InstalledMetadataV1 | null;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -107,6 +151,64 @@ function assertGenerationOperation(operation: unknown): asserts operation is Gen
       'Supply an explicit generation operation before writing state.',
     );
   }
+}
+
+function sameSettingsContribution(
+  left: SettingsContribution,
+  right: SettingsContribution,
+): boolean {
+  if (left.namespace !== right.namespace || left.keys.length !== right.keys.length) return false;
+  return left.keys.every((entry, index) => {
+    const other = right.keys[index];
+    return (
+      other !== undefined &&
+      other.key === entry.key &&
+      other.valueSha256 === entry.valueSha256 &&
+      other.canonicalValue === entry.canonicalValue
+    );
+  });
+}
+
+function assertGenerationMetadata(
+  sequence: number,
+  operation: GenerationOperation,
+  metadata: InstalledMetadataV1 | null,
+  contribution: SettingsContribution,
+): void {
+  if (!isValidSettingsContribution(contribution))
+    throw installFailure(
+      EXIT_CODES.CONTRACT,
+      'E_GENERATION_SETTINGS',
+      'generation settings contribution is not a strictly canonical persisted contribution',
+      'Regenerate settings contribution from the effective settings before writing state.',
+    );
+  const correctState =
+    operation === 'uninstall'
+      ? metadata === null
+      : operation === 'restore'
+        ? true
+        : metadata !== null;
+  if (!correctState)
+    throw installFailure(
+      EXIT_CODES.CONTRACT,
+      'E_GENERATION_METADATA',
+      "generation metadata does not describe the operation's effective marker state",
+      'Write null for uninstall state and complete v1 metadata for installed state.',
+    );
+  if (metadata === null) return;
+  const parsed = parseInstalledMetadata(metadata, metadata.profile);
+  if (
+    !parsed.ok ||
+    parsed.metadata.metadataVersion !== 1 ||
+    parsed.metadata.generation !== sequence ||
+    !sameSettingsContribution(parsed.metadata.settingsContribution, contribution)
+  )
+    throw installFailure(
+      EXIT_CODES.CONTRACT,
+      'E_GENERATION_METADATA',
+      'generation metadata must be a complete v1 marker for this generation with matching settings contribution',
+      'Regenerate the complete marker facts before writing the generation.',
+    );
 }
 
 function generationDirectory(dshHome: string, profile: string): string {
@@ -336,6 +438,7 @@ export function generationDocument(
 ): GenerationDocument {
   assertPositiveSafeSequence(sequence);
   assertGenerationOperation(input.operation);
+  assertGenerationMetadata(sequence, input.operation, input.metadata, settingsContribution);
   const entries = assets
     .flatMap((asset) =>
       asset.blocks.map(({ target, sha256: digest }) => ({ target, sha256: digest })),
@@ -350,6 +453,7 @@ export function generationDocument(
     source: input.source,
     entries,
     settingsContribution,
+    metadata: input.metadata,
     restorable: true,
   };
 }
@@ -362,11 +466,16 @@ export async function writeGeneration(
 ): Promise<void> {
   assertPositiveSafeSequence(document.seq);
   const path = join(generationDirectory(dshHome, profile), generationFilename(document.seq));
-  const wrote = await transaction.writeStateFile(
-    'generation',
-    path,
-    Buffer.from(`${JSON.stringify(document)}\n`),
-  );
+  const bytes = Buffer.from(`${JSON.stringify(document)}\n`);
+  if (bytes.byteLength > MAX_TRANSACTION_STATE_BYTES) {
+    throw installFailure(
+      EXIT_CODES.CONTRACT,
+      'E_GENERATION_DOCUMENT_LIMIT',
+      `generation document exceeds the bounded write limit: ${path}`,
+      'Reduce the generation metadata before retrying; no generation was written.',
+    );
+  }
+  const wrote = await transaction.writeStateFile('generation', path, bytes);
   if (!wrote) {
     throw installFailure(
       EXIT_CODES.CONTRACT,
@@ -394,10 +503,59 @@ function compareCanonicalKeys(left: string, right: string): number {
 }
 
 function taggedCanonicalValue(tag: string, body: string): string {
-  return `${tag}#${String(body.length)}:${body}`;
+  const prefix = `${tag}#${String(body.length)}:`;
+  if (
+    canonicalSettingsByteLength(prefix) + canonicalSettingsByteLength(body) >
+    MAX_CANONICAL_SETTINGS_BYTES
+  )
+    throw new TypeError('settings canonical value exceeds the byte limit');
+  return `${prefix}${body}`;
 }
 
-function canonicalSettingsValue(value: unknown, ancestors = new Set<object>()): string {
+function serializableSettingsKeys(value: object, array: boolean): string[] {
+  if (Object.getOwnPropertySymbols(value).length !== 0)
+    throw new TypeError('settings contribution value cannot contain symbol keys');
+  const keys = Object.keys(value);
+  if (keys.length > MAX_CANONICAL_SETTINGS_PROPERTIES)
+    throw new TypeError('settings contribution value exceeds the property limit');
+  const enumerable = new Set(keys);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    if ((array && key === 'length') || enumerable.has(key)) continue;
+    throw new TypeError('settings contribution value cannot contain non-enumerable keys');
+  }
+  return keys;
+}
+
+/**
+ * Encode a setting as an unambiguous `tag#len:body` stream. Lengths are UTF-16 code units,
+ * which is exactly the unit used by JavaScript's string slicing during the matching decode.
+ */
+export function encodeCanonicalSettingsValue(value: unknown): string {
+  const encoded = encodeCanonicalSettingsValueInner(value, new Set<object>(), 0, {
+    nodes: 0,
+    properties: 0,
+  });
+  assertCanonicalSettingsByteLimit(encoded);
+  return encoded;
+}
+
+function appendCanonicalSettingsPart(parts: string[], bytes: number, part: string): number {
+  const next = bytes + canonicalSettingsByteLength(part);
+  if (next > MAX_CANONICAL_SETTINGS_BYTES)
+    throw new TypeError('settings canonical value exceeds the byte limit');
+  parts.push(part);
+  return next;
+}
+
+function encodeCanonicalSettingsValueInner(
+  value: unknown,
+  ancestors: Set<object>,
+  depth: number,
+  budget: CanonicalSettingsBudget,
+): string {
+  if (depth > MAX_CANONICAL_SETTINGS_DEPTH)
+    throw new TypeError('settings contribution value exceeds the nesting limit');
+  consumeCanonicalSettingsNode(budget);
   if (value === null) return taggedCanonicalValue('null', '');
   switch (typeof value) {
     case 'undefined':
@@ -419,38 +577,233 @@ function canonicalSettingsValue(value: unknown, ancestors = new Set<object>()): 
       ancestors.add(value);
       try {
         if (Array.isArray(value)) {
-          const body = [
+          if (value.length > MAX_CANONICAL_SETTINGS_ARRAY_LENGTH)
+            throw new TypeError('settings contribution value exceeds the array length limit');
+          const keys = serializableSettingsKeys(value, true).sort(compareCanonicalKeys);
+          const parts: string[] = [];
+          let bytes = appendCanonicalSettingsPart(
+            parts,
+            0,
             taggedCanonicalValue('length', String(value.length)),
-            ...Object.keys(value)
-              .sort(compareCanonicalKeys)
-              .flatMap((key) => [
-                taggedCanonicalValue('key', key),
-                canonicalSettingsValue(
-                  (value as unknown as Record<string, unknown>)[key],
-                  ancestors,
-                ),
-              ]),
-          ].join('');
+          );
+          for (const key of keys) {
+            consumeCanonicalSettingsProperty(budget);
+            bytes = appendCanonicalSettingsPart(parts, bytes, taggedCanonicalValue('key', key));
+            bytes = appendCanonicalSettingsPart(
+              parts,
+              bytes,
+              encodeCanonicalSettingsValueInner(
+                (value as unknown as Record<string, unknown>)[key],
+                ancestors,
+                depth + 1,
+                budget,
+              ),
+            );
+          }
+          const body = parts.join('');
           return taggedCanonicalValue('array', body);
         }
         const prototype = Object.getPrototypeOf(value);
         if (prototype !== Object.prototype && prototype !== null) {
           throw new TypeError('settings contribution value must be a plain object');
         }
-        const body = Object.keys(value)
-          .sort(compareCanonicalKeys)
-          .flatMap((key) => [
-            taggedCanonicalValue('key', key),
-            canonicalSettingsValue((value as Record<string, unknown>)[key], ancestors),
-          ])
-          .join('');
-        return taggedCanonicalValue('object', body);
+        const keys = serializableSettingsKeys(value, false).sort(compareCanonicalKeys);
+        const parts: string[] = [];
+        let bytes = 0;
+        for (const key of keys) {
+          consumeCanonicalSettingsProperty(budget);
+          bytes = appendCanonicalSettingsPart(parts, bytes, taggedCanonicalValue('key', key));
+          bytes = appendCanonicalSettingsPart(
+            parts,
+            bytes,
+            encodeCanonicalSettingsValueInner(
+              (value as Record<string, unknown>)[key],
+              ancestors,
+              depth + 1,
+              budget,
+            ),
+          );
+        }
+        const body = parts.join('');
+        return taggedCanonicalValue(prototype === null ? 'null-object' : 'object', body);
       } finally {
         ancestors.delete(value);
       }
     default:
       throw new TypeError(`settings contribution cannot encode ${typeof value}`);
   }
+}
+
+class CanonicalSettingsDecoder {
+  #offset = 0;
+
+  constructor(
+    readonly text: string,
+    readonly depth = 0,
+    readonly budget: CanonicalSettingsBudget = { nodes: 0, properties: 0 },
+  ) {}
+
+  get finished(): boolean {
+    return this.#offset === this.text.length;
+  }
+
+  private malformed(): never {
+    throw new TypeError('settings canonical value is malformed');
+  }
+
+  private token(): { tag: string; body: string } {
+    const hash = this.text.indexOf('#', this.#offset);
+    if (hash <= this.#offset) return this.malformed();
+    const tag = this.text.slice(this.#offset, hash);
+    const colon = this.text.indexOf(':', hash + 1);
+    if (colon === -1) return this.malformed();
+    const lengthText = this.text.slice(hash + 1, colon);
+    if (!/^(?:0|[1-9]\d*)$/u.test(lengthText)) return this.malformed();
+    const length = Number(lengthText);
+    if (!Number.isSafeInteger(length)) return this.malformed();
+    const start = colon + 1;
+    const end = start + length;
+    if (end > this.text.length) return this.malformed();
+    this.#offset = end;
+    return { tag, body: this.text.slice(start, end) };
+  }
+
+  private requireEmpty(body: string): void {
+    if (body !== '') this.malformed();
+  }
+
+  private key(): string {
+    const token = this.token();
+    if (token.tag !== 'key') this.malformed();
+    return token.body;
+  }
+
+  private nestedObject(body: string, nullPrototype: boolean): Record<string, unknown> {
+    const decoder = new CanonicalSettingsDecoder(body, this.depth + 1, this.budget);
+    const result = nullPrototype ? Object.create(null) : {};
+    const keys = new Set<string>();
+    while (!decoder.finished) {
+      const key = decoder.key();
+      if (keys.has(key)) this.malformed();
+      try {
+        consumeCanonicalSettingsProperty(this.budget);
+      } catch {
+        return this.malformed();
+      }
+      keys.add(key);
+      Object.defineProperty(result, key, {
+        value: decoder.value(),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return result;
+  }
+
+  private nestedArray(body: string): unknown[] {
+    const decoder = new CanonicalSettingsDecoder(body, this.depth + 1, this.budget);
+    const length = decoder.token();
+    if (length.tag !== 'length' || !/^(?:0|[1-9]\d*)$/u.test(length.body)) this.malformed();
+    const expectedLength = Number(length.body);
+    if (
+      !Number.isSafeInteger(expectedLength) ||
+      expectedLength < 0 ||
+      expectedLength > MAX_CANONICAL_SETTINGS_ARRAY_LENGTH ||
+      String(expectedLength) !== length.body
+    )
+      this.malformed();
+    const result = new Array(expectedLength);
+    const keys = new Set<string>();
+    while (!decoder.finished) {
+      const key = decoder.key();
+      if (key === 'length' || keys.has(key)) this.malformed();
+      try {
+        consumeCanonicalSettingsProperty(this.budget);
+      } catch {
+        return this.malformed();
+      }
+      const index = Number(key);
+      if (
+        /^(?:0|[1-9]\d*)$/u.test(key) &&
+        Number.isSafeInteger(index) &&
+        String(index) === key &&
+        index < 0xffff_ffff &&
+        index >= expectedLength
+      )
+        this.malformed();
+      keys.add(key);
+      Object.defineProperty(result, key, {
+        value: decoder.value(),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return result;
+  }
+
+  value(): unknown {
+    if (this.depth > MAX_CANONICAL_SETTINGS_DEPTH) this.malformed();
+    try {
+      consumeCanonicalSettingsNode(this.budget);
+    } catch {
+      return this.malformed();
+    }
+    const { tag, body } = this.token();
+    switch (tag) {
+      case 'null':
+        this.requireEmpty(body);
+        return null;
+      case 'undefined':
+        this.requireEmpty(body);
+        return undefined;
+      case 'boolean':
+        if (body === 'true') return true;
+        if (body === 'false') return false;
+        return this.malformed();
+      case 'string':
+        return body;
+      case 'bigint': {
+        try {
+          const value = BigInt(body);
+          if (value.toString(10) !== body) return this.malformed();
+          return value;
+        } catch {
+          return this.malformed();
+        }
+      }
+      case 'number':
+        if (body === 'NaN') return Number.NaN;
+        if (body === '+Infinity') return Number.POSITIVE_INFINITY;
+        if (body === '-Infinity') return Number.NEGATIVE_INFINITY;
+        if (body === '-0') return -0;
+        {
+          const value = Number(body);
+          if (!Number.isFinite(value) || String(value) !== body) return this.malformed();
+          return value;
+        }
+      case 'array':
+        return this.nestedArray(body);
+      case 'object':
+        return this.nestedObject(body, false);
+      case 'null-object':
+        return this.nestedObject(body, true);
+      default:
+        return this.malformed();
+    }
+  }
+}
+
+/** Decode exactly one canonical `tag#len:body` value, rejecting every ambiguous suffix. */
+export function decodeCanonicalSettingsValue(value: string): unknown {
+  assertCanonicalSettingsByteLimit(value);
+  const decoder = new CanonicalSettingsDecoder(value);
+  const decoded = decoder.value();
+  if (!decoder.finished) throw new TypeError('settings canonical value has trailing data');
+  if (encodeCanonicalSettingsValue(decoded) !== value)
+    throw new TypeError('settings canonical value is not canonical');
+  return decoded;
 }
 
 /** Hash values canonically so YAML key order cannot falsely look like a user modification. */
@@ -461,9 +814,13 @@ export function settingsContribution(
     namespace: 'agent-presets',
     keys: Object.entries(section)
       .sort(([left], [right]) => compareCanonicalKeys(left, right))
-      .map(([key, value]) => ({
-        key,
-        valueSha256: sha256(Buffer.from(canonicalSettingsValue(value))),
-      })),
+      .map(([key, value]) => {
+        const canonicalValue = encodeCanonicalSettingsValue(value);
+        return {
+          key,
+          valueSha256: sha256(Buffer.from(canonicalValue)),
+          canonicalValue,
+        };
+      }),
   };
 }

@@ -40,6 +40,15 @@ function digest(bytes: Uint8Array): string {
   return `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
 }
 
+function sha256PadBitAlias(value: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const last = value.at(-1);
+  if (last === undefined) throw new Error('digest must have a final base64url character');
+  const index = alphabet.indexOf(last);
+  if (index < 0 || index % 4 !== 0) throw new Error('digest fixture must be canonical');
+  return `${value.slice(0, -1)}${alphabet[index + 1]}`;
+}
+
 describe('transaction mutation path scope', () => {
   it('rejects out-of-home create before reserving or invoking apply', async () => {
     await withTemporaryRoot(async (root, dshHome) => {
@@ -240,6 +249,17 @@ describe('transaction mutation path scope', () => {
         {
           kind: 'store-block' as const,
           path: join(dshHome, '.dshpack', 'store', casStoreShard(address), 'extra', address),
+          code: 'E_TRANSACTION_STORE_PATH_SCOPE',
+        },
+        {
+          kind: 'store-block' as const,
+          path: join(
+            dshHome,
+            '.dshpack',
+            'store',
+            casStoreShard(sha256PadBitAlias(address)),
+            sha256PadBitAlias(address),
+          ),
           code: 'E_TRANSACTION_STORE_PATH_SCOPE',
         },
         {

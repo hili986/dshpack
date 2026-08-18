@@ -1,10 +1,11 @@
-import { join, resolve, sep } from 'node:path';
+import { join } from 'node:path';
 
 import type { Diagnostic } from '@dshpack/core';
 
 import { prepareAgentPresetsMerge } from '../adapters/settings.js';
 import { diagnostic } from '../commands/shared.js';
 import { EXIT_CODES } from '../exit-codes.js';
+import { attributableToInstall } from '../management/attribution.js';
 import {
   advanceCurrent,
   captureInstalledAssets,
@@ -27,7 +28,7 @@ import type {
 } from './runtime-types.js';
 import type { InstallPlan, InstallPlanAsset, InstallResolution } from './types.js';
 
-function materialText(material: ValidatedPackMaterial, path: string): string {
+export function materialText(material: ValidatedPackMaterial, path: string): string {
   const encoded = material.files.find((file) => file.path === path)?.contentBase64;
   if (encoded === undefined)
     throw installFailure(
@@ -37,31 +38,6 @@ function materialText(material: ValidatedPackMaterial, path: string): string {
       '重新验证 pack。',
     );
   return Buffer.from(encoded, 'base64').toString('utf8');
-}
-
-/**
- * Whether a post-install `doctor --strict` finding is this install's to answer for.
- *
- * doctor grades the whole harness home — every skill anyone ever wrote, every profile.
- * Failing the transaction on all of it makes a correct install impossible in any home
- * that is not already spotless: the pre-existing defect was not introduced here, and
- * rolling this install back cannot repair it. Attribution is by path — what this
- * transaction wrote, the profile it wrote into, the settings file it may have merged —
- * plus findings that name no path at all, which describe the install target itself
- * because doctor ran scoped to it.
- */
-function attributableToInstall(item: Diagnostic, dshHome: string, plan: InstallPlan): boolean {
-  if (item.path === undefined) return true;
-  const owned = [
-    join(dshHome, 'profiles', plan.targetProfile),
-    join(dshHome, 'settings.yaml'),
-    // Skipped assets were already the user's; this install did not write them.
-    ...[...plan.skills, ...plan.presets]
-      .filter((asset) => asset.action !== 'skip')
-      .map((asset) => join(dshHome, ...asset.target.split('/'))),
-  ].map((path) => resolve(path));
-  const path = resolve(item.path);
-  return owned.some((root) => path === root || path.startsWith(`${root}${sep}`));
 }
 
 async function applyAsset(
@@ -196,7 +172,13 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
   const ours: Diagnostic[] = [];
   const preexisting: Diagnostic[] = [];
   for (const item of doctor.diagnostics)
-    (attributableToInstall(item, input.dshHome, plan) ? ours : preexisting).push(item);
+    (attributableToInstall(item, input.dshHome, {
+      profile: plan.targetProfile,
+      assets: [...plan.skills, ...plan.presets],
+    })
+      ? ours
+      : preexisting
+    ).push(item);
   if (ours.some((item) => item.severity === 'error'))
     throw new TransactionFailure(EXIT_CODES.POST_INSTALL_VERIFY_FAILURE, ours);
   // A doctor that failed without locating anything is still ours: silence is not evidence
@@ -229,6 +211,11 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
   await storeCapturedAssets(transaction, input.dshHome, assets);
   await runInstallFault(runtime, 'store');
   const installedAt = runtime.now();
+  const metadata = installedMetadata(plan, facts, installedAt, txid, material, {
+    assets: assets.map(({ asset }) => asset),
+    settingsContribution: contribution,
+    generation: allocation.sequence,
+  });
   const generation = generationDocument(
     allocation.sequence,
     txid,
@@ -241,6 +228,7 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
         manifestDigest: plan.manifestDigest,
       },
       source: plan.source,
+      metadata,
     },
     assets,
     contribution,
@@ -254,11 +242,6 @@ export async function applyInstallOperation(args: ApplyInstallOperationInput): P
     allocation.sequence,
   );
   await runInstallFault(runtime, 'current');
-  const metadata = installedMetadata(plan, facts, installedAt, txid, material, {
-    assets: assets.map(({ asset }) => asset),
-    settingsContribution: contribution,
-    generation: allocation.sequence,
-  });
   await transaction.writeManagedDocument(
     join(input.dshHome, '.dshpack', 'installed', `${plan.targetProfile}.json`),
     `${JSON.stringify(metadata)}\n`,

@@ -18,15 +18,22 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { runGc } from '../src/gc/engine.js';
 import { bindSecureRoot } from '../src/list/safe-fs.js';
-import { casStoreShard, isCanonicalCasStoreShard } from '../src/metadata/state-storage.js';
+import {
+  casStoreShard,
+  isCanonicalCasStoreShard,
+  settingsContribution,
+} from '../src/metadata/state-storage.js';
 import {
   createNodeTransactionAdapter,
   MAX_TRANSACTION_STATE_BYTES,
+  type ReplaceJournalAction,
   runTransaction,
+  type TransactionJournal,
   TransactionPhysicalProgressError,
   TransactionStateReadLimitError,
   TransactionStateReadSecurityError,
 } from '../src/transaction.js';
+import { actionId, serializeJournal } from '../src/transaction-journal.js';
 
 const roots: string[] = [];
 
@@ -42,6 +49,105 @@ afterEach(async () => {
 
 function sha256(bytes: Uint8Array): string {
   return `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
+}
+
+interface GcGenerationDeleteCandidate {
+  readonly artifact: 'generation';
+  readonly path: string;
+  readonly identity: string;
+  readonly contentSha256: string;
+}
+
+const GC_JOURNAL_TERMINAL_FORMS = [
+  { state: 'active', phase: 'planned' },
+  { state: 'committed', phase: 'applied' },
+  { state: 'rolling-back', phase: 'rollback-failed' },
+  { state: 'rolled-back', phase: 'rolled-back' },
+  { state: 'rollback-failed', phase: 'rollback-failed' },
+] as const;
+
+async function transactionStateIdentity(path: string): Promise<string> {
+  const details = await lstat(path, { bigint: true });
+  return `${details.dev}:${details.ino}:${details.birthtimeNs}`;
+}
+
+async function generationDeleteCandidate(path: string): Promise<GcGenerationDeleteCandidate> {
+  const [identity, bytes] = await Promise.all([transactionStateIdentity(path), readFile(path)]);
+  return { artifact: 'generation', path, identity, contentSha256: sha256(bytes) };
+}
+
+function gcDeleteJournal(
+  dshHome: string,
+  txid: string,
+  candidates: readonly GcGenerationDeleteCandidate[],
+  state: TransactionJournal['state'],
+  phase: ReplaceJournalAction['phase'],
+): TransactionJournal {
+  const backupDirectory = join(dshHome, '.dshpack', 'backups', txid);
+  return {
+    version: 0,
+    txid,
+    purpose: 'gc',
+    dshHome,
+    backupDirectory,
+    state,
+    actions: candidates.map((candidate, index) => {
+      const id = actionId(index + 1);
+      return {
+        id,
+        kind: 'replace',
+        artifact: candidate.artifact,
+        phase,
+        old: {
+          path: candidate.path,
+          exists: true,
+          identity: candidate.identity,
+          contentSha256: candidate.contentSha256,
+        },
+        new: {
+          path: candidate.path,
+          exists: false,
+          preservedAt: join(backupDirectory, 'old', id),
+        },
+      } satisfies ReplaceJournalAction;
+    }),
+  };
+}
+
+function serializedJournalBytes(journal: TransactionJournal): number {
+  return Buffer.byteLength(serializeJournal(journal), 'utf8');
+}
+
+function calibrationIdentityByteDelta(
+  calibrationJournal: TransactionJournal,
+  candidates: readonly GcGenerationDeleteCandidate[],
+): number {
+  const calibrationIdentities = calibrationJournal.actions.map((action) => {
+    if (
+      action.kind !== 'replace' ||
+      action.artifact !== 'generation' ||
+      action.old.identity === undefined
+    )
+      throw new Error('GC calibration journal did not contain the expected generation action.');
+    return action.old.identity;
+  });
+  if (calibrationIdentities.length !== candidates.length)
+    throw new Error('GC calibration journal action count did not match the target batch.');
+  return candidates.reduce(
+    (delta, candidate, index) =>
+      delta +
+      Buffer.byteLength(candidate.identity, 'utf8') -
+      Buffer.byteLength(calibrationIdentities[index] ?? '', 'utf8'),
+    0,
+  );
+}
+
+function equivalentJournalBytes(
+  calibrationJournal: TransactionJournal,
+  calibrationJournalBytes: number,
+  candidates: readonly GcGenerationDeleteCandidate[],
+): number {
+  return calibrationJournalBytes + calibrationIdentityByteDelta(calibrationJournal, candidates);
 }
 
 function generationName(sequence: number): string {
@@ -106,6 +212,8 @@ function generationDocument(
   sequence: number,
   digests: readonly string[],
 ): Record<string, unknown> {
+  const manifestDigest = sha256(Buffer.from('fixture manifest'));
+  const installedAt = '2026-08-17T00:00:00.000Z';
   return {
     seq: sequence,
     txid: `fixture-${String(sequence)}`,
@@ -114,14 +222,48 @@ function generationDocument(
     pack: {
       name: 'fixture-pack',
       version: '1.0.0',
-      manifestDigest: sha256(Buffer.from('fixture manifest')),
+      manifestDigest,
     },
     source: { kind: 'fixture' },
     entries: digests.map((digest, index) => ({
       target: `profiles/${profile}/entry-${String(index)}`,
       sha256: digest,
     })),
-    settingsContribution: { namespace: 'agent-presets', keys: [] },
+    settingsContribution: settingsContribution({}),
+    metadata: {
+      metadataVersion: 1,
+      profile,
+      pack: { name: 'fixture-pack', version: '1.0.0', manifestDigest },
+      planDigest: manifestDigest,
+      installedAt,
+      txid: `fixture-${String(sequence)}`,
+      source: { kind: 'directory', path: '/safe/fixture-source' },
+      defaults: { permissionPreset: 'workspace-write' },
+      plugins: [],
+      effectiveLock: {
+        lockVersion: 0,
+        manifestSha256: manifestDigest,
+        generatedBy: 'dshpack@0.1.1',
+        generatedAt: installedAt,
+        dsh: { exportedFrom: '0.1.0' },
+        plugins: [],
+        files: [],
+      },
+      sideEffects: ['profile/cordis.yml'],
+      assets: [
+        {
+          id: profile,
+          kind: 'profile',
+          target: `profiles/${profile}`,
+          action: 'create',
+          identity: '1:2:3',
+          files: [{ path: 'state.json', sha256: manifestDigest, bytes: 1 }],
+        },
+      ],
+      settingsContribution: settingsContribution({}),
+      generation: sequence,
+      installedBy: 'dshpack@0.1.1',
+    },
     restorable: true,
   };
 }
@@ -229,6 +371,25 @@ async function leaveVerifiedGcQuarantine(dshHome: string) {
 }
 
 describe('generation garbage collection', () => {
+  it('rejects an install generation that falsely claims an uninstalled effective marker', async () => {
+    const dshHome = await home();
+    const path = await writeGeneration(dshHome, 'alpha', 1, []);
+    await writeFile(
+      path,
+      `${JSON.stringify({ ...generationDocument('alpha', 1, []), metadata: null })}\n`,
+    );
+    await writeFile(join(dirname(path), 'current'), '1\n');
+    const before = await snapshot(dshHome);
+
+    const result = await runGc({ dshHome, keep: 1, dryRun: false });
+
+    expect(result).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_GC_GENERATION_DOCUMENT' })],
+    });
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
   it.each([
     [
       'an unparseable quarantine action id',
@@ -425,15 +586,9 @@ describe('generation garbage collection', () => {
     const dshHome = await home();
     const path = await writeGeneration(dshHome, 'alpha', 1, []);
     const document = generationDocument('alpha', 1, []);
-    document.settingsContribution = {
-      namespace: 'agent-presets',
-      keys: [
-        {
-          key: 'completion.temperature',
-          valueSha256: sha256(Buffer.from('canonical-setting-value')),
-        },
-      ],
-    };
+    document.settingsContribution = settingsContribution({ 'completion.temperature': 1 });
+    (document.metadata as { settingsContribution: unknown }).settingsContribution =
+      document.settingsContribution;
     await writeFile(path, `${JSON.stringify(document)}\n`);
     await writeFile(join(dirname(path), 'current'), '1\n');
     const before = await snapshot(dshHome);
@@ -789,17 +944,69 @@ describe('generation garbage collection', () => {
   });
 
   it('rejects a journal budget that fits active state but not every recoverable terminal state', async () => {
+    const txid = 'gc-terminal-size-boundary';
+    const calibrationHome = await home();
+    const calibrationObsolete = await writeBlock(
+      calibrationHome,
+      Buffer.from('terminal-size obsolete'),
+    );
+    await writeGeneration(calibrationHome, 'alpha', 1, [calibrationObsolete]);
+    const calibrationCurrent = await writeGeneration(calibrationHome, 'alpha', 2, [
+      calibrationObsolete,
+    ]);
+    await writeFile(join(dirname(calibrationCurrent), 'current'), '2\n');
+    const calibration = await runGc(
+      { dshHome: calibrationHome, keep: 1, dryRun: false },
+      { maxJournalBytes: MAX_TRANSACTION_STATE_BYTES, createTxid: () => txid },
+    );
+    expect(calibration.exitCode).toBe(0);
+    const calibrationJournalPath = join(
+      calibrationHome,
+      '.dshpack',
+      'backups',
+      txid,
+      'journal.json',
+    );
+    const [calibrationJournalText, calibrationJournalStat] = await Promise.all([
+      readFile(calibrationJournalPath, 'utf8'),
+      lstat(calibrationJournalPath),
+    ]);
+    const calibrationJournal = JSON.parse(calibrationJournalText) as TransactionJournal;
+    const calibrationJournalBytes = Number(calibrationJournalStat.size);
+    expect(serializedJournalBytes(calibrationJournal)).toBe(calibrationJournalBytes);
+
     const dshHome = await home();
+    expect(dshHome.length).toBe(calibrationHome.length);
     const obsolete = await writeBlock(dshHome, Buffer.from('terminal-size obsolete'));
-    const retained = await writeBlock(dshHome, Buffer.from('terminal-size retained'));
-    await writeGeneration(dshHome, 'alpha', 1, [obsolete]);
-    const current = await writeGeneration(dshHome, 'alpha', 2, [retained]);
+    const obsoleteGeneration = await writeGeneration(dshHome, 'alpha', 1, [obsolete]);
+    const current = await writeGeneration(dshHome, 'alpha', 2, [obsolete]);
     await writeFile(join(dirname(current), 'current'), '2\n');
+    const candidates = [await generationDeleteCandidate(obsoleteGeneration)];
+    const equivalentSingleActionBytes = equivalentJournalBytes(
+      calibrationJournal,
+      calibrationJournalBytes,
+      candidates,
+    );
+    const committedJournalBytes = serializedJournalBytes(
+      gcDeleteJournal(dshHome, txid, candidates, 'committed', 'applied'),
+    );
+    const activeJournalBytes = serializedJournalBytes(
+      gcDeleteJournal(dshHome, txid, candidates, 'active', 'planned'),
+    );
+    const maximumTerminalJournalBytes = Math.max(
+      ...GC_JOURNAL_TERMINAL_FORMS.map(({ state, phase }) =>
+        serializedJournalBytes(gcDeleteJournal(dshHome, txid, candidates, state, phase)),
+      ),
+    );
+    const maximumJournalBytes = equivalentSingleActionBytes - 1;
+    expect(committedJournalBytes).toBe(equivalentSingleActionBytes);
+    expect(activeJournalBytes).toBeLessThanOrEqual(maximumJournalBytes);
+    expect(maximumJournalBytes).toBeLessThan(maximumTerminalJournalBytes);
     const before = await snapshot(dshHome);
 
     const result = await runGc(
       { dshHome, keep: 1, dryRun: false },
-      { maxJournalBytes: 1_075, createTxid: () => 'gc-terminal-size-boundary' },
+      { maxJournalBytes: maximumJournalBytes, createTxid: () => txid },
     );
 
     expect(result).toMatchObject({
@@ -1351,27 +1558,85 @@ describe('generation garbage collection', () => {
   });
 
   it('batches generations before CAS blocks and converges without an unreadable journal', async () => {
+    const txid = 'gc-batched-fixture';
+    const calibrationHome = await home();
+    const calibrationFirst = await writeBlock(calibrationHome, Buffer.from('batch-first'));
+    const calibrationSecond = await writeBlock(calibrationHome, Buffer.from('batch-second'));
+    await writeGeneration(calibrationHome, 'alpha', 1, [calibrationFirst]);
+    await writeGeneration(calibrationHome, 'alpha', 2, [calibrationSecond]);
+    const calibrationCurrent = await writeGeneration(calibrationHome, 'alpha', 3, [
+      calibrationFirst,
+      calibrationSecond,
+    ]);
+    await writeFile(join(dirname(calibrationCurrent), 'current'), '3\n');
+    const calibration = await runGc(
+      { dshHome: calibrationHome, keep: 1, dryRun: false },
+      { maxJournalBytes: MAX_TRANSACTION_STATE_BYTES, createTxid: () => txid },
+    );
+    expect(calibration).toMatchObject({
+      exitCode: 0,
+      metadata: {
+        deletedGenerations: [
+          join('.dshpack', 'generations', 'alpha', '0001.json'),
+          join('.dshpack', 'generations', 'alpha', '0002.json'),
+        ],
+        deletedBlocks: [],
+      },
+    });
+    const calibrationJournalPath = join(
+      calibrationHome,
+      '.dshpack',
+      'backups',
+      txid,
+      'journal.json',
+    );
+    const [calibrationJournalText, calibrationJournalStat] = await Promise.all([
+      readFile(calibrationJournalPath, 'utf8'),
+      lstat(calibrationJournalPath),
+    ]);
+    const calibrationJournal = JSON.parse(calibrationJournalText) as TransactionJournal;
+    const calibrationJournalBytes = Number(calibrationJournalStat.size);
+    expect(serializedJournalBytes(calibrationJournal)).toBe(calibrationJournalBytes);
+
     const dshHome = await home();
+    expect(dshHome.length).toBe(calibrationHome.length);
     const first = await writeBlock(dshHome, Buffer.from('batch-first'));
     const second = await writeBlock(dshHome, Buffer.from('batch-second'));
-    const retained = await writeBlock(dshHome, Buffer.from('batch-retained'));
     const firstGeneration = await writeGeneration(dshHome, 'alpha', 1, [first]);
     const secondGeneration = await writeGeneration(dshHome, 'alpha', 2, [second]);
-    const currentGeneration = await writeGeneration(dshHome, 'alpha', 3, [retained]);
+    const currentGeneration = await writeGeneration(dshHome, 'alpha', 3, [first, second]);
     await writeFile(join(dirname(currentGeneration), 'current'), '3\n');
     const firstBlock = join(dshHome, '.dshpack', 'store', casStoreShard(first), first);
     const secondBlock = join(dshHome, '.dshpack', 'store', casStoreShard(second), second);
-    const dependencies = { maxJournalBytes: 1_500, createTxid: () => 'gc-batched-fixture' };
+    const candidates = await Promise.all([
+      generationDeleteCandidate(firstGeneration),
+      generationDeleteCandidate(secondGeneration),
+    ]);
+    const equivalentGenerationBatchBytes = equivalentJournalBytes(
+      calibrationJournal,
+      calibrationJournalBytes,
+      candidates,
+    );
+    expect(
+      serializedJournalBytes(gcDeleteJournal(dshHome, txid, candidates, 'committed', 'applied')),
+    ).toBe(equivalentGenerationBatchBytes);
+    const dependencies = {
+      maxJournalBytes: equivalentGenerationBatchBytes - 1,
+      createTxid: () => txid,
+    };
 
     const firstRun = await runGc({ dshHome, keep: 1, dryRun: false }, dependencies);
     expect(firstRun).toMatchObject({
       exitCode: 0,
-      metadata: { deletedGenerations: [join('.dshpack', 'generations', 'alpha', '0001.json')] },
+      metadata: {
+        deletedGenerations: [join('.dshpack', 'generations', 'alpha', '0001.json')],
+        deletedBlocks: [],
+      },
     });
     const committedJournal = await readFile(
-      join(dshHome, '.dshpack', 'backups', 'gc-batched-fixture', 'journal.json'),
+      join(dshHome, '.dshpack', 'backups', txid, 'journal.json'),
     );
-    expect(committedJournal.byteLength).toBeLessThanOrEqual(1_500);
+    expect(committedJournal.byteLength).toBeLessThanOrEqual(dependencies.maxJournalBytes);
     await expect(readFile(firstGeneration)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(secondGeneration)).resolves.toBeDefined();
     // The still-existing second obsolete generation means its distinct block and every other
@@ -1379,6 +1644,8 @@ describe('generation garbage collection', () => {
     await expect(readFile(firstBlock)).resolves.toBeDefined();
     await expect(readFile(secondBlock)).resolves.toBeDefined();
 
+    const retained = await writeBlock(dshHome, Buffer.from('batch-retained'));
+    await writeGeneration(dshHome, 'alpha', 3, [retained]);
     const secondRun = await runGc(
       { dshHome, keep: 1, dryRun: false },
       { ...dependencies, createTxid: () => 'gc-batched-fixture-2' },
@@ -1544,7 +1811,13 @@ describe('generation garbage collection', () => {
         ...document,
         settingsContribution: {
           namespace: 'agent-presets',
-          keys: [{ key: 7, valueSha256: sha256(Buffer.from('value')) }],
+          keys: [
+            {
+              key: 7,
+              canonicalValue: 'string#5:value',
+              valueSha256: sha256(Buffer.from('string#5:value')),
+            },
+          ],
         },
       }),
     ],

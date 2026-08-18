@@ -1690,6 +1690,32 @@ describe('transaction binary state files', () => {
     expect(await readFile(current, 'utf8')).toBe('1\n');
   });
 
+  it('restores a transaction-bound deleted generation current pointer on rollback', async () => {
+    const dshHome = await home();
+    const current = join(dshHome, '.dshpack', 'generations', 'demo-pack', 'current');
+    const original = '2\n';
+    await mkdir(dirname(current), { recursive: true });
+    await writeFile(current, original);
+    const before = await lstat(current, { bigint: true });
+    const identity = `${before.dev}:${before.ino}:${before.birthtimeNs}`;
+    const result = await runTransaction(
+      { adapter: createNodeTransactionAdapter(), dshHome, txid: 'current-delete-rollback' },
+      async (transaction) => {
+        await transaction.deleteStateFile(
+          'generation-current',
+          current,
+          digest(Buffer.from(original)),
+          identity,
+        );
+        await expect(readFile(current, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        throw abort();
+      },
+    );
+
+    expect(result).toMatchObject({ exitCode: 24, status: 'rolled-back', manualRecovery: [] });
+    expect(await readFile(current, 'utf8')).toBe(original);
+  });
+
   it.each([
     ['new', 'hardlink'],
     ['original', 'hardlink'],

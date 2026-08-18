@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -15,7 +16,7 @@ import {
 
 const homes: string[] = [];
 
-const SHA512_B = `sha512-${'B'.repeat(86)}==`;
+const SHA512_B = `sha512-${createHash('sha512').update('effective lock SHA-512 B').digest('base64')}`;
 
 function plugin(name = '@example/demo-plugin', version = '1.2.3') {
   return {

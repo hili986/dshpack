@@ -1263,22 +1263,6 @@ export async function migrateProfile(
       await storeCapturedAssets(tx, input.dshHome, assets);
       await runInstallFault(runtime, 'store');
       const installedAt = runtime.now();
-      const generation = generationDocument(
-        allocation.sequence,
-        txid,
-        installedAt,
-        {
-          operation: 'install',
-          pack: initial.marker.pack,
-          source: initial.marker.source,
-        },
-        assets,
-        planned.contribution,
-      );
-      await writeGeneration(tx, input.dshHome, input.profile, generation);
-      await runInstallFault(runtime, 'generation');
-      await advanceCurrent(tx, allocation.currentPath, allocation.previous, allocation.sequence);
-      await runInstallFault(runtime, 'current');
       const metadata: InstalledMetadataV1 = {
         ...initial.marker,
         metadataVersion: 1,
@@ -1287,6 +1271,23 @@ export async function migrateProfile(
         generation: allocation.sequence,
         installedBy: GENERATED_BY,
       };
+      const generation = generationDocument(
+        allocation.sequence,
+        txid,
+        installedAt,
+        {
+          operation: 'install',
+          pack: initial.marker.pack,
+          source: initial.marker.source,
+          metadata,
+        },
+        assets,
+        planned.contribution,
+      );
+      await writeGeneration(tx, input.dshHome, input.profile, generation);
+      await runInstallFault(runtime, 'generation');
+      await advanceCurrent(tx, allocation.currentPath, allocation.previous, allocation.sequence);
+      await runInstallFault(runtime, 'current');
       await tx.writeManagedDocument(markerPath, `${JSON.stringify(metadata)}\n`, initial.text);
       await runInstallFault(runtime, 'metadata');
       return allocation.sequence;

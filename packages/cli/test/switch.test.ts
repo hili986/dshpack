@@ -5,12 +5,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { type SwitchRuntime, switchProfile } from '../src/switch/engine.js';
-import { securityEffectiveLock } from './list-switch-security-fixture.js';
+import { SHA256_A, SHA256_B, securityEffectiveLock } from './list-switch-security-fixture.js';
 
 const homes: string[] = [];
-const SHA256_A = `sha256-${'a'.repeat(43)}`;
-const SHA256_B = `sha256-${'b'.repeat(43)}`;
-
 async function fixture(tracked = true): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), 'dshpack-switch-'));
   homes.push(home);

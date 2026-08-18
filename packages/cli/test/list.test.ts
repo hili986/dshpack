@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -16,9 +17,9 @@ import {
 import { listProfiles } from '../src/list/engine.js';
 
 const homes: string[] = [];
-const SHA256_A = `sha256-${'a'.repeat(43)}`;
-const SHA256_B = `sha256-${'b'.repeat(43)}`;
-const SHA512 = `sha512-${'A'.repeat(86)}==`;
+const SHA256_A = `sha256-${createHash('sha256').update('list fixture A').digest('base64url')}`;
+const SHA256_B = `sha256-${createHash('sha256').update('list fixture B').digest('base64url')}`;
+const SHA512 = `sha512-${createHash('sha512').update('list fixture SHA-512').digest('base64')}`;
 
 async function home(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dshpack-list-'));

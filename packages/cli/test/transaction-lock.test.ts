@@ -166,6 +166,7 @@ describe('transaction artifact lease', () => {
           await transaction.create('profile', profilePath, async () => {
             await writeFile(join(profilePath, 'package.json'), '{"private":true}\n', 'utf8');
           });
+          return { committedProfile: 'committed' };
         },
       );
 
@@ -174,6 +175,7 @@ describe('transaction artifact lease', () => {
         status: 'committed',
         exitCode: 25,
         journal: { state: 'committed', actions: [{ phase: 'applied' }] },
+        value: { committedProfile: 'committed' },
         manualRecovery: [{ actionId: 'artifact-lock', operation: 'inspect-lock' }],
       });
       expect(await readFile(join(profilePath, 'package.json'), 'utf8')).toBe('{"private":true}\n');

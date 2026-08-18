@@ -51,4 +51,16 @@ export type {
   InstallPlanWrite,
   InstallPreflightResult,
 } from './install/types.js';
+export {
+  type RestoreDependencies,
+  type RestoreInput,
+  type RestoreMetadata,
+  restoreProfile,
+} from './restore/engine.js';
 export * from './transaction.js';
+export {
+  type UninstallDependencies,
+  type UninstallInput,
+  type UninstallMetadata,
+  uninstallProfile,
+} from './uninstall/engine.js';
