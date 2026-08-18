@@ -8,6 +8,7 @@ import { parse, stringify } from 'yaml';
 
 import { diffProfile } from '../src/diff/engine.js';
 import { installPack } from '../src/install/engine.js';
+import { removeFixtureDirectory } from './fixture-cleanup.js';
 import { enginePack, fakeRuntime } from './install-engine-fixture.js';
 
 const homes = new Set<string>();
@@ -54,8 +55,11 @@ async function replaceLockedFile(root: string, path: string, contents: string): 
 }
 
 afterEach(async () => {
-  await Promise.all([...homes].map((directory) => rm(directory, { recursive: true })));
+  // Same contract as the update fixtures: drain first so a failed removal cannot compound,
+  // and go through the bounded retry so a transient Windows lock is not a test failure.
+  const pending = [...homes];
   homes.clear();
+  await Promise.all(pending.map((directory) => removeFixtureDirectory(directory)));
 });
 
 describe('diff profile', () => {

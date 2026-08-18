@@ -25,8 +25,11 @@ async function home(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all([...homes].map((directory) => removeFixtureDirectory(directory)));
+  // Drain before removing: a cleanup that still throws must not leave the set populated,
+  // or every later test re-attempts the whole backlog and the cost grows quadratically.
+  const pending = [...homes];
   homes.clear();
+  await Promise.all(pending.map((directory) => removeFixtureDirectory(directory)));
 });
 
 function sha512(value: string): string {

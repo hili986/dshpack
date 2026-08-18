@@ -72,6 +72,43 @@ describe('status profiles branch handling', () => {
     expect(result.metadata.profiles[0]).not.toHaveProperty('generation');
   });
 
+  it('never renders an unreadable profile identically to a clean one when offline', async () => {
+    listProfilesMock.mockResolvedValue({
+      diagnostics: [],
+      exitCode: EXIT_CODES.SUCCESS,
+      metadata: { profiles: [tracked('alpha'), tracked('beta')] },
+    });
+    diffProfileMock.mockImplementation(async ({ profile }: { readonly profile: string }) =>
+      profile === 'alpha'
+        ? report(profile, {
+            exitCode: EXIT_CODES.CONTRACT,
+            diagnostics: [{ code: 'E_ALPHA', message: 'unreadable' }],
+          })
+        : report(profile),
+    );
+
+    const result = await statusProfiles({ dshHome: '/isolated' }, {} as never);
+
+    const [alpha, beta] = result.metadata.profiles;
+    if (alpha?.status !== 'tracked' || beta?.status !== 'tracked')
+      throw new Error('both fixtures must grade as tracked profiles');
+    // Offline leaves `update` at 'not-checked' for both, so the drift/sharedAssets pair
+    // carries the entire signal. Compare the state triple alone: profile and pack names
+    // always differ, so comparing whole records would pass no matter what is reported.
+    const stateOf = (entry: typeof alpha) => ({
+      drift: entry.drift,
+      sharedAssets: entry.sharedAssets,
+      update: entry.update,
+    });
+    expect(stateOf(alpha)).toEqual({
+      drift: 'unavailable',
+      sharedAssets: 'unavailable',
+      update: 'not-checked',
+    });
+    expect(stateOf(beta)).toEqual({ drift: 0, sharedAssets: 0, update: 'not-checked' });
+    expect(stateOf(alpha)).not.toEqual(stateOf(beta));
+  });
+
   it('keeps the first tracked read failure while still presenting later failures', async () => {
     listProfilesMock.mockResolvedValue({
       diagnostics: [],

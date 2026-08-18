@@ -38,8 +38,8 @@ const packRoots = new Set<string>();
 
 export async function cleanupEnginePackFixtures(): Promise<void> {
   const pending = [...packRoots];
-  await Promise.all(pending.map((root) => removeFixtureDirectory(root)));
   for (const root of pending) packRoots.delete(root);
+  await Promise.all(pending.map((root) => removeFixtureDirectory(root)));
 }
 
 afterEach(cleanupEnginePackFixtures);

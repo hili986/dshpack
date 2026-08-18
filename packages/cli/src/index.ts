@@ -56,6 +56,7 @@ export {
   type DiffReport,
   type DiffRuntime,
   diffProfile,
+  type EffectiveMismatch,
 } from './diff/engine.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
 export { installPack } from './install/engine.js';

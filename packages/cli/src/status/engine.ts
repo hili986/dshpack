@@ -14,8 +14,9 @@ export type StatusProfile =
       readonly status: 'tracked';
       readonly pack: { readonly name: string; readonly version: string };
       readonly generation?: number;
-      readonly drift: number;
-      readonly sharedAssets: number;
+      /** `'unavailable'` when the read-only plan failed: an unknown count is never reported as 0. */
+      readonly drift: number | 'unavailable';
+      readonly sharedAssets: number | 'unavailable';
       readonly update: 'available' | 'none' | 'not-checked' | 'unavailable';
     }
   | {
@@ -89,12 +90,15 @@ export async function statusProfiles(
         firstFailure = report.diagnostics;
         failureCode = report.exitCode;
       }
+      // Without `--check-updates` the `update` field reads `'not-checked'` for healthy and
+      // unreadable profiles alike, so reporting 0 here would make an unreadable profile
+      // byte-identical to a clean one for anyone consuming `--json`.
       profiles.push({
         profile: profile.profile,
         status: 'tracked',
         pack: profile.pack,
-        drift: 0,
-        sharedAssets: 0,
+        drift: 'unavailable',
+        sharedAssets: 'unavailable',
         update: input.checkUpdates === true ? 'unavailable' : 'not-checked',
       });
       continue;
