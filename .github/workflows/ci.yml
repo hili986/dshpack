@@ -21,7 +21,9 @@ jobs:
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Headroom for a suite that grows every M1 batch. Still a real ceiling: a genuine hang
+    # fails here rather than burning a runner for six hours.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -47,8 +49,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `check:ci`, not `check`: the full `check` ends with `test` and `test:e2e`, both of
+      # which the next two steps run again. Every job was therefore running the unit suite
+      # twice and the e2e suite twice, which is what pushed windows-latest past its budget
+      # once M1-3/M1-4 took the suite from 1014 to 1753 tests. Nothing is skipped — the
+      # coverage step is a strict superset of `test` and gates the per-file thresholds too.
       - name: Check source
-        run: pnpm check
+        run: pnpm check:ci
 
       - name: Run coverage suite
         run: pnpm test:coverage
