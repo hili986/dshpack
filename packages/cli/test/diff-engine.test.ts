@@ -107,10 +107,7 @@ describe('diff profile', () => {
     const before = await treeFingerprint(dshHome);
 
     const readOnlyRuntime = fakeRuntime();
-    const result = await diffProfile(
-      { dshHome, profile: 'engine-pack' },
-      readOnlyRuntime.runtime,
-    );
+    const result = await diffProfile({ dshHome, profile: 'engine-pack' }, readOnlyRuntime.runtime);
 
     expect(result).toMatchObject({ exitCode: 0 });
     expect(result.metadata.localDrift).toEqual([]);

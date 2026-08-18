@@ -13,6 +13,7 @@ import { installPack } from '../src/install/engine.js';
 import { readMarker, restoreProfile } from '../src/restore/engine.js';
 import { uninstallProfile } from '../src/uninstall/engine.js';
 import { updateProfile } from '../src/update/engine.js';
+import { removeFixtureDirectory } from './fixture-cleanup.js';
 import { enginePack, fakeRuntime, snapshot } from './install-engine-fixture.js';
 
 const homes = new Set<string>();
@@ -24,7 +25,7 @@ async function home(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all([...homes].map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all([...homes].map((directory) => removeFixtureDirectory(directory)));
   homes.clear();
 });
 
@@ -55,8 +56,7 @@ async function addTargetFile(target: string, path: string, contents: string): Pr
 }
 
 async function removeTargetFiles(target: string, paths: readonly string[]): Promise<void> {
-  for (const path of paths)
-    await rm(join(target, ...path.split('/')), { recursive: true, force: true });
+  for (const path of paths) await rm(join(target, ...path.split('/')), { recursive: true });
   const lockPath = join(target, 'pack.lock.yml');
   const lock = parse(await readFile(lockPath, 'utf8')) as {
     files: Array<{ path: string; sha512: string }>;
@@ -482,7 +482,7 @@ describe('update apply merge', () => {
       'skills/notes.md',
       '---\nname: notes\ndescription: target\n---\n# Target notes\n',
     );
-    await rm(join(retained.dshHome, 'skills', 'notes'), { recursive: true, force: true });
+    await rm(join(retained.dshHome, 'skills', 'notes'), { recursive: true });
     const retainedResult = await updateProfile(
       updateInput(retained.dshHome, retained.profile, changedTarget),
       retained.fixture.runtime,
@@ -538,7 +538,7 @@ describe('update apply merge', () => {
       '---\nname: notes\ndescription: target\n---\n# Target notes\n',
     );
     const skillDirectory = join(current.dshHome, 'skills', 'notes');
-    await rm(skillDirectory, { recursive: true, force: true });
+    await rm(skillDirectory, { recursive: true });
 
     const first = await updateProfile(
       updateInput(current.dshHome, current.profile, target),
@@ -569,7 +569,7 @@ describe('update apply merge', () => {
       '---\nname: notes\ndescription: target\n---\n# Target notes\n',
     );
     const skillDirectory = join(current.dshHome, 'skills', 'notes');
-    await rm(skillDirectory, { recursive: true, force: true });
+    await rm(skillDirectory, { recursive: true });
     const updated = await updateProfile(
       updateInput(current.dshHome, current.profile, target),
       current.fixture.runtime,
@@ -605,7 +605,7 @@ describe('update apply merge', () => {
     const target = await enginePack({ name: current.profile });
     await bumpTargetVersion(target);
     const profileDirectory = join(current.dshHome, 'profiles', current.profile);
-    await rm(profileDirectory, { recursive: true, force: true });
+    await rm(profileDirectory, { recursive: true });
 
     const first = await updateProfile(
       updateInput(current.dshHome, current.profile, target),
@@ -924,7 +924,7 @@ describe('update apply merge', () => {
       '---\nname: notes\ndescription: target\n---\n# Target notes\n',
     );
     const skillDirectory = join(current.dshHome, 'skills', 'notes');
-    await rm(skillDirectory, { recursive: true, force: true });
+    await rm(skillDirectory, { recursive: true });
     await writeFile(skillDirectory, 'not a managed directory\n');
 
     const result = await updateProfile(
@@ -1158,7 +1158,7 @@ describe('update apply merge', () => {
   it('keeps a user-deleted profile absent while a modified profile conflicts unless --theirs is selected', async () => {
     const deleted = await installedAssets();
     const unchangedTarget = await enginePack({ assets: true, name: deleted.profile });
-    await rm(join(deleted.dshHome, 'profiles', deleted.profile), { recursive: true, force: true });
+    await rm(join(deleted.dshHome, 'profiles', deleted.profile), { recursive: true });
     const deletedResult = await updateProfile(
       updateInput(deleted.dshHome, deleted.profile, unchangedTarget),
       deleted.fixture.runtime,
@@ -1225,7 +1225,7 @@ describe('update apply merge', () => {
       '---\nname: notes\ndescription: target\n---\n# Target notes\n',
     );
     const skillPath = join(current.dshHome, 'skills', 'notes', 'SKILL.md');
-    await rm(join(current.dshHome, 'skills', 'notes'), { recursive: true, force: true });
+    await rm(join(current.dshHome, 'skills', 'notes'), { recursive: true });
     const runtime = fakeRuntime();
     runtime.runtime.runDoctor = async () => ({
       diagnostics: [
@@ -1287,7 +1287,7 @@ describe('update apply merge', () => {
     const deleted = await installedAssets();
     const target = await enginePack({ assets: true, name: deleted.profile });
     await bumpTargetVersion(target);
-    await rm(join(deleted.dshHome, 'profiles', deleted.profile), { recursive: true, force: true });
+    await rm(join(deleted.dshHome, 'profiles', deleted.profile), { recursive: true });
     const rebuilt = await updateProfile(
       updateInput(deleted.dshHome, deleted.profile, target, { theirs: true }),
       deleted.fixture.runtime,

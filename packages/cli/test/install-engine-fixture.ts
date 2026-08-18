@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, sep } from 'node:path';
 
@@ -19,6 +19,7 @@ import type {
   InstallSubprocessResult,
 } from '../src/install/runtime-types.js';
 import { createNodeTransactionAdapter } from '../src/transaction-node-adapter.js';
+import { removeFixtureDirectory } from './fixture-cleanup.js';
 import { fakeInstallResolution } from './install-engine-resolution-fixture.js';
 
 const sha512 = (content: string): string =>
@@ -37,7 +38,7 @@ const packRoots = new Set<string>();
 
 export async function cleanupEnginePackFixtures(): Promise<void> {
   const pending = [...packRoots];
-  await Promise.all(pending.map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(pending.map((root) => removeFixtureDirectory(root)));
   for (const root of pending) packRoots.delete(root);
 }
 
@@ -363,7 +364,7 @@ export function fakeRuntime(control: FakeRuntimeControl = {}): FakeRuntimeResult
         staged,
         async cleanup() {
           calls.push('cleanup:plugin');
-          await rm(dirname(staged.path), { recursive: true, force: true });
+          await removeFixtureDirectory(dirname(staged.path));
         },
       };
     },

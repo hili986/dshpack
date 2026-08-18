@@ -27,6 +27,9 @@ const lstatFailure = vi.hoisted(() => ({
   path: undefined as string | undefined,
   calls: 0,
 }));
+const uuidOverride = vi.hoisted(() => ({ value: undefined as string | undefined }));
+const unlinkFailure = vi.hoisted(() => ({ path: undefined as string | undefined, remaining: 0 }));
+const renameFailure = vi.hoisted(() => ({ path: undefined as string | undefined, remaining: 0 }));
 
 function consumeSyncFailure(path: string): void {
   if (syncFailure.path === path && syncFailure.remaining > 0) {
@@ -80,6 +83,22 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       }
       return original.mkdir(...args);
     },
+    rm: async (...args: Parameters<typeof original.rm>) => {
+      const path = String(args[0]);
+      if (unlinkFailure.path === path && unlinkFailure.remaining > 0) {
+        unlinkFailure.remaining -= 1;
+        throw Object.assign(new Error('injected unlink failure'), { code: 'EIO' });
+      }
+      return original.rm(...args);
+    },
+    rename: async (...args: Parameters<typeof original.rename>) => {
+      const path = `${String(args[0])}->${String(args[1])}`;
+      if (renameFailure.path === path && renameFailure.remaining > 0) {
+        renameFailure.remaining -= 1;
+        throw Object.assign(new Error('injected compensation rename failure'), { code: 'EIO' });
+      }
+      return original.rename(...args);
+    },
     open: async (...args: Parameters<typeof original.open>) => {
       openedPaths.push(String(args[0]));
       try {
@@ -112,7 +131,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+vi.mock('node:crypto', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...original,
+    randomUUID: () => uuidOverride.value ?? original.randomUUID(),
+  };
+});
+
+import { lstat, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { casStoreShard } from '../src/metadata/state-storage.js';
 import {
@@ -120,6 +147,7 @@ import {
   runTransaction,
   TransactionPhysicalProgressError,
 } from '../src/transaction.js';
+import { removeFixtureDirectory } from './fixture-cleanup.js';
 
 const roots: string[] = [];
 
@@ -144,7 +172,12 @@ afterEach(async () => {
   raceExistingMkdir.calls = 0;
   lstatFailure.path = undefined;
   lstatFailure.calls = 0;
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  uuidOverride.value = undefined;
+  unlinkFailure.path = undefined;
+  unlinkFailure.remaining = 0;
+  renameFailure.path = undefined;
+  renameFailure.remaining = 0;
+  await Promise.all(roots.splice(0).map((root) => removeFixtureDirectory(root)));
 });
 
 describe('transaction binary state durability', () => {
@@ -350,7 +383,7 @@ describe('transaction binary state durability', () => {
     expect(result).toMatchObject({ exitCode: 70, status: 'not-started', manualRecovery: [] });
     await expect(lstat(backupDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     const backups = dirname(backupDirectory);
-    expect((await import('node:fs/promises')).readdir(backups)).resolves.toEqual([]);
+    await expect((await import('node:fs/promises')).readdir(backups)).resolves.toEqual([]);
   });
 
   it('requires manual recovery when stale provisional setup removal reaches rmdir before parent fsync fails', async () => {
@@ -710,5 +743,115 @@ describe('transaction binary state durability', () => {
       await lock.release();
     }
     await expect(readFile(path)).resolves.toEqual(bytes);
+  });
+
+  it('fails closed when the deterministic GC quarantine temporary path already exists', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('quarantine path collision');
+    const digest = `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
+    const uuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    uuidOverride.value = uuid;
+    const path = join(dshHome, '.dshpack', 'backups', 'gc-path-collision', 'old', 'action-0001');
+    const purging = join(dirname(path), `action-0001.purging-${uuid}`);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    await writeFile(purging, 'occupied');
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const stats = await lstat(path, { bigint: true });
+    const identity = `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
+    try {
+      await expect(adapter.purgeGcQuarantineFile(lock, path, digest, identity)).rejects.toThrow(
+        'temporary path already exists',
+      );
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it('restores the payload and rethrows a generic unlink failure', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('generic unlink failure');
+    const digest = `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
+    const uuid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    uuidOverride.value = uuid;
+    const path = join(dshHome, '.dshpack', 'backups', 'gc-unlink-generic', 'old', 'action-0001');
+    const purging = join(dirname(path), `action-0001.purging-${uuid}`);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
+    unlinkFailure.path = purging;
+    unlinkFailure.remaining = 1;
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.purgeGcQuarantineFile === undefined)
+      throw new Error('GC quarantine purge adapter is required');
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const stats = await lstat(path, { bigint: true });
+    const identity = `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
+    try {
+      await expect(
+        adapter.purgeGcQuarantineFile(lock, path, digest, identity),
+      ).rejects.toMatchObject({
+        code: 'EIO',
+      });
+    } finally {
+      await lock.release();
+    }
+    await expect(readFile(path)).resolves.toEqual(bytes);
+  });
+
+  it('surfaces a generic compensating rename failure after a state move', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('generic compensation failure');
+    const digest = `sha256-${createHash('sha256').update(bytes).digest('base64url')}`;
+    const source = join(dshHome, '.dshpack', 'store', casStoreShard(digest), digest);
+    const destination = join(
+      dshHome,
+      '.dshpack',
+      'backups',
+      'gc-generic-restore',
+      'old',
+      'action-0001',
+    );
+    await mkdir(dirname(source), { recursive: true });
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(source, bytes);
+    renameFailure.path = `${destination}->${source}`;
+    renameFailure.remaining = 1;
+    const adapter = createNodeTransactionAdapter(
+      {},
+      {
+        afterStateMoveRename: async () => {
+          throw Object.assign(new Error('injected post-move failure'), { code: 'EIO' });
+        },
+      },
+    );
+    const lock = await adapter.acquireArtifactLock(dshHome);
+    const stats = await lstat(source, { bigint: true });
+    const identity = `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
+    try {
+      await expect(
+        adapter.moveArtifactPath(lock, 'store-block', source, destination, 'to-backup', identity, {
+          contentSha256: digest,
+        }),
+      ).rejects.toMatchObject({ code: 'EIO' });
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it('treats already-empty and non-empty directory cleanup races as an absent directory', async () => {
+    const dshHome = await home();
+    const nonEmpty = join(dshHome, '.dshpack', 'backups', 'non-empty');
+    const missing = join(dshHome, '.dshpack', 'backups', 'missing');
+    await mkdir(nonEmpty, { recursive: true });
+    await writeFile(join(nonEmpty, 'held'), 'still present');
+    const adapter = createNodeTransactionAdapter();
+    if (adapter.removeDirectoryIfEmpty === undefined)
+      throw new Error('directory cleanup adapter is required');
+
+    await expect(adapter.removeDirectoryIfEmpty(nonEmpty)).resolves.toBe(false);
+    await expect(adapter.removeDirectoryIfEmpty(missing)).resolves.toBe(false);
   });
 });
