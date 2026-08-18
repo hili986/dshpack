@@ -9,7 +9,11 @@ import { EXIT_CODES } from '../src/exit-codes.js';
 import { installPack } from '../src/install/engine.js';
 import { ManagementStateError } from '../src/management/state.js';
 import type { MetadataAsset, ObservedAsset } from '../src/metadata/contracts.js';
-import { type GenerationDocument, settingsContribution } from '../src/metadata/state-storage.js';
+import {
+  casStoreShard,
+  type GenerationDocument,
+  settingsContribution,
+} from '../src/metadata/state-storage.js';
 import {
   appendRestoredSettings,
   exitCodeForManagementState,
@@ -53,6 +57,16 @@ async function home(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'dshpack-restore-'));
   roots.push(root);
   return root;
+}
+
+/**
+ * Delete one CAS block. The shard directory is lower-cased, so slicing the digest's own case
+ * only finds it on a case-insensitive filesystem: on Linux these fixtures deleted nothing and
+ * `force: true` reported success anyway, leaving the assertion to fail three digests later.
+ * No `force` here — a wrong path must fail where the mistake is.
+ */
+async function removeCasBlock(dshHome: string, digest: string): Promise<void> {
+  await rm(join(dshHome, '.dshpack', 'store', casStoreShard(digest), digest));
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -1128,9 +1142,7 @@ describe('restore engine', () => {
     const missing = [...new Set(generation.entries.map((entry) => entry.sha256))];
     expect(missing.length).toBeGreaterThan(1);
     await Promise.all(
-      missing.map((digest) =>
-        rm(join(dshHome, '.dshpack', 'store', digest.slice(7, 9), digest), { force: true }),
-      ),
+      missing.map((digest) => removeCasBlock(dshHome, digest)),
     );
     await expect(
       uninstallProfile({ dshHome, profile: 'engine-pack', yes: true }),
@@ -1764,9 +1776,7 @@ describe('restore engine', () => {
     generation.restorable = false;
     const missing = [...new Set(generation.entries.map((entry) => entry.sha256))];
     await Promise.all(
-      missing.map((digest) =>
-        rm(join(dshHome, '.dshpack', 'store', digest.slice(7, 9), digest), { force: true }),
-      ),
+      missing.map((digest) => removeCasBlock(dshHome, digest)),
     );
     await writeFile(path, `${JSON.stringify(generation)}\n`);
     const before = await logicalSnapshot(dshHome);
