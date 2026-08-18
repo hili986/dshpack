@@ -27,6 +27,12 @@ import type { TransactionContext } from '../src/transaction.js';
 import { MAX_TRANSACTION_STATE_BYTES } from '../src/transaction-types.js';
 import { GENERATED_BY } from '../src/version.js';
 
+// `isAbsolute` is platform-aware, so the Windows-shaped literal these fixtures used to carry
+// was absolute here and *relative* on POSIX. Once a generation embeds its marker (decision D1),
+// `validSource` re-validates that path on every write, so the literal turned seven tests red on
+// ubuntu while every one of them stayed green on Windows. Root the fixtures per platform.
+const SAFE_ROOT = process.platform === 'win32' ? 'C:/safe' : '/safe';
+
 const roots: string[] = [];
 
 async function home(): Promise<string> {
@@ -51,7 +57,7 @@ function plan(profile = 'demo-pack'): InstallPlan {
     presets: [],
     pack: { name: profile, version: '1.0.0' },
     manifestDigest: digest(Buffer.from('manifest')),
-    source: { kind: 'directory', path: 'C:/safe/source' },
+    source: { kind: 'directory', path: `${SAFE_ROOT}/source` },
   } as unknown as InstallPlan;
 }
 
@@ -73,7 +79,7 @@ function metadata(
     planDigest: digest(Buffer.from('metadata plan')),
     installedAt,
     txid: 'metadata-tx',
-    source: { kind: 'directory', path: 'C:/safe/source' },
+    source: { kind: 'directory', path: `${SAFE_ROOT}/source` },
     defaults: { permissionPreset: 'workspace-write' },
     plugins: [],
     effectiveLock: {
@@ -172,7 +178,7 @@ describe('metadata state storage boundaries', () => {
       await expect(
         nextGeneration(
           context({ readGenerationCurrent: async () => pointer }),
-          'C:/safe/home',
+          `${SAFE_ROOT}/home`,
           'demo-pack',
         ),
       ).rejects.toMatchObject({
@@ -186,12 +192,12 @@ describe('metadata state storage boundaries', () => {
     await expect(
       nextGeneration(
         context({ readGenerationCurrent: async () => '1\n' }),
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         'demo-pack',
       ),
     ).resolves.toEqual({
       sequence: 2,
-      currentPath: join('C:/safe/home', '.dshpack', 'generations', 'demo-pack', 'current'),
+      currentPath: join(`${SAFE_ROOT}/home`, '.dshpack', 'generations', 'demo-pack', 'current'),
       previous: '1\n',
     });
   });
@@ -229,7 +235,7 @@ describe('metadata state storage boundaries', () => {
             writes += 1;
           },
         }),
-        'C:/safe/home/.dshpack/generations/demo-pack/current',
+        `${SAFE_ROOT}/home/.dshpack/generations/demo-pack/current`,
         undefined,
         0,
       ),
@@ -259,7 +265,7 @@ describe('metadata state storage boundaries', () => {
     await expect(
       writeGeneration(
         context({ writeStateFile: async () => false }),
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         'demo-pack',
         document,
       ),
@@ -282,7 +288,10 @@ describe('metadata state storage boundaries', () => {
           version: fixturePlan.pack.version,
           manifestDigest: fixturePlan.manifestDigest,
         },
-        source: { kind: 'directory', path: `C:/safe/${'x'.repeat(MAX_TRANSACTION_STATE_BYTES)}` },
+        source: {
+          kind: 'directory',
+          path: `${SAFE_ROOT}/${'x'.repeat(MAX_TRANSACTION_STATE_BYTES)}`,
+        },
         metadata: metadata('demo-pack', 1),
       },
       [],
@@ -298,7 +307,7 @@ describe('metadata state storage boundaries', () => {
             return true;
           },
         }),
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         'demo-pack',
         document,
       ),
@@ -322,7 +331,7 @@ describe('metadata state storage boundaries', () => {
           version: fixturePlan.pack.version,
           manifestDigest: fixturePlan.manifestDigest,
         },
-        source: { kind: 'directory', path: 'C:/safe' },
+        source: { kind: 'directory', path: SAFE_ROOT },
         metadata: metadata('demo-pack', 1),
       },
       [],
@@ -332,7 +341,7 @@ describe('metadata state storage boundaries', () => {
     // deliberately makes the generation envelope larger, so this boundary
     // fixture must derive its padding from the serialized document rather
     // than relying on the former fixed envelope size.
-    const sourcePathPrefix = 'C:/safe/';
+    const sourcePathPrefix = `${SAFE_ROOT}/`;
     document.source = { kind: 'directory', path: '' };
     const padding =
       MAX_TRANSACTION_STATE_BYTES -
@@ -349,7 +358,7 @@ describe('metadata state storage boundaries', () => {
             return true;
           },
         }),
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         'demo-pack',
         document,
       ),
@@ -372,7 +381,7 @@ describe('metadata state storage boundaries', () => {
             version: '1.0.0',
             manifestDigest: digest(Buffer.from('pack')),
           },
-          source: { kind: 'directory', path: 'C:/safe/source' },
+          source: { kind: 'directory', path: `${SAFE_ROOT}/source` },
           metadata: operation === 'uninstall' ? null : metadata('demo-pack', 2),
         },
         [],
@@ -394,7 +403,7 @@ describe('metadata state storage boundaries', () => {
             return true;
           },
         }),
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         [
           asset([
             {
@@ -412,7 +421,7 @@ describe('metadata state storage boundaries', () => {
     await expect(
       storeCapturedAssets(
         context({ readStateBytes: async () => Buffer.from('corrupt') }),
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         [asset([{ target: 'profiles/demo-pack/a', sha256: digest(expected), bytes: expected }])],
       ),
     ).rejects.toMatchObject({ diagnostics: [{ code: 'E_STORE_DIGEST_COLLISION' }] });
@@ -430,7 +439,7 @@ describe('metadata state storage boundaries', () => {
           return false;
         },
       }),
-      'C:/safe/home',
+      `${SAFE_ROOT}/home`,
       [
         asset([
           { target: 'profiles/demo-pack/raw.bin', sha256: digest(expected), bytes: expected },
@@ -452,7 +461,7 @@ describe('metadata state storage boundaries', () => {
           return true;
         },
       }),
-      'C:/safe/home',
+      `${SAFE_ROOT}/home`,
       [asset([{ target: 'profiles/demo-pack/raw.bin', sha256: digest(bytes), bytes }])],
     );
     expect(writes).toBe(0);

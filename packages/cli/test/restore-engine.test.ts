@@ -43,6 +43,10 @@ vi.mock('../src/doctor/engine.js', async (importOriginal) => {
   };
 });
 
+// See metadata-state-storage.test.ts: a Windows-shaped absolute literal is relative on POSIX,
+// and an embedded marker (decision D1) re-validates its source path on every generation write.
+const SAFE_ROOT = process.platform === 'win32' ? 'C:/safe' : '/safe';
+
 const roots: string[] = [];
 
 async function home(): Promise<string> {
@@ -345,7 +349,7 @@ describe('restore engine', () => {
       createdAt: '2026-08-18T00:00:00.000Z',
       operation: 'install',
       pack: { name: 'engine-pack', version: '1.0.0', manifestDigest: 'sha256-manifest' },
-      source: { kind: 'directory', path: 'C:/safe/source' },
+      source: { kind: 'directory', path: `${SAFE_ROOT}/source` },
       entries: [{ target: 'skills/notes/SKILL.md', sha256: 'sha256-bytes' }],
       settingsContribution: { namespace: 'agent-presets', keys: [] },
       metadata: { assets: [asset] },
@@ -371,14 +375,14 @@ describe('restore engine', () => {
     await expect(
       materializeAsset(
         transaction,
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         asset,
         { ...installed, entries: [] },
         new Map(),
       ),
     ).rejects.toThrow(/no immutable generation entries/u);
     await expect(
-      materializeAsset(transaction, 'C:/safe/home', asset, installed, new Map()),
+      materializeAsset(transaction, `${SAFE_ROOT}/home`, asset, installed, new Map()),
     ).rejects.toThrow(/CAS preflight lost/u);
   });
 
@@ -464,7 +468,7 @@ describe('restore engine', () => {
     const metadata = await restoredMetadata(
       plan,
       { artifactIdentity: async () => 'fresh-identity' } as unknown as TransactionContext,
-      'C:/safe/home',
+      `${SAFE_ROOT}/home`,
       9,
     );
     expect(metadata).toMatchObject({ generation: 9 });
@@ -1072,7 +1076,7 @@ describe('restore engine', () => {
     await expect(
       materializeAsset(
         tx,
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         unsupported,
         target as unknown as GenerationDocument,
         new Map(),
@@ -1083,7 +1087,7 @@ describe('restore engine', () => {
       restoredMetadata(
         { target: { metadata: null }, assets: [], settings: undefined } as never,
         tx,
-        'C:/safe/home',
+        `${SAFE_ROOT}/home`,
         10,
       ),
     ).resolves.toBeNull();
