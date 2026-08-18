@@ -63,7 +63,11 @@ export interface InstallSubprocessResult {
 }
 
 export type LifecycleScriptPolicy = 'deny' | 'allow-approved';
-export type ProcessEnvironmentPolicy = 'inherited-safe' | 'resolution-isolated';
+export type ProcessEnvironmentPolicy =
+  | 'inherited-safe'
+  | 'resolution-isolated'
+  /** Private migration replay: no inherited credentials or user-level package-manager state. */
+  | 'migration-scratch';
 
 export interface StagedPluginDownload {
   staged: StagedPluginTarball;
@@ -93,7 +97,12 @@ export interface InstallRuntime {
   authorizeBuild(profileRoot: string, authorizationKey: string): Promise<void>;
   runDsh(
     args: readonly string[],
-    options: { dshHome: string; cwd?: string; scriptPolicy?: LifecycleScriptPolicy },
+    options: {
+      dshHome: string;
+      cwd?: string;
+      environmentPolicy?: ProcessEnvironmentPolicy;
+      scriptPolicy?: LifecycleScriptPolicy;
+    },
   ): Promise<InstallSubprocessResult>;
   runPnpm(
     args: readonly string[],

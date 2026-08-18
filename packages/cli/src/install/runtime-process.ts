@@ -25,10 +25,18 @@ export type PathSpawn = (
 ) => Promise<{ exitCode: number | null | undefined; stdout: string; stderr: string }>;
 
 export interface PathProcessRuntime {
-  probe(dshHome: string): Promise<{ dshVersion: string; pnpmVersion: string }>;
+  probe(
+    dshHome: string,
+    environmentPolicy?: ProcessEnvironmentPolicy,
+  ): Promise<{ dshVersion: string; pnpmVersion: string }>;
   runDsh(
     args: readonly string[],
-    options: { dshHome: string; cwd?: string; scriptPolicy?: LifecycleScriptPolicy },
+    options: {
+      dshHome: string;
+      cwd?: string;
+      environmentPolicy?: ProcessEnvironmentPolicy;
+      scriptPolicy?: LifecycleScriptPolicy;
+    },
   ): Promise<InstallSubprocessResult>;
   runPnpm(
     args: readonly string[],
@@ -93,6 +101,38 @@ export function createPathProcessRuntime(
     environmentPolicy: ProcessEnvironmentPolicy,
   ): NodeJS.ProcessEnv & { DSH_HOME: string } => {
     const merged = { ...process.env, ...dependencies.env };
+    if (environmentPolicy === 'migration-scratch') {
+      const allowlisted = new Set([
+        'PATH',
+        'PATHEXT',
+        'COMSPEC',
+        'SYSTEMROOT',
+        'WINDIR',
+        'OS',
+        'PROCESSOR_ARCHITECTURE',
+        'PROCESSOR_IDENTIFIER',
+        'NUMBER_OF_PROCESSORS',
+      ]);
+      const inherited = Object.fromEntries(
+        Object.entries(merged).filter(([key]) => allowlisted.has(key.toUpperCase())),
+      );
+      const privateRoot = join(dshHome, '.dshpack', 'migration-runtime');
+      return {
+        ...inherited,
+        DSH_HOME: dshHome,
+        XDG_CONFIG_HOME: join(privateRoot, 'config'),
+        XDG_CACHE_HOME: join(privateRoot, 'cache'),
+        TEMP: join(privateRoot, 'tmp'),
+        TMP: join(privateRoot, 'tmp'),
+        npm_config_ignore_scripts: 'true',
+        npm_config_userconfig: join(privateRoot, 'npmrc'),
+        npm_config_cache: join(privateRoot, 'cache'),
+        npm_config_store_dir: join(privateRoot, 'store'),
+        pnpm_config_store_dir: join(privateRoot, 'store'),
+        pnpm_config_cache_dir: join(privateRoot, 'cache'),
+        PNPM_HOME: join(privateRoot, 'pnpm-home'),
+      };
+    }
     const sanitized = Object.fromEntries(
       Object.entries(merged).filter(([key]) => {
         const normalized = key.toLowerCase();
@@ -148,7 +188,7 @@ export function createPathProcessRuntime(
     return { stdout: result.stdout, stderr: result.stderr };
   };
   return {
-    async probe(dshHome) {
+    async probe(dshHome, environmentPolicy: ProcessEnvironmentPolicy = 'inherited-safe') {
       // A first-use DSH_HOME intentionally does not exist yet. It belongs in the child
       // environment, but cannot be the process cwd because spawn rejects a missing cwd before
       // either dsh.cmd or pnpm.cmd gets a chance to initialize it.
@@ -160,7 +200,7 @@ export function createPathProcessRuntime(
         probeCwd,
         5_000,
         'deny',
-        'inherited-safe',
+        environmentPolicy,
       );
       const pnpm = await run(
         'pnpm',
@@ -169,7 +209,7 @@ export function createPathProcessRuntime(
         probeCwd,
         5_000,
         'deny',
-        'inherited-safe',
+        environmentPolicy,
       );
       return {
         dshVersion: cleanVersion('dsh', dsh.stdout),
@@ -184,7 +224,7 @@ export function createPathProcessRuntime(
         options.cwd ?? options.dshHome,
         30_000,
         options.scriptPolicy ?? 'deny',
-        'inherited-safe',
+        options.environmentPolicy ?? 'inherited-safe',
       ),
     runPnpm: (args, options) =>
       run(

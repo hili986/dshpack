@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 import type { Diagnostic } from '@dshpack/core';
@@ -46,6 +46,7 @@ import {
   writeGeneration,
 } from '../metadata/state-storage.js';
 import { runTransaction, TransactionFailure } from '../transaction.js';
+import { MAX_TRANSACTION_STATE_BYTES } from '../transaction-types.js';
 import { GENERATED_BY } from '../version.js';
 
 export interface MigrateInput {
@@ -65,6 +66,9 @@ export interface MigrateMetadata {
     | 'rollback-failed';
   profile: string;
   generation?: number;
+  /** Original operation state retained when a later private-workspace cleanup also fails. */
+  primaryStatus?: MigrateMetadata['status'];
+  cleanupFailed?: true;
   backupDirectory?: string;
   journalPath?: string;
   manualRecovery?: readonly {
@@ -103,6 +107,26 @@ function contractFailure(profile: string, code: string, message: string): Migrat
     'not-started',
     profile,
   );
+}
+
+function mergeCleanupReport(
+  primary: MigrateReport,
+  cleanup: MigrateReport | undefined,
+): MigrateReport {
+  if (cleanup === undefined) return primary;
+  return {
+    diagnostics: [...primary.diagnostics, ...cleanup.diagnostics],
+    exitCode: EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
+    metadata: {
+      ...primary.metadata,
+      primaryStatus: primary.metadata.status,
+      cleanupFailed: true,
+      manualRecovery: [
+        ...(primary.metadata.manualRecovery ?? []),
+        ...(cleanup.metadata.manualRecovery ?? []),
+      ],
+    },
+  };
 }
 
 function metadataReadFailure(
@@ -293,55 +317,61 @@ async function readOriginalSource(
         exitCode: EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
       };
   }
+  let cleanup: MigrateReport | undefined;
   try {
     await materialized.cleanup();
   } catch {
-    return {
-      report: report(
-        EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
-        [
-          diagnostic(
-            'E_MIGRATE_SOURCE_CLEANUP',
-            'error',
-            'private source cleanup failed',
-            'Remove the reported private source workspace after inspection.',
-            materialized.directory,
-          ),
+    cleanup = report(
+      EXIT_CODES.MANUAL_RECOVERY_REQUIRED,
+      [
+        diagnostic(
+          'E_MIGRATE_SOURCE_CLEANUP',
+          'error',
+          'private source cleanup failed',
+          'Remove the reported private source workspace after inspection.',
+          materialized.directory,
+        ),
+      ],
+      'rollback-failed',
+      profile,
+      {
+        manualRecovery: [
+          {
+            operation: 'remove-private-source',
+            sourcePath: materialized.directory,
+            destinationPath: materialized.directory,
+          },
         ],
-        'rollback-failed',
-        profile,
-        {
-          manualRecovery: [
-            {
-              operation: 'remove-private-source',
-              sourcePath: materialized.directory,
-              destinationPath: materialized.directory,
-            },
-          ],
-        },
-      ),
-    };
+      },
+    );
   }
   if (read.material === undefined)
     return {
-      report: report(read.exitCode, read.diagnostics, 'not-started', profile),
+      report: mergeCleanupReport(
+        report(read.exitCode, read.diagnostics, 'not-started', profile),
+        cleanup,
+      ),
     };
   if (!sourceMatchesLegacy(legacy, materialized.provenance, read.material))
     return {
-      report: report(
-        EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
-        [
-          diagnostic(
-            'E_MIGRATE_SOURCE_CHANGED',
-            'error',
-            'the re-fetched source no longer matches the v0 installed base',
-            'Restore the original immutable source or reinstall the profile.',
-          ),
-        ],
-        'not-started',
-        profile,
+      report: mergeCleanupReport(
+        report(
+          EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
+          [
+            diagnostic(
+              'E_MIGRATE_SOURCE_CHANGED',
+              'error',
+              'the re-fetched source no longer matches the v0 installed base',
+              'Restore the original immutable source or reinstall the profile.',
+            ),
+          ],
+          'not-started',
+          profile,
+        ),
+        cleanup,
       ),
     };
+  if (cleanup !== undefined) return { report: cleanup };
   return {
     material: read.material,
     source: materialized.provenance,
@@ -356,6 +386,108 @@ interface ScratchReconstruction {
   plan: InstallPlan;
 }
 
+interface ProfileOwnershipProof {
+  action: Extract<MetadataAssetAction, 'create' | 'replace'>;
+  journalText: string;
+  journalIdentity: string;
+}
+
+interface ProfileOwnershipReadProblem {
+  kind: 'missing' | 'security' | 'io' | 'limit' | 'changed';
+}
+
+type ProfileOwnershipObservation = ProfileOwnershipProof | ProfileOwnershipReadProblem | undefined;
+type ProfileJournalActionMatch = {
+  action: Extract<MetadataAssetAction, 'create' | 'replace'>;
+  index: number;
+};
+
+function isOwnershipReadProblem(
+  observation: ProfileOwnershipObservation,
+): observation is ProfileOwnershipReadProblem {
+  return observation !== undefined && 'kind' in observation;
+}
+
+function ownershipReadProblem(
+  kind: ProfileOwnershipReadProblem['kind'],
+): ProfileOwnershipReadProblem | undefined {
+  return kind === 'missing' ? undefined : { kind };
+}
+
+function ownershipReadFailure(
+  profile: string,
+  kind: ProfileOwnershipReadProblem['kind'],
+): MigrateReport {
+  return report(
+    kind === 'security' ? EXIT_CODES.SECURITY : EXIT_CODES.CONTRACT,
+    [
+      diagnostic(
+        'E_MIGRATE_PROFILE_OWNERSHIP_READ',
+        'error',
+        'legacy profile ownership journal could not be read safely',
+        'Repair the legacy transaction journal and retry migration.',
+      ),
+    ],
+    'not-started',
+    profile,
+  );
+}
+
+type ManagedAssetKind = Exclude<MetadataAsset['kind'], 'managed-document'>;
+
+function targetAssetPaths(request: CaptureInstallTargetInput): readonly {
+  kind: ManagedAssetKind;
+  target: string;
+}[] {
+  return [
+    { kind: 'profile', target: `profiles/${request.profile}` },
+    ...request.skills.map((target) => ({ kind: 'skill' as const, target })),
+    ...request.presets.map((target) => ({ kind: 'preset' as const, target })),
+  ];
+}
+
+function targetIdentityFailure(): TransactionFailure {
+  return new TransactionFailure(EXIT_CODES.CONTRACT, [
+    diagnostic(
+      'E_MIGRATE_TARGET_IDENTITY',
+      'error',
+      'a migration target was replaced while its base was being observed',
+      'Retry migration from a stable target state.',
+    ),
+  ]);
+}
+
+async function captureTargetAssetIdentities(
+  transaction: Parameters<typeof captureInstalledAssets>[0],
+  request: CaptureInstallTargetInput,
+): Promise<ReadonlyMap<string, string>> {
+  const identities = new Map<string, string>();
+  for (const { kind, target } of targetAssetPaths(request)) {
+    const identity = await transaction.artifactIdentity(
+      kind,
+      join(request.dshHome, ...target.split('/')),
+    );
+    if (identity === undefined) throw targetIdentityFailure();
+    identities.set(target, identity);
+  }
+  return identities;
+}
+
+function sameTargetAssetIdentities(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+): boolean {
+  return (
+    left.size === right.size &&
+    [...left].every(([target, identity]) => right.get(target) === identity)
+  );
+}
+
+function effectiveLockCommitment(lock: InstalledMetadataV0['effectiveLock']): object {
+  const { generatedBy: _generatedBy, generatedAt: _generatedAt, ...commitment } = lock;
+  return commitment;
+}
+
 function sourceBaseMatchesLegacy(
   legacy: InstalledMetadataV0,
   marker: InstalledMetadataV1,
@@ -363,7 +495,10 @@ function sourceBaseMatchesLegacy(
   return (
     isDeepStrictEqual(marker.source, legacy.source) &&
     isDeepStrictEqual(marker.pack, legacy.pack) &&
-    isDeepStrictEqual(marker.effectiveLock, legacy.effectiveLock) &&
+    isDeepStrictEqual(
+      effectiveLockCommitment(marker.effectiveLock),
+      effectiveLockCommitment(legacy.effectiveLock),
+    ) &&
     isDeepStrictEqual(marker.plugins, legacy.plugins)
   );
 }
@@ -386,7 +521,62 @@ async function reconstructionFailure(
   failure: MigrateReport,
 ): Promise<{ report: MigrateReport }> {
   const cleanup = await cleanupScratchBase(runtime, profile, scratch);
-  return { report: cleanup ?? failure };
+  return { report: mergeCleanupReport(failure, cleanup) };
+}
+
+function scratchMarkerFailure(
+  profile: string,
+  kind: 'missing' | 'security' | 'io' | 'limit' | 'changed',
+) {
+  return report(
+    kind === 'security' ? EXIT_CODES.SECURITY : EXIT_CODES.CONTRACT,
+    [
+      diagnostic(
+        'E_MIGRATE_SCRATCH_MARKER_READ',
+        'error',
+        'isolated reconstruction metadata could not be read safely',
+        'Reinstall the profile to establish a new v1 base.',
+      ),
+    ],
+    'not-started',
+    profile,
+  );
+}
+
+async function readScratchMarker(
+  scratch: string,
+  profile: string,
+): Promise<InstalledMetadataV1 | MigrateReport> {
+  const root = await bindSecureRoot(scratch);
+  if (!root.ok) return scratchMarkerFailure(profile, root.kind);
+  const installed = await bindDirectory(root.value, ['.dshpack', 'installed']);
+  if (!installed.ok) return scratchMarkerFailure(profile, installed.kind);
+  const marker = await readText(
+    installed.value,
+    [`${profile}.json`],
+    {},
+    MAX_TRANSACTION_STATE_BYTES,
+  );
+  if (!marker.ok) return scratchMarkerFailure(profile, marker.kind);
+  try {
+    const parsed = parseInstalledMetadata(JSON.parse(marker.value.text), profile);
+    if (parsed.ok && parsed.metadata.metadataVersion === 1) return parsed.metadata;
+  } catch {
+    // The reconstruction contract failure below deliberately omits raw marker contents.
+  }
+  return report(
+    EXIT_CODES.CONTRACT,
+    [
+      diagnostic(
+        'E_MIGRATE_BASE_REBUILD',
+        'error',
+        'isolated reconstruction did not produce valid v1 metadata',
+        'Reinstall the profile to establish a new v1 base.',
+      ),
+    ],
+    'not-started',
+    profile,
+  );
 }
 
 async function reconstructScratchBase(
@@ -417,7 +607,10 @@ async function reconstructScratchBase(
   }
   const scratchRuntime = scriptDeniedScratchRuntime(
     runtime.createScratchRuntime?.(scratch, legacy.installedAt) ??
-      createNodeInstallRuntime(scratch, { now: () => legacy.installedAt }),
+      createNodeInstallRuntime(scratch, {
+        now: () => legacy.installedAt,
+        processEnvironmentPolicy: 'migration-scratch',
+      }),
   );
   if (
     legacy.plugins.some(
@@ -467,7 +660,47 @@ async function reconstructScratchBase(
       },
       scratchRuntime,
     );
-    if (rebuilt.exitCode !== EXIT_CODES.SUCCESS || rebuilt.metadata.plan === undefined)
+    if (rebuilt.exitCode !== EXIT_CODES.SUCCESS) {
+      const unsafeScratchExitCodes: readonly number[] = [
+        EXIT_CODES.USER_DECLINED,
+        EXIT_CODES.PROFILE_CONFLICT_OR_LOCK,
+        EXIT_CODES.DSH_SUBPROCESS_FAILURE,
+        EXIT_CODES.POST_INSTALL_VERIFY_FAILURE,
+        EXIT_CODES.CONTRACT,
+      ];
+      const preserveTypedFailure = !unsafeScratchExitCodes.includes(rebuilt.exitCode);
+      return reconstructionFailure(
+        runtime,
+        profile,
+        scratch,
+        preserveTypedFailure
+          ? report(
+              rebuilt.exitCode,
+              rebuilt.diagnostics,
+              rebuilt.metadata.status === 'installed' ? 'committed' : rebuilt.metadata.status,
+              profile,
+              {
+                ...(rebuilt.metadata.manualRecovery === undefined
+                  ? {}
+                  : { manualRecovery: rebuilt.metadata.manualRecovery }),
+              },
+            )
+          : report(
+              EXIT_CODES.CONTRACT,
+              [
+                diagnostic(
+                  'E_MIGRATE_BASE_REBUILD',
+                  'error',
+                  'the legacy source cannot be replayed safely in an isolated workspace',
+                  'Reinstall the profile to establish a new v1 base.',
+                ),
+              ],
+              'not-started',
+              profile,
+            ),
+      );
+    }
+    if (rebuilt.metadata.plan === undefined)
       return reconstructionFailure(
         runtime,
         profile,
@@ -486,28 +719,9 @@ async function reconstructScratchBase(
           profile,
         ),
       );
-    const markerPath = join(scratch, '.dshpack', 'installed', `${profile}.json`);
-    const parsed = parseInstalledMetadata(JSON.parse(await readFile(markerPath, 'utf8')), profile);
-    if (!parsed.ok || parsed.metadata.metadataVersion !== 1)
-      return reconstructionFailure(
-        runtime,
-        profile,
-        scratch,
-        report(
-          EXIT_CODES.CONTRACT,
-          [
-            diagnostic(
-              'E_MIGRATE_BASE_REBUILD',
-              'error',
-              'isolated reconstruction did not produce valid v1 metadata',
-              'Reinstall the profile to establish a new v1 base.',
-            ),
-          ],
-          'not-started',
-          profile,
-        ),
-      );
-    if (!sourceBaseMatchesLegacy(legacy, parsed.metadata))
+    const parsed = await readScratchMarker(scratch, profile);
+    if ('exitCode' in parsed) return reconstructionFailure(runtime, profile, scratch, parsed);
+    if (!sourceBaseMatchesLegacy(legacy, parsed))
       return reconstructionFailure(
         runtime,
         profile,
@@ -526,7 +740,7 @@ async function reconstructScratchBase(
           profile,
         ),
       );
-    return { dshHome: scratch, marker: parsed.metadata, plan: rebuilt.metadata.plan };
+    return { dshHome: scratch, marker: parsed, plan: rebuilt.metadata.plan };
   } catch {
     return reconstructionFailure(
       runtime,
@@ -602,6 +816,7 @@ async function captureScratchBaseAssets(
   dshHome: string,
   scratch: ScratchReconstruction,
   profileAction: MetadataAssetAction,
+  targetIdentities: ReadonlyMap<string, string>,
 ): Promise<readonly CapturedInstallAsset[]> {
   const assets: CapturedInstallAsset[] = [];
   for (const expected of scratch.marker.assets) {
@@ -636,6 +851,8 @@ async function captureScratchBaseAssets(
       kind,
       join(dshHome, ...expected.target.split('/')),
     );
+    if (identity === undefined || identity !== targetIdentities.get(expected.target))
+      throw targetIdentityFailure();
     // v0 never recorded globally-safe skill/preset ownership.  Preserve their source base for
     // drift detection, but make future destructive consumers retain them unless newer evidence
     // proves ownership.  The profile is the legacy marker's named managed target.
@@ -668,47 +885,165 @@ function targetCaptureRequest(
 }
 
 /**
- * v0 did not persist ownership for skill/preset assets.  The profile action is recoverable only
- * when its original transaction journal still proves the same operation; otherwise the v1
- * marker deliberately records `skip` so a later destructive command cannot guess ownership.
+ * v0 did not persist globally safe ownership for skill/preset assets, so those remain `skip`.
+ * The profile is a restorable base and must instead have one exact committed/applied journal
+ * proof. Migration rejects rather than publishing a restorable generation without that proof.
  */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isPathFact(value: unknown, exists: boolean): value is Record<string, unknown> {
+  return isRecord(value) && typeof value.path === 'string' && value.exists === exists;
+}
+
+function isArtifactKind(value: unknown): boolean {
+  return [
+    'profile',
+    'skill',
+    'preset',
+    'store-directory',
+    'generation-directory',
+    'installed-directory',
+    'store-block',
+    'generation',
+  ].includes(value as string);
+}
+
+function isAppliedJournalAction(action: unknown, index: number): action is Record<string, unknown> {
+  if (!isRecord(action)) return false;
+  if (action.id !== `action-${String(index + 1).padStart(4, '0')}` || action.phase !== 'applied')
+    return false;
+  if (action.kind === 'create') {
+    const next = action.new;
+    return (
+      isArtifactKind(action.artifact) &&
+      ['owned', 'not-owned'].includes(action.ownership as string) &&
+      isPathFact(action.old, false) &&
+      isPathFact(next, true) &&
+      typeof next.rollbackPath === 'string' &&
+      (next.identity === undefined || typeof next.identity === 'string') &&
+      (next.contentSha256 === undefined || typeof next.contentSha256 === 'string') &&
+      (next.emptyOnRollback === undefined || next.emptyOnRollback === true)
+    );
+  }
+  if (action.kind === 'replace') {
+    const next = action.new;
+    return (
+      isArtifactKind(action.artifact) &&
+      isPathFact(action.old, true) &&
+      isPathFact(next, false) &&
+      typeof next.preservedAt === 'string'
+    );
+  }
+  if (
+    action.kind !== 'settings-write' &&
+    action.kind !== 'managed-document-write' &&
+    action.kind !== 'generation-current-write'
+  )
+    return false;
+  const old = action.old;
+  const next = action.new;
+  return (
+    ['written', 'not-written'].includes(action.writeState as string) &&
+    isRecord(old) &&
+    typeof old.path === 'string' &&
+    typeof old.exists === 'boolean' &&
+    (old.exists === false || typeof old.documentPath === 'string') &&
+    isPathFact(next, true) &&
+    typeof next.documentPath === 'string' &&
+    typeof next.rollbackPath === 'string'
+  );
+}
+
+function profileActionFromCommittedJournal(
+  value: unknown,
+  profile: string,
+  legacy: InstalledMetadataV0,
+): Extract<MetadataAssetAction, 'create' | 'replace'> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const journal = value as Record<string, unknown>;
+  if (
+    journal.version !== 0 ||
+    journal.txid !== legacy.txid ||
+    typeof journal.dshHome !== 'string' ||
+    journal.state !== 'committed' ||
+    !Array.isArray(journal.actions) ||
+    journal.actions.length === 0 ||
+    !journal.actions.every((action, index) => isAppliedJournalAction(action, index))
+  )
+    return undefined;
+  const backupDirectory = join(journal.dshHome, '.dshpack', 'backups', legacy.txid);
+  if (journal.backupDirectory !== backupDirectory) return undefined;
+  const expectedProfilePath = join(journal.dshHome, 'profiles', profile);
+  const profileActions = journal.actions
+    .map((action, index) => ({ action, index }))
+    .filter(({ action }) => action.artifact === 'profile');
+  const matches: ProfileJournalActionMatch[] = profileActions.flatMap<ProfileJournalActionMatch>(
+    ({ action, index }) => {
+      const old = action.old as Record<string, unknown> | undefined;
+      const next = action.new as Record<string, unknown> | undefined;
+      if (old === undefined || next === undefined) return [];
+      if (
+        action.kind === 'create' &&
+        action.ownership === 'owned' &&
+        old.path === expectedProfilePath &&
+        old.exists === false &&
+        next.path === expectedProfilePath &&
+        next.exists === true &&
+        next.rollbackPath === join(backupDirectory, 'new', action.id as string)
+      )
+        return [{ action: 'create' as const, index }];
+      if (
+        action.kind === 'replace' &&
+        old.path === expectedProfilePath &&
+        old.exists === true &&
+        next.path === expectedProfilePath &&
+        next.exists === false &&
+        next.preservedAt === join(backupDirectory, 'old', action.id as string)
+      )
+        return [{ action: 'replace' as const, index }];
+      return [];
+    },
+  );
+  if (matches.length !== profileActions.length) return undefined;
+  if (matches.length === 1 && matches[0]?.action === 'create') return 'create';
+  if (
+    matches.length === 2 &&
+    matches[0]?.action === 'replace' &&
+    matches[1]?.action === 'create' &&
+    matches[1].index === matches[0].index + 1
+  )
+    return 'replace';
+  return undefined;
+}
+
 async function legacyProfileOwnership(
   dshHome: string,
   profile: string,
   legacy: InstalledMetadataV0,
-): Promise<MetadataAssetAction> {
+): Promise<ProfileOwnershipObservation> {
   const root = await bindSecureRoot(dshHome);
-  if (!root.ok) return 'skip';
+  if (!root.ok) return ownershipReadProblem(root.kind);
   const backup = await bindDirectory(root.value, ['.dshpack', 'backups', legacy.txid]);
-  if (!backup.ok) return 'skip';
+  if (!backup.ok) return ownershipReadProblem(backup.kind);
   const journal = await readText(backup.value, ['journal.json']);
-  if (!journal.ok) return 'skip';
+  if (!journal.ok) return ownershipReadProblem(journal.kind);
   let parsed: unknown;
   try {
     parsed = JSON.parse(journal.value.text);
   } catch {
-    return 'skip';
+    return undefined;
   }
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !Array.isArray((parsed as { actions?: unknown }).actions)
-  )
-    return 'skip';
-  const expectedPath = join(dshHome, 'profiles', profile);
-  for (const action of (parsed as { actions: unknown[] }).actions) {
-    if (typeof action !== 'object' || action === null) continue;
-    const record = action as {
-      kind?: unknown;
-      artifact?: unknown;
-      ownership?: unknown;
-      old?: { path?: unknown };
-    };
-    if (record.artifact !== 'profile' || record.old?.path !== expectedPath) continue;
-    if (record.kind === 'create' && record.ownership === 'owned') return 'create';
-    if (record.kind === 'replace') return 'replace';
-  }
-  return 'skip';
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const declaredHome = (parsed as { dshHome?: unknown }).dshHome;
+  if (typeof declaredHome !== 'string' || !isAbsolute(declaredHome)) return undefined;
+  const declaredRoot = await bindSecureRoot(declaredHome);
+  if (!declaredRoot.ok || declaredRoot.value.rootCanonical !== root.value.rootCanonical)
+    return undefined;
+  const action = profileActionFromCommittedJournal(parsed, profile, legacy);
+  if (action === undefined) return undefined;
+  return { action, journalText: journal.value.text, journalIdentity: journal.value.identity };
 }
 
 async function preflightMigration(
@@ -789,6 +1124,15 @@ export async function migrateProfile(
   const markerPath = join(input.dshHome, '.dshpack', 'installed', `${input.profile}.json`);
   const initial = await readLegacyMarker(input.dshHome, input.profile);
   if ('report' in initial) return initial.report;
+  const ownership = await legacyProfileOwnership(input.dshHome, input.profile, initial.marker);
+  if (isOwnershipReadProblem(ownership)) return ownershipReadFailure(input.profile, ownership.kind);
+  if (ownership === undefined)
+    return contractFailure(
+      input.profile,
+      'E_MIGRATE_PROFILE_OWNERSHIP',
+      'legacy profile ownership cannot be proven from its committed transaction journal',
+    );
+  const profileAction = ownership.action;
   const original = await readOriginalSource(runtime, input.profile, initial.marker);
   if ('report' in original) return original.report;
   const scratchResult = await reconstructScratchBase(
@@ -799,15 +1143,17 @@ export async function migrateProfile(
   );
   if ('report' in scratchResult) return scratchResult.report;
   const scratch = scratchResult;
-  const profileAction = await legacyProfileOwnership(input.dshHome, input.profile, initial.marker);
   const planned = await preflightMigration(input, runtime, original.material, original.diagnostics);
   if ('report' in planned) {
     const cleanup = await cleanupScratchBase(runtime, input.profile, scratch.dshHome);
-    return cleanup ?? planned.report;
+    return mergeCleanupReport(planned.report, cleanup);
   }
   if (input.dryRun) {
     const cleanup = await cleanupScratchBase(runtime, input.profile, scratch.dshHome);
-    return cleanup ?? report(EXIT_CODES.SUCCESS, planned.diagnostics, 'planned', input.profile);
+    return mergeCleanupReport(
+      report(EXIT_CODES.SUCCESS, planned.diagnostics, 'planned', input.profile),
+      cleanup,
+    );
   }
 
   const txid = runtime.txid();
@@ -846,7 +1192,39 @@ export async function migrateProfile(
             'Retry migration from a freshly read legacy marker.',
           ),
         ]);
+      const lockedOwnership = await legacyProfileOwnership(
+        input.dshHome,
+        input.profile,
+        initial.marker,
+      );
+      if (isOwnershipReadProblem(lockedOwnership))
+        throw new TransactionFailure(
+          lockedOwnership.kind === 'security' ? EXIT_CODES.SECURITY : EXIT_CODES.CONTRACT,
+          [
+            diagnostic(
+              'E_MIGRATE_PROFILE_OWNERSHIP_READ',
+              'error',
+              'legacy profile ownership journal could not be reread safely under the transaction lock',
+              'Repair the legacy transaction journal and retry migration.',
+            ),
+          ],
+        );
+      if (
+        lockedOwnership === undefined ||
+        lockedOwnership.action !== ownership.action ||
+        lockedOwnership.journalText !== ownership.journalText ||
+        lockedOwnership.journalIdentity !== ownership.journalIdentity
+      )
+        throw new TransactionFailure(EXIT_CODES.CONTRACT, [
+          diagnostic(
+            'E_MIGRATE_PROFILE_OWNERSHIP_CHANGED',
+            'error',
+            'legacy profile ownership proof changed during migration preflight',
+            'Retry migration from a freshly read committed transaction journal.',
+          ),
+        ]);
       let current: InstallTargetCapture;
+      const identitiesBeforeCapture = await captureTargetAssetIdentities(tx, planned.request);
       try {
         current = await runtime.captureTargetState(planned.request);
       } catch {
@@ -868,7 +1246,19 @@ export async function migrateProfile(
             'Retry migration from a fresh target snapshot.',
           ),
         ]);
-      const assets = await captureScratchBaseAssets(tx, input.dshHome, scratch, profileAction);
+      const identitiesAfterCapture = await captureTargetAssetIdentities(tx, planned.request);
+      if (!sameTargetAssetIdentities(identitiesBeforeCapture, identitiesAfterCapture))
+        throw targetIdentityFailure();
+      const assets = await captureScratchBaseAssets(
+        tx,
+        input.dshHome,
+        scratch,
+        profileAction,
+        identitiesAfterCapture,
+      );
+      const identitiesAfterBaseCapture = await captureTargetAssetIdentities(tx, planned.request);
+      if (!sameTargetAssetIdentities(identitiesAfterCapture, identitiesAfterBaseCapture))
+        throw targetIdentityFailure();
       const allocation = await nextGeneration(tx, input.dshHome, input.profile);
       await storeCapturedAssets(tx, input.dshHome, assets);
       await runInstallFault(runtime, 'store');
@@ -915,7 +1305,7 @@ export async function migrateProfile(
       },
     );
     const cleanup = await cleanupScratchBase(runtime, input.profile, scratch.dshHome);
-    return cleanup ?? result;
+    return mergeCleanupReport(result, cleanup);
   }
   const result = report(EXIT_CODES.SUCCESS, planned.diagnostics, 'migrated', input.profile, {
     generation:
@@ -926,5 +1316,5 @@ export async function migrateProfile(
     backupDirectory: transaction.backupDirectory,
   });
   const cleanup = await cleanupScratchBase(runtime, input.profile, scratch.dshHome);
-  return cleanup ?? result;
+  return mergeCleanupReport(result, cleanup);
 }

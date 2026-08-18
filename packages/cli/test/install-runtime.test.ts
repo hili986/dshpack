@@ -215,6 +215,67 @@ describe('install PATH-only process runtime', () => {
     ).toEqual([]);
   });
 
+  it('confines migration scratch subprocesses to an allowlisted environment and private paths', async () => {
+    const scratchEnvironments: NodeJS.ProcessEnv[] = [];
+    const process = createPathProcessRuntime({
+      env: {
+        PATH: 'scratch-path-only',
+        SYSTEMROOT: 'C:\\Windows',
+        API_TOKEN: 'must-not-leak',
+        GH_TOKEN: 'must-not-leak',
+        NPM_TOKEN: 'must-not-leak',
+        AWS_SECRET_ACCESS_KEY: 'must-not-leak',
+        npm_config_registry: 'https://credential.example.invalid/',
+      },
+      spawn: async (_command, _args, options) => {
+        scratchEnvironments.push(options.env);
+        return { exitCode: 0, stdout: '1.2.3', stderr: '' };
+      },
+    });
+    const scratch = await temporary();
+
+    await process.runPnpm(['add', '--ignore-scripts'], {
+      dshHome: scratch,
+      cwd: scratch,
+      environmentPolicy: 'migration-scratch' as never,
+      scriptPolicy: 'deny',
+    });
+
+    await process.runDsh(['--version'], {
+      dshHome: scratch,
+      environmentPolicy: 'migration-scratch' as never,
+      scriptPolicy: 'deny',
+    });
+    await process.probe(scratch, 'migration-scratch' as never);
+
+    expect(scratchEnvironments).toHaveLength(4);
+    for (const environment of scratchEnvironments) {
+      const normalized = Object.fromEntries(
+        Object.entries(environment).map(([key, value]) => [key.toLowerCase(), value]),
+      );
+      expect(normalized).toMatchObject({
+        path: 'scratch-path-only',
+        dsh_home: scratch,
+        npm_config_ignore_scripts: 'true',
+        xdg_config_home: join(scratch, '.dshpack', 'migration-runtime', 'config'),
+        xdg_cache_home: join(scratch, '.dshpack', 'migration-runtime', 'cache'),
+        temp: join(scratch, '.dshpack', 'migration-runtime', 'tmp'),
+        tmp: join(scratch, '.dshpack', 'migration-runtime', 'tmp'),
+        npm_config_userconfig: join(scratch, '.dshpack', 'migration-runtime', 'npmrc'),
+        npm_config_cache: join(scratch, '.dshpack', 'migration-runtime', 'cache'),
+        pnpm_home: join(scratch, '.dshpack', 'migration-runtime', 'pnpm-home'),
+      });
+      for (const name of [
+        'api_token',
+        'gh_token',
+        'npm_token',
+        'aws_secret_access_key',
+        'npm_config_registry',
+      ])
+        expect(normalized).not.toHaveProperty(name);
+    }
+  });
+
   it('keeps a PATH-first lifecycle sentinel off during add and enables it only for approved rebuild', async () => {
     const root = await temporary();
     const shim = join(root, 'shim');

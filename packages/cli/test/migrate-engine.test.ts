@@ -1,5 +1,16 @@
 import { createHash } from 'node:crypto';
-import { link, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  link,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -72,6 +83,7 @@ async function legacyInstall(
     allowDangerFullAccess?: boolean;
     allowUnverified?: boolean;
     allowVersionMismatch?: boolean;
+    replace?: boolean;
   } = {},
 ): Promise<InstalledMetadataV0> {
   const installed = await installPack(
@@ -150,14 +162,42 @@ describe('migrate v0 metadata', () => {
     await legacyInstall(dshHome, source, { allowBuilds: ['example-bundle'] });
     const before = await snapshot(dshHome);
 
+    const fixture = fakeRuntime();
     const report = await migrateProfile(
       { dshHome, profile: 'engine-pack', dryRun: false },
-      fakeRuntime().runtime,
+      fixture.runtime,
     );
 
     expect(report).toMatchObject({
       exitCode: 30,
       diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_BASE_REBUILD' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('preserves a typed scratch environment failure instead of relabeling it as an unsafe base', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+    fixture.runtime.createScratchRuntime = () => {
+      const scratch = fakeRuntime().runtime;
+      scratch.probe = async () => {
+        throw new SourceError('E_MIGRATE_SCRATCH_SOURCE', 20, 'scratch source unavailable');
+      };
+      return scratch;
+    };
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 10,
+      diagnostics: [expect.objectContaining({ code: 'E_PROBE' })],
       metadata: { status: 'not-started' },
     });
     expect(await snapshot(dshHome)).toEqual(before);
@@ -311,12 +351,23 @@ describe('migrate v0 metadata', () => {
     ).resolves.toBe('1\n');
   });
 
-  it('records unknown legacy profile ownership as skip rather than guessing a destructive action', async () => {
+  it('preserves legacy effective-lock audit fields without treating them as scratch base facts', async () => {
     const dshHome = await home();
     const source = await enginePack({ assets: true });
     const legacy = await legacyInstall(dshHome, source);
-    await removeV1State(dshHome);
-    await rm(join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json'));
+    const historical = {
+      ...legacy,
+      installedAt: '2025-01-02T03:04:05.000Z',
+      effectiveLock: {
+        ...legacy.effectiveLock,
+        generatedBy: 'dshpack@0.0.9',
+        generatedAt: '2025-01-02T03:04:05.000Z',
+      },
+    };
+    await writeFile(
+      join(dshHome, '.dshpack', 'installed', 'engine-pack.json'),
+      `${JSON.stringify(historical)}\n`,
+    );
 
     const report = await migrateProfile(
       { dshHome, profile: 'engine-pack', dryRun: false },
@@ -327,15 +378,30 @@ describe('migrate v0 metadata', () => {
     const marker = await readJson<InstalledMetadataV1>(
       join(dshHome, '.dshpack', 'installed', 'engine-pack.json'),
     );
-    expect(marker.assets).toContainEqual(
-      expect.objectContaining({ kind: 'profile', action: 'skip' }),
+    expect(marker.effectiveLock).toEqual(historical.effectiveLock);
+  });
+
+  it('rejects migration when the legacy profile has no committed ownership proof', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    const legacy = await legacyInstall(dshHome, source);
+    await removeV1State(dshHome);
+    await rm(join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json'));
+
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+    const report = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
     );
-    const generation = await readJson<{ entries: Array<{ target: string }> }>(
-      join(dshHome, '.dshpack', 'generations', 'engine-pack', '0001.json'),
-    );
-    expect(
-      generation.entries.some((entry) => entry.target.startsWith('profiles/engine-pack/')),
-    ).toBe(false);
+
+    expect(report).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(fixture.calls).toEqual([]);
+    expect(await snapshot(dshHome)).toEqual(before);
   });
 
   it('rejects a DSH_HOME junction before it reads a marker or materializes source', async () => {
@@ -363,7 +429,7 @@ describe('migrate v0 metadata', () => {
     expect(fixture.calls).toEqual([]);
   });
 
-  it('ignores malformed legacy journal actions and accepts only an exact profile replace proof', async () => {
+  it('rejects a forged partial journal instead of upgrading profile ownership', async () => {
     const dshHome = await home();
     const source = await enginePack({ assets: true });
     const legacy = await legacyInstall(dshHome, source);
@@ -383,18 +449,111 @@ describe('migrate v0 metadata', () => {
       })}\n`,
     );
 
+    const before = await snapshot(dshHome);
     const report = await migrateProfile(
       { dshHome, profile: 'engine-pack', dryRun: false },
       fakeRuntime().runtime,
     );
 
-    expect(report).toMatchObject({ exitCode: 0, metadata: { status: 'migrated' } });
-    const marker = await readJson<InstalledMetadataV1>(
-      join(dshHome, '.dshpack', 'installed', 'engine-pack.json'),
+    expect(report).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('rejects a hardlinked ownership journal as a security failure before source I/O', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    const legacy = await legacyInstall(dshHome, source);
+    await removeV1State(dshHome);
+    const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+    const outside = join(await home(), 'external-journal.json');
+    const externalBytes = await readFile(journalPath);
+    await writeFile(outside, externalBytes);
+    await rm(journalPath);
+    await link(outside, journalPath);
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
     );
-    expect(marker.assets).toContainEqual(
-      expect.objectContaining({ kind: 'profile', action: 'replace' }),
+
+    expect(result).toMatchObject({
+      exitCode: 31,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP_READ' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(fixture.calls).toEqual([]);
+    expect(await snapshot(dshHome)).toEqual(before);
+    expect(await readFile(outside)).toEqual(externalBytes);
+  });
+
+  it.each([
+    [
+      'rolled-back state',
+      (journal: Record<string, unknown>) => ({ ...journal, state: 'rolled-back' }),
+    ],
+    [
+      'wrong transaction id',
+      (journal: Record<string, unknown>) => ({ ...journal, txid: 'tx-other' }),
+    ],
+    [
+      'wrong DSH root',
+      (journal: Record<string, unknown>) => ({
+        ...journal,
+        dshHome: join(String(journal.dshHome), 'other'),
+      }),
+    ],
+    [
+      'non-applied profile action',
+      (journal: Record<string, unknown>) => ({
+        ...journal,
+        actions: (journal.actions as Array<Record<string, unknown>>).map((action) =>
+          action.artifact === 'profile' ? { ...action, phase: 'planned' } : action,
+        ),
+      }),
+    ],
+    [
+      'incomplete unrelated state action',
+      (journal: Record<string, unknown>) => ({
+        ...journal,
+        actions: (journal.actions as Array<Record<string, unknown>>).map((action) =>
+          action.kind === 'settings-write'
+            ? {
+                ...action,
+                new: { path: (action.new as { path?: unknown } | undefined)?.path },
+              }
+            : action,
+        ),
+      }),
+    ],
+  ] as const)('rejects a %s journal proof before source I/O', async (_label, mutate) => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    const legacy = await legacyInstall(dshHome, source);
+    await removeV1State(dshHome);
+    const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+    const journal = await readJson<Record<string, unknown>>(journalPath);
+    await writeFile(journalPath, `${JSON.stringify(mutate(journal))}\n`);
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
     );
+
+    expect(result).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(fixture.calls).toEqual([]);
+    expect(await snapshot(dshHome)).toEqual(before);
   });
 
   it.each(['symlink', 'hardlink'] as const)(
@@ -478,6 +637,32 @@ describe('migrate v0 metadata', () => {
     expect(await snapshot(dshHome)).toEqual(before);
   });
 
+  it('retains dry-run planning facts when scratch cleanup requires recovery', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+    fixture.runtime.removeScratch = async () => Promise.reject(new Error('cleanup busy'));
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: true },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_CLEANUP' })],
+      metadata: {
+        status: 'planned',
+        primaryStatus: 'planned',
+        cleanupFailed: true,
+        manualRecovery: [expect.objectContaining({ operation: 'remove-private-scratch' })],
+      },
+    });
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
   it.each([
     ['profile', 'profiles/engine-pack'],
     ['skill', 'skills/notes'],
@@ -505,6 +690,44 @@ describe('migrate v0 metadata', () => {
       }
     },
   );
+
+  it('rejects a hardlinked scratch marker as a security failure before live state changes', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const before = await logicalSnapshot(dshHome);
+    const outside = join(await home(), 'scratch-marker.json');
+    await writeFile(outside, '{}\n');
+    const fixture = fakeRuntime();
+    fixture.runtime.createScratchRuntime = () => {
+      const scratch = fakeRuntime().runtime;
+      const compare = scratch.transactionAdapter.compareAndSwapManagedDocument;
+      scratch.transactionAdapter = {
+        ...scratch.transactionAdapter,
+        compareAndSwapManagedDocument: async (path, expected, replacement) => {
+          const written = await (compare?.(path, expected, replacement) ?? false);
+          if (written && path.endsWith('engine-pack.json')) {
+            await rm(path);
+            await link(outside, path);
+          }
+          return written;
+        },
+      };
+      return scratch;
+    };
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 31,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_MARKER_READ' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(await logicalSnapshot(dshHome)).toEqual(before);
+  });
 
   it('rejects an unsafe profile before source or state I/O', async () => {
     const dshHome = await home();
@@ -799,6 +1022,42 @@ describe('migrate v0 metadata', () => {
     expect(await snapshot(dshHome)).toEqual(before);
   });
 
+  it('retains a source validation failure when private source cleanup also requires recovery', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+    const materialize = fixture.runtime.materializeSource;
+    fixture.runtime.materializeSource = async (reference) => {
+      const materialized = await materialize(reference);
+      return { ...materialized, cleanup: async () => Promise.reject(new Error('cleanup busy')) };
+    };
+    fixture.runtime.readValidatedPack = async () => {
+      throw new SourceError('E_MIGRATE_READ_DUAL', 20, 'source read unavailable');
+    };
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_MIGRATE_READ_DUAL' }),
+        expect.objectContaining({ code: 'E_MIGRATE_SOURCE_CLEANUP' }),
+      ]),
+      metadata: {
+        status: 'not-started',
+        primaryStatus: 'not-started',
+        cleanupFailed: true,
+        manualRecovery: [expect.objectContaining({ operation: 'remove-private-source' })],
+      },
+    });
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
   it('reports manual recovery when a failed scratch reconstruction cannot be removed', async () => {
     const dshHome = await home();
     const source = await enginePack({ assets: true });
@@ -825,9 +1084,14 @@ describe('migrate v0 metadata', () => {
 
     expect(report).toMatchObject({
       exitCode: 25,
-      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_CLEANUP' })],
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_PROBE' }),
+        expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_CLEANUP' }),
+      ]),
       metadata: {
-        status: 'rollback-failed',
+        status: 'not-started',
+        primaryStatus: 'not-started',
+        cleanupFailed: true,
         manualRecovery: [
           expect.objectContaining({
             operation: 'remove-private-scratch',
@@ -838,6 +1102,39 @@ describe('migrate v0 metadata', () => {
     });
     expect(stranded).toBe(report.metadata.manualRecovery?.[0]?.sourcePath);
     expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('preserves committed generation facts when only scratch cleanup requires recovery', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const fixture = fakeRuntime();
+    fixture.runtime.removeScratch = async () => Promise.reject(new Error('cleanup busy'));
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_CLEANUP' })],
+      metadata: {
+        status: 'migrated',
+        primaryStatus: 'migrated',
+        cleanupFailed: true,
+        generation: 2,
+        manualRecovery: [expect.objectContaining({ operation: 'remove-private-scratch' })],
+      },
+    });
+    expect(
+      await readJson<InstalledMetadataV1>(
+        join(dshHome, '.dshpack', 'installed', 'engine-pack.json'),
+      ),
+    ).toMatchObject({ metadataVersion: 1, generation: 2 });
+    await expect(
+      readFile(join(dshHome, '.dshpack', 'generations', 'engine-pack', 'current'), 'utf8'),
+    ).resolves.toBe('2\n');
   });
 
   it('does not invoke probe or plugin resolution through the live runtime', async () => {
@@ -886,6 +1183,73 @@ describe('migrate v0 metadata', () => {
       metadata: { status: 'not-started' },
     });
     expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('retains preflight diagnostics when scratch cleanup also requires recovery', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+    fixture.runtime.captureTargetState = async () => {
+      throw new Error('unsafe target');
+    };
+    fixture.runtime.removeScratch = async () => Promise.reject(new Error('cleanup busy'));
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_MIGRATE_TARGET_STATE' }),
+        expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_CLEANUP' }),
+      ]),
+      metadata: {
+        status: 'not-started',
+        primaryStatus: 'not-started',
+        cleanupFailed: true,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('cleanup busy');
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('rejects a same-byte target inode replacement after locked capture instead of adopting it', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const profile = join(dshHome, 'profiles', 'engine-pack');
+    const before = await fileSnapshot(join(profile, 'cordis.patch.yml'));
+    const fixture = fakeRuntime();
+    const capture = fixture.runtime.captureTargetState;
+    let calls = 0;
+    fixture.runtime.captureTargetState = async (request) => {
+      const captured = await capture(request);
+      calls += 1;
+      if (calls === 2) {
+        const displaced = join(await home(), 'profile-original');
+        await rename(profile, displaced);
+        await cp(displaced, profile, { recursive: true });
+      }
+      return captured;
+    };
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_TARGET_IDENTITY' })],
+      metadata: { status: 'rolled-back' },
+    });
+    const after = await fileSnapshot(join(profile, 'cordis.patch.yml'));
+    expect(after.bytes).toEqual(before.bytes);
+    expect(after.identity).not.toBe(before.identity);
   });
 
   it('rejects a re-fetched source that no longer matches the v0 immutable base', async () => {
@@ -1290,6 +1654,38 @@ describe('migrate v0 metadata', () => {
     });
   });
 
+  it('rejects an ownership journal changed between preflight and its lock-owned reread', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    const legacy = await legacyInstall(dshHome, source);
+    const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+    const initial = await readFile(journalPath, 'utf8');
+    const before = await logicalSnapshot(dshHome);
+    const fixture = fakeRuntime();
+    const acquire = fixture.runtime.transactionAdapter.acquireArtifactLock;
+    fixture.runtime.transactionAdapter = {
+      ...fixture.runtime.transactionAdapter,
+      async acquireArtifactLock(path) {
+        const acquired = await acquire(path);
+        await writeFile(journalPath, `${initial.trimEnd()}\n\n`);
+        return acquired;
+      },
+    };
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP_CHANGED' })],
+      metadata: { status: 'rolled-back', manualRecovery: [] },
+    });
+    expect(await logicalSnapshot(dshHome)).toEqual(before);
+    expect(await readFile(journalPath, 'utf8')).toBe(`${initial.trimEnd()}\n\n`);
+  });
+
   it('does not overwrite a marker changed after current advances', async () => {
     const dshHome = await home();
     const source = await enginePack({ assets: true });
@@ -1447,6 +1843,45 @@ describe('migrate v0 metadata', () => {
     expect(report.metadata.manualRecovery).not.toEqual([]);
   });
 
+  it('merges transaction and scratch recovery actions when both rollback and cleanup fail', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    await removeV1State(dshHome);
+    const fixture = fakeRuntime({ fault: 'generation' });
+    const move = fixture.runtime.transactionAdapter.moveArtifactPath;
+    fixture.runtime.transactionAdapter = {
+      ...fixture.runtime.transactionAdapter,
+      async moveArtifactPath(...args) {
+        if (args[1] === 'store-block' && args[3].split(/[\\/]/u).includes('new'))
+          throw new Error('rollback storage move failed');
+        return move(...args);
+      },
+    };
+    fixture.runtime.removeScratch = async () => Promise.reject(new Error('cleanup busy'));
+
+    const result = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      metadata: {
+        status: 'rollback-failed',
+        primaryStatus: 'rollback-failed',
+        cleanupFailed: true,
+      },
+    });
+    expect(result.metadata.manualRecovery).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ operation: 'rename' }),
+        expect.objectContaining({ operation: 'remove-private-scratch' }),
+      ]),
+    );
+    expect(JSON.stringify(result)).not.toContain('cleanup busy');
+  });
+
   it('rolls back when the target changes after migration preflight and before lock-owned capture', async () => {
     const dshHome = await home();
     const source = await enginePack({ assets: true });
@@ -1481,4 +1916,356 @@ describe('migrate v0 metadata', () => {
         Buffer.from('changed\n').toString('base64'),
     });
   });
+
+  it.each([
+    [
+      'an unsupported artifact kind',
+      (action: Record<string, unknown>) => ({ ...action, artifact: 'unknown' }),
+    ],
+    [
+      'an invalid create ownership fact',
+      (action: Record<string, unknown>) => ({ ...action, ownership: 'guessed' }),
+    ],
+    [
+      'a create old fact that claims the target existed',
+      (action: Record<string, unknown>) => ({
+        ...action,
+        old: { ...(action.old as Record<string, unknown>), exists: true },
+      }),
+    ],
+    [
+      'a create new fact that claims the target was absent',
+      (action: Record<string, unknown>) => ({
+        ...action,
+        new: { ...(action.new as Record<string, unknown>), exists: false },
+      }),
+    ],
+    [
+      'a missing create rollback path',
+      (action: Record<string, unknown>) => ({
+        ...action,
+        new: { ...(action.new as Record<string, unknown>), rollbackPath: undefined },
+      }),
+    ],
+    [
+      'a non-string create identity',
+      (action: Record<string, unknown>) => ({
+        ...action,
+        new: { ...(action.new as Record<string, unknown>), identity: 1 },
+      }),
+    ],
+    [
+      'a non-string create content digest',
+      (action: Record<string, unknown>) => ({
+        ...action,
+        new: { ...(action.new as Record<string, unknown>), contentSha256: 1 },
+      }),
+    ],
+    [
+      'a create record that permits a non-empty rollback target',
+      (action: Record<string, unknown>) => ({
+        ...action,
+        new: { ...(action.new as Record<string, unknown>), emptyOnRollback: false },
+      }),
+    ],
+  ] as const)(
+    'fails closed before source I/O for a committed ownership journal with %s',
+    async (_label, mutateProfileAction) => {
+      const dshHome = await home();
+      const source = await enginePack({ assets: true });
+      const legacy = await legacyInstall(dshHome, source);
+      await removeV1State(dshHome);
+      const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+      const journal = await readJson<Record<string, unknown>>(journalPath);
+      let profileActions = 0;
+      await writeFile(
+        journalPath,
+        `${JSON.stringify({
+          ...journal,
+          actions: (journal.actions as Record<string, unknown>[]).map((action) => {
+            if (action.artifact !== 'profile') return action;
+            profileActions += 1;
+            return mutateProfileAction(action);
+          }),
+        })}\n`,
+      );
+      expect(profileActions).toBe(1);
+      const before = await snapshot(dshHome);
+      const fixture = fakeRuntime();
+
+      const report = await migrateProfile(
+        { dshHome, profile: 'engine-pack', dryRun: false },
+        fixture.runtime,
+      );
+
+      expect(report).toMatchObject({
+        exitCode: 30,
+        diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP' })],
+        metadata: { status: 'not-started' },
+      });
+      expect(fixture.calls).toEqual([]);
+      expect(await snapshot(dshHome)).toEqual(before);
+    },
+  );
+
+  it('fails closed when the ownership journal becomes unsafe after the transaction lock', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    const legacy = await legacyInstall(dshHome, source);
+    await removeV1State(dshHome);
+    const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+    const journalBytes = await readFile(journalPath);
+    const outside = join(await home(), 'replacement-journal.json');
+    await writeFile(outside, journalBytes);
+    const before = await logicalSnapshot(dshHome);
+    const fixture = fakeRuntime();
+    const acquire = fixture.runtime.transactionAdapter.acquireArtifactLock;
+    fixture.runtime.transactionAdapter = {
+      ...fixture.runtime.transactionAdapter,
+      async acquireArtifactLock(path) {
+        const lock = await acquire(path);
+        await rm(journalPath);
+        await link(outside, journalPath);
+        return lock;
+      },
+    };
+
+    const report = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(report).toMatchObject({
+      exitCode: 31,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP_READ' })],
+      metadata: { status: 'rolled-back', manualRecovery: [] },
+    });
+    expect(await logicalSnapshot(dshHome)).toEqual(before);
+    expect(await readFile(outside)).toEqual(journalBytes);
+  });
+
+  it('rejects a same-byte target inode replacement after isolated base capture', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const profile = join(dshHome, 'profiles', 'engine-pack');
+    const before = await fileSnapshot(join(profile, 'cordis.patch.yml'));
+    const fixture = fakeRuntime();
+    const identity = fixture.runtime.transactionAdapter.pathIdentity;
+    let profileIdentityReads = 0;
+    fixture.runtime.transactionAdapter = {
+      ...fixture.runtime.transactionAdapter,
+      async pathIdentity(path) {
+        const observed = await identity(path);
+        if (path === profile) {
+          profileIdentityReads += 1;
+          if (profileIdentityReads !== 3) return observed;
+          const displaced = join(await home(), 'profile-original');
+          await rename(profile, displaced);
+          await cp(displaced, profile, { recursive: true });
+        }
+        return observed;
+      },
+    };
+
+    const report = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(profileIdentityReads).toBe(4);
+    expect(report).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_TARGET_IDENTITY' })],
+      metadata: { status: 'rolled-back', manualRecovery: [] },
+    });
+    const after = await fileSnapshot(join(profile, 'cordis.patch.yml'));
+    expect(after.bytes).toEqual(before.bytes);
+    expect(after.identity).not.toBe(before.identity);
+  });
+
+  it('migrates a legacy profile whose committed journal records a real replacement', async () => {
+    const dshHome = await home();
+    const profile = join(dshHome, 'profiles', 'engine-pack');
+    await mkdir(profile, { recursive: true });
+    await writeFile(join(profile, 'user-sentinel'), 'pre-existing profile\n');
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source, { replace: true });
+    await removeV1State(dshHome);
+
+    const report = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fakeRuntime().runtime,
+    );
+
+    expect(report).toMatchObject({ exitCode: 0, metadata: { status: 'migrated' } });
+    const marker = await readJson<InstalledMetadataV1>(
+      join(dshHome, '.dshpack', 'installed', 'engine-pack.json'),
+    );
+    expect(marker.assets.find((asset) => asset.kind === 'profile')).toMatchObject({
+      action: 'replace',
+    });
+  });
+
+  it('rejects two otherwise-valid profile create proofs as ambiguous', async () => {
+    const dshHome = await home();
+    const source = await enginePack({ assets: true });
+    const legacy = await legacyInstall(dshHome, source);
+    await removeV1State(dshHome);
+    const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+    const journal = await readJson<Record<string, unknown>>(journalPath);
+    const actions = journal.actions as Record<string, unknown>[];
+    const profile = actions.find((action) => action.artifact === 'profile');
+    if (profile === undefined) throw new Error('fixture must record a profile create action');
+    const duplicateId = `action-${String(actions.length + 1).padStart(4, '0')}`;
+    await writeFile(
+      journalPath,
+      `${JSON.stringify({
+        ...journal,
+        actions: [
+          ...actions,
+          {
+            ...profile,
+            id: duplicateId,
+            new: {
+              ...(profile.new as Record<string, unknown>),
+              rollbackPath: join(dshHome, '.dshpack', 'backups', legacy.txid, 'new', duplicateId),
+            },
+          },
+        ],
+      })}\n`,
+    );
+    const before = await snapshot(dshHome);
+    const fixture = fakeRuntime();
+
+    const report = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fixture.runtime,
+    );
+
+    expect(report).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP' })],
+      metadata: { status: 'not-started' },
+    });
+    expect(fixture.calls).toEqual([]);
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('migrates a legacy profile whose committed settings write replaced an existing document', async () => {
+    const dshHome = await home();
+    await writeFile(
+      join(dshHome, 'settings.yaml'),
+      'agent-presets:\n  retained:\n    model: existing-model\n',
+    );
+    const source = await enginePack({ assets: true });
+    await legacyInstall(dshHome, source);
+    const settingsBeforeMigration = await readFile(join(dshHome, 'settings.yaml'), 'utf8');
+    await removeV1State(dshHome);
+
+    const report = await migrateProfile(
+      { dshHome, profile: 'engine-pack', dryRun: false },
+      fakeRuntime().runtime,
+    );
+
+    expect(report).toMatchObject({ exitCode: 0, metadata: { status: 'migrated' } });
+    expect(await readFile(join(dshHome, 'settings.yaml'), 'utf8')).toBe(settingsBeforeMigration);
+  });
+
+  it.each([
+    ['a non-record action', null],
+    [
+      'an unsupported action kind',
+      {
+        kind: 'delete',
+        id: 'placeholder',
+        phase: 'applied',
+        artifact: 'profile',
+      },
+    ],
+  ] as const)(
+    'rejects a committed ownership journal containing %s before source I/O',
+    async (_label, malformedAction) => {
+      const dshHome = await home();
+      const source = await enginePack({ assets: true });
+      const legacy = await legacyInstall(dshHome, source);
+      await removeV1State(dshHome);
+      const journalPath = join(dshHome, '.dshpack', 'backups', legacy.txid, 'journal.json');
+      const journal = await readJson<Record<string, unknown>>(journalPath);
+      const actions = journal.actions as Record<string, unknown>[];
+      const id = `action-${String(actions.length + 1).padStart(4, '0')}`;
+      const action =
+        malformedAction === null
+          ? malformedAction
+          : {
+              ...malformedAction,
+              id,
+            };
+      await writeFile(
+        journalPath,
+        `${JSON.stringify({ ...journal, actions: [...actions, action] })}\n`,
+      );
+      const before = await snapshot(dshHome);
+      const fixture = fakeRuntime();
+
+      const report = await migrateProfile(
+        { dshHome, profile: 'engine-pack', dryRun: false },
+        fixture.runtime,
+      );
+
+      expect(report).toMatchObject({
+        exitCode: 30,
+        diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_PROFILE_OWNERSHIP' })],
+        metadata: { status: 'not-started' },
+      });
+      expect(fixture.calls).toEqual([]);
+      expect(await snapshot(dshHome)).toEqual(before);
+    },
+  );
+
+  it.each([
+    [
+      'the scratch installed-metadata directory',
+      async (scratchHome: string) => {
+        const installed = join(scratchHome, '.dshpack', 'installed');
+        const displaced = join(await home(), 'scratch-installed');
+        await rename(installed, displaced);
+        await symlink(displaced, installed, process.platform === 'win32' ? 'junction' : 'dir');
+      },
+    ],
+  ] as const)(
+    'fails closed when %s becomes a junction before reconstruction metadata is reread',
+    async (_label, replaceScratchPath) => {
+      const dshHome = await home();
+      const source = await enginePack({ assets: true });
+      await legacyInstall(dshHome, source);
+      const before = await logicalSnapshot(dshHome);
+      const fixture = fakeRuntime();
+      fixture.runtime.createScratchRuntime = (scratchHome) => {
+        const scratch = fakeRuntime().runtime;
+        const compare = scratch.transactionAdapter.compareAndSwapManagedDocument;
+        scratch.transactionAdapter = {
+          ...scratch.transactionAdapter,
+          async compareAndSwapManagedDocument(path, expected, replacement) {
+            const written = await (compare?.(path, expected, replacement) ?? false);
+            if (written && path.endsWith('engine-pack.json')) await replaceScratchPath(scratchHome);
+            return written;
+          },
+        };
+        return scratch;
+      };
+
+      const report = await migrateProfile(
+        { dshHome, profile: 'engine-pack', dryRun: false },
+        fixture.runtime,
+      );
+
+      expect(report).toMatchObject({
+        exitCode: 31,
+        diagnostics: [expect.objectContaining({ code: 'E_MIGRATE_SCRATCH_MARKER_READ' })],
+        metadata: { status: 'not-started' },
+      });
+      expect(await logicalSnapshot(dshHome)).toEqual(before);
+    },
+  );
 });

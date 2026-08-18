@@ -83,3 +83,18 @@
   transaction backups.
 - A durability or ownership ambiguity requiring manual recovery is never reported as a successful
   pending purge: it returns exit 25 with explicit recovery information.
+
+## Legacy metadata migration boundary
+
+- `dshpack migrate` reads a v0 marker and its recorded source but never rebuilds or writes the
+  live profile. It first reconstructs the immutable base in a private scratch `DSH_HOME` with
+  lifecycle scripts denied.
+- The scratch subprocess environment is allowlisted. Credentials and inherited package-manager
+  configuration are omitted; its cache, store, configuration, and temporary paths are scoped to
+  the scratch home. This is isolation for migration work, not a claim of a complete sandbox.
+- Migration requires immutable source/plugin commitments and a committed transaction-journal proof
+  for the profile base. Missing or unsafe proof, unverified inputs, a rebuild requiring scripts,
+  or a changed target fails closed without adopting live bytes as a new base.
+- Private source or scratch cleanup that cannot be completed produces exit 25 with an explicit
+  recovery path. If cleanup follows a committed migration, the report preserves the committed
+  generation facts and marks the pending private cleanup rather than claiming rollback.

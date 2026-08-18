@@ -17,7 +17,7 @@ import { resolveInstallPlugins } from './resolver.js';
 import { authorizeWorkspaceBuild, writeMaterialAssetSnapshot } from './runtime-assets.js';
 import { createPathProcessRuntime, type PathProcessRuntime } from './runtime-process.js';
 import { captureInstallTargetState } from './runtime-state.js';
-import type { InstallRuntime } from './runtime-types.js';
+import type { InstallRuntime, ProcessEnvironmentPolicy } from './runtime-types.js';
 import type { InstallPromptDecision } from './types.js';
 
 export interface NodeInstallRuntimeOptions {
@@ -25,6 +25,8 @@ export interface NodeInstallRuntimeOptions {
   env?: Readonly<NodeJS.ProcessEnv>;
   network?: NetworkDependencies;
   now?: () => string;
+  /** Constrain every subprocess spawned by this runtime to a private environment policy. */
+  processEnvironmentPolicy?: ProcessEnvironmentPolicy;
   process?: PathProcessRuntime;
   txid?: () => string;
   writeStderr?: (message: string) => void;
@@ -57,15 +59,32 @@ export function createNodeInstallRuntime(
   const processRuntime =
     options.process ??
     createPathProcessRuntime(options.env === undefined ? {} : { env: options.env });
+  const processEnvironmentPolicy = options.processEnvironmentPolicy;
+  const confinedProcess: PathProcessRuntime =
+    processEnvironmentPolicy === undefined
+      ? processRuntime
+      : {
+          probe: (home) => processRuntime.probe(home, processEnvironmentPolicy),
+          runDsh: (args, processOptions) =>
+            processRuntime.runDsh(args, {
+              ...processOptions,
+              environmentPolicy: processEnvironmentPolicy,
+            }),
+          runPnpm: (args, processOptions) =>
+            processRuntime.runPnpm(args, {
+              ...processOptions,
+              environmentPolicy: processEnvironmentPolicy,
+            }),
+        };
   return {
     transactionAdapter: createNodeTransactionAdapter(),
     materializeSource,
     readValidatedPack: (directory, readOptions) =>
       readValidatedPack(directory, { frozen: readOptions?.frozen === true }),
-    probe: () => processRuntime.probe(dshHome),
+    probe: () => confinedProcess.probe(dshHome),
     resolvePlugins: (material, resolutionOptions) =>
       resolveInstallPlugins(material, resolutionOptions, {
-        process: processRuntime,
+        process: confinedProcess,
         ...(options.network === undefined ? {} : { network: options.network }),
       }),
     captureTargetState: captureInstallTargetState,
@@ -83,8 +102,8 @@ export function createNodeInstallRuntime(
       writeFileAtomic(path, contents, { mode: 0o600, dirMode: 0o700 }),
     writeMaterialAsset: writeMaterialAssetSnapshot,
     authorizeBuild: authorizeWorkspaceBuild,
-    runDsh: processRuntime.runDsh,
-    runPnpm: processRuntime.runPnpm,
+    runDsh: (args, processOptions) => confinedProcess.runDsh(args, processOptions),
+    runPnpm: (args, processOptions) => confinedProcess.runPnpm(args, processOptions),
     confirm: options.confirm ?? defaultConfirm,
     writeStderr: options.writeStderr ?? ((message) => process.stderr.write(`${message}\n`)),
     verifyOfficialProfileInit: validateOfficialProfileInit,
@@ -100,7 +119,7 @@ export function createNodeInstallRuntime(
         },
         {
           runDsh: (args, doctorOptions) =>
-            processRuntime.runDsh(args, {
+            confinedProcess.runDsh(args, {
               dshHome: doctorOptions.dshHome,
               cwd: doctorOptions.cwd,
             }),
