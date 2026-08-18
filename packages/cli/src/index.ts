@@ -31,6 +31,12 @@ export {
   installCommand,
   registerInstallCommand,
 } from './commands/install.js';
+export {
+  registerUpdateCommand,
+  type UpdateRunner,
+  type UpdateRuntimeFactory,
+  updateCommand,
+} from './commands/update.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
 export { installPack } from './install/engine.js';
 export {
@@ -64,3 +70,22 @@ export {
   type UninstallMetadata,
   uninstallProfile,
 } from './uninstall/engine.js';
+export {
+  preflightUpdate,
+  type UpdateInput,
+  type UpdatePreflight,
+  type UpdatePreflightResult,
+  type UpdatePreflightSummary,
+  type UpdateReport,
+  type UpdateReportMetadata,
+  type UpdateRuntime,
+  updateProfile,
+} from './update/engine.js';
+export {
+  type AuthorizationDelta,
+  authorizationDelta,
+  decideUpdateAuthorization,
+  resolvedPluginIdentity,
+  type UpdateAuthorizationDecision,
+  type UpdateAuthorizationInput,
+} from './update/policy.js';

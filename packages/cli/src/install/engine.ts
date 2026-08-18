@@ -18,7 +18,7 @@ import type {
   InstallRuntime,
   InstallTargetCapture,
 } from './runtime-types.js';
-import type { InstallPlan, InstallResolution } from './types.js';
+import type { InstallPlan, InstallPromptDecision, InstallResolution } from './types.js';
 
 function report(
   exitCode: ExitCode,
@@ -106,11 +106,7 @@ async function confirmPlan(
   input: InstallInput,
   runtime: InstallRuntime,
   plan: InstallPlan,
-  prompts: readonly {
-    kind: 'install' | 'allow-build' | 'danger-full-access' | 'version-mismatch';
-    subject: string;
-    defaultValue: false;
-  }[],
+  prompts: readonly InstallPromptDecision[],
 ): Promise<{
   ok: boolean;
   approvals: Set<string>;

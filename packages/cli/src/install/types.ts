@@ -171,6 +171,8 @@ export interface PrepareInstallPlanInput {
 
 export type InstallPromptKind =
   | 'install'
+  | 'update'
+  | 'new-plugin'
   | 'allow-build'
   | 'danger-full-access'
   | 'version-mismatch';

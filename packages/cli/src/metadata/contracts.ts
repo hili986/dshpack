@@ -96,6 +96,22 @@ export interface MetadataAsset {
   files: readonly MetadataAssetFile[];
 }
 
+/**
+ * A deferred update component is deliberately separate from `assets`: it records the last
+ * managed base used for a future three-way merge without claiming that a missing or user-edited
+ * directory is currently owned by dshpack.
+ */
+export interface DeferredMetadataAsset {
+  id: string;
+  kind: Exclude<MetadataAssetKind, 'managed-document'>;
+  target: string;
+  reason: 'missing' | 'modified' | 'only';
+  /** Absent only for a newly introduced target intentionally skipped by `--only`. */
+  baseline?: MetadataAsset;
+  /** Required for a deferred profile so pack-level metadata cannot advance its effective base. */
+  profileSignature?: string;
+}
+
 export interface SettingsContribution {
   namespace: 'agent-presets';
   keys: readonly { key: string; valueSha256: string; canonicalValue: string }[];
@@ -104,6 +120,8 @@ export interface SettingsContribution {
 export interface InstalledMetadataV1 extends Omit<InstalledMetadataV0, 'metadataVersion'> {
   metadataVersion: 1;
   assets: readonly MetadataAsset[];
+  /** Optional for backwards-compatible v1 markers written before update deferral existed. */
+  deferredAssets?: readonly DeferredMetadataAsset[];
   settingsContribution: SettingsContribution;
   generation: number;
   installedBy: string;
@@ -467,6 +485,38 @@ function validAsset(value: unknown, profile: string): value is MetadataAsset {
   return uniquePaths(value.files);
 }
 
+function validDeferredAsset(value: unknown, profile: string): value is DeferredMetadataAsset {
+  if (
+    !isRecord(value) ||
+    !exactKeys(
+      value,
+      value.baseline === undefined
+        ? ['id', 'kind', 'target', 'reason']
+        : value.kind === 'profile'
+          ? ['id', 'kind', 'target', 'reason', 'baseline', 'profileSignature']
+          : ['id', 'kind', 'target', 'reason', 'baseline'],
+    ) ||
+    typeof value.id !== 'string' ||
+    !ASSET_ID.test(value.id) ||
+    (value.kind !== 'skill' && value.kind !== 'preset' && value.kind !== 'profile') ||
+    typeof value.target !== 'string' ||
+    !targetMatchesKind(value.kind, value.id, value.target, profile) ||
+    (value.reason !== 'missing' && value.reason !== 'modified' && value.reason !== 'only') ||
+    (value.baseline === undefined && value.reason !== 'only') ||
+    (value.baseline !== undefined &&
+      (!validAsset(value.baseline, profile) ||
+        value.baseline.kind !== value.kind ||
+        value.baseline.id !== value.id ||
+        value.baseline.target !== value.target)) ||
+    (value.kind === 'profile' &&
+      (value.baseline === undefined ||
+        typeof value.profileSignature !== 'string' ||
+        !isCanonicalSha256Sri(value.profileSignature)))
+  )
+    return false;
+  return true;
+}
+
 /** Shared validator for persisted metadata and generation settings facts. */
 export function isValidSettingsContribution(value: unknown): value is SettingsContribution {
   if (
@@ -509,29 +559,58 @@ export function isValidSettingsContribution(value: unknown): value is SettingsCo
 
 function validV1(value: unknown): value is InstalledMetadataV1 {
   const profile = isRecord(value) && typeof value.profile === 'string' ? value.profile : '';
+  const hasDeferredAssets = isRecord(value) && value.deferredAssets !== undefined;
   if (
     !isRecord(value) ||
-    !exactKeys(value, [
-      'metadataVersion',
-      'profile',
-      'pack',
-      'planDigest',
-      'installedAt',
-      'txid',
-      'source',
-      'defaults',
-      'plugins',
-      'effectiveLock',
-      'sideEffects',
-      'assets',
-      'settingsContribution',
-      'generation',
-      'installedBy',
-    ]) ||
+    !exactKeys(
+      value,
+      hasDeferredAssets
+        ? [
+            'metadataVersion',
+            'profile',
+            'pack',
+            'planDigest',
+            'installedAt',
+            'txid',
+            'source',
+            'defaults',
+            'plugins',
+            'effectiveLock',
+            'sideEffects',
+            'assets',
+            'deferredAssets',
+            'settingsContribution',
+            'generation',
+            'installedBy',
+          ]
+        : [
+            'metadataVersion',
+            'profile',
+            'pack',
+            'planDigest',
+            'installedAt',
+            'txid',
+            'source',
+            'defaults',
+            'plugins',
+            'effectiveLock',
+            'sideEffects',
+            'assets',
+            'settingsContribution',
+            'generation',
+            'installedBy',
+          ],
+    ) ||
     value.metadataVersion !== 1 ||
     !Array.isArray(value.assets) ||
-    value.assets.length === 0 ||
+    (value.assets.length === 0 &&
+      (!hasDeferredAssets ||
+        !Array.isArray(value.deferredAssets) ||
+        value.deferredAssets.length === 0)) ||
     !value.assets.every((asset) => validAsset(asset, profile)) ||
+    (hasDeferredAssets &&
+      (!Array.isArray(value.deferredAssets) ||
+        !value.deferredAssets.every((asset) => validDeferredAsset(asset, profile)))) ||
     !isValidSettingsContribution(value.settingsContribution) ||
     typeof value.generation !== 'number' ||
     !Number.isSafeInteger(value.generation) ||
@@ -546,8 +625,17 @@ function validV1(value: unknown): value is InstalledMetadataV1 {
     if (ids.has(id)) return false;
     ids.add(id);
   }
+  const deferred = (
+    Array.isArray(value.deferredAssets) ? value.deferredAssets : []
+  ) as readonly DeferredMetadataAsset[];
+  for (const asset of deferred) {
+    const id = `${asset.kind}:${asset.id.toLocaleLowerCase('en-US')}`;
+    if (ids.has(`deferred:${id}`)) return false;
+    ids.add(`deferred:${id}`);
+  }
   const {
     assets: _assets,
+    deferredAssets: _deferredAssets,
     generation: _generation,
     installedBy: _installedBy,
     settingsContribution: _settings,

@@ -13,6 +13,7 @@ import { registerRestoreCommand, restoreCommand } from './commands/restore.js';
 import { diagnostic, writeReport } from './commands/shared.js';
 import { registerSwitchCommand, switchCommand } from './commands/switch.js';
 import { registerUninstallCommand, uninstallCommand } from './commands/uninstall.js';
+import { registerUpdateCommand, updateCommand } from './commands/update.js';
 import { registerValidateCommand, validateCommand } from './commands/validate.js';
 import { EXIT_CODES } from './exit-codes.js';
 import { DSHPACK_VERSION } from './version.js';
@@ -28,6 +29,7 @@ const commandDefinitions = [
   migrateCommand,
   uninstallCommand,
   restoreCommand,
+  updateCommand,
   validateCommand,
   initCommand,
   packCommand,
@@ -82,7 +84,8 @@ export function createProgram(): Command {
       name === 'lock' ||
       name === 'switch' ||
       name === 'uninstall' ||
-      name === 'restore'
+      name === 'restore' ||
+      name === 'update'
     )
       continue;
     program
@@ -106,6 +109,7 @@ export function createProgram(): Command {
   registerSwitchCommand(program);
   registerUninstallCommand(program);
   registerRestoreCommand(program);
+  registerUpdateCommand(program);
 
   return program;
 }
