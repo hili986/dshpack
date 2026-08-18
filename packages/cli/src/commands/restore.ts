@@ -6,7 +6,7 @@ import { type CommandReport, resolveDshHome, writeReport } from './shared.js';
 
 export const restoreCommand = {
   name: 'restore',
-  description: 'materialize one retained profile generation without discarding newer user changes',
+  description: '还原 profile 的某一代；不丢弃用户后来的修改',
 } as const;
 
 export type RestoreRunner = (input: RestoreInput) => Promise<CommandReport<RestoreMetadata>>;
@@ -51,12 +51,12 @@ export function registerRestoreCommand(
   program
     .command('restore <profile>')
     .description(restoreCommand.description)
-    .option('--to <seq>', 'materialize this retained generation', parseSequence)
-    .option('--list', 'list retained generations without writing state')
-    .option('--dry-run', 'report the restore plan without writing state')
-    .option('--force', 'overwrite user-modified assets after transaction backup')
-    .option('--yes', 'confirm the non-interactive mutation')
-    .option('--json', 'stdout only emits one JSON object')
+    .option('--to <seq>', '还原到指定的代际序号', parseSequence)
+    .option('--list', '只读列出保留的代际')
+    .option('--dry-run', '仅输出还原 plan，确认前零写入')
+    .option('--force', '覆盖被用户改过的 asset（先进事务 backup）')
+    .option('--yes', '确认非交互式写操作；不替代 --force')
+    .option('--json', 'stdout 仅输出一个 JSON object')
     .action(
       async (
         profile: string,

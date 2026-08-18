@@ -10,7 +10,7 @@ import { type CommandReport, resolveDshHome, writeReport } from './shared.js';
 
 export const uninstallCommand = {
   name: 'uninstall',
-  description: 'remove one tracked profile while retaining unproven user-owned content',
+  description: '卸载一个 tracked profile；归属无法证明的用户内容一律保留',
 } as const;
 
 export type UninstallRunner = (input: UninstallInput) => Promise<CommandReport<UninstallMetadata>>;
@@ -64,15 +64,12 @@ export function registerUninstallCommand(
   program
     .command('uninstall <profile>')
     .description(uninstallCommand.description)
-    .option('--dry-run', 'report the uninstall plan without writing state')
-    .option('--keep-assets', 'preserve skills, presets, and settings contributions')
-    .option('--force', 'allow removal of user-modified tracked assets after transaction backup')
-    .option(
-      '--purge-generations',
-      'remove this profile generation history and unreferenced CAS blocks',
-    )
-    .option('--yes', 'confirm the non-interactive mutation')
-    .option('--json', 'stdout only emits one JSON object')
+    .option('--dry-run', '仅输出卸载 plan，确认前零写入')
+    .option('--keep-assets', '保留 skills、presets 与 settings 贡献')
+    .option('--force', '允许删除被用户改过的 tracked asset（先进事务 backup）')
+    .option('--purge-generations', '一并删除该 profile 的代际历史与无引用 CAS block')
+    .option('--yes', '确认非交互式写操作；不替代 --force')
+    .option('--json', 'stdout 仅输出一个 JSON object')
     .action(
       async (
         profile: string,

@@ -5,7 +5,7 @@ import { type CommandReport, resolveDshHome, writeReport } from './shared.js';
 
 export const gcCommand = {
   name: 'gc',
-  description: 'collect unreferenced CAS blocks and obsolete generations',
+  description: '回收无引用的 CAS block 与过期代际',
 } as const;
 
 export type GcRunner = (input: {
@@ -36,9 +36,9 @@ export function registerGcCommand(program: Command, run: GcRunner = runDefault):
   program
     .command('gc')
     .description(gcCommand.description)
-    .option('--keep <n>', 'retain this many newest generations per profile')
-    .option('--dry-run', 'report the collection plan without writing state')
-    .option('--json', 'stdout only emits one JSON object')
+    .option('--keep <n>', '每个 profile 保留最新的 n 代')
+    .option('--dry-run', '仅输出回收 plan，确认前零写入')
+    .option('--json', 'stdout 仅输出一个 JSON object')
     .action(async (options: { keep?: string; dryRun?: boolean; json?: boolean }) => {
       const root = program.opts<{ dshHome?: string; json?: boolean }>();
       const json = options.json === true || root.json === true;

@@ -10,7 +10,7 @@ import { resolveDshHome, writeReport } from './shared.js';
 
 export const migrateCommand = {
   name: 'migrate',
-  description: 'rebuild legacy installed metadata as v1',
+  description: '把 legacy installed metadata 重建为 v1',
 } as const;
 
 export type MigrateRunner = (
@@ -27,8 +27,8 @@ export function registerMigrateCommand(
   program
     .command('migrate <profile>')
     .description(migrateCommand.description)
-    .option('--dry-run', 'rebuild and validate without writing DSH state')
-    .option('--json', 'stdout only emits one JSON object')
+    .option('--dry-run', '仅重建并校验，不写 DSH state')
+    .option('--json', 'stdout 仅输出一个 JSON object')
     .action(async (profile: string, options: { dryRun?: boolean; json?: boolean }) => {
       const root = program.opts<{ dshHome?: string; json?: boolean }>();
       const json = options.json === true || root.json === true;
