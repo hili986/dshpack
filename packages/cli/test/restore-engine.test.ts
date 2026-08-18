@@ -1141,9 +1141,7 @@ describe('restore engine', () => {
     ) as { entries: Array<{ sha256: string }> };
     const missing = [...new Set(generation.entries.map((entry) => entry.sha256))];
     expect(missing.length).toBeGreaterThan(1);
-    await Promise.all(
-      missing.map((digest) => removeCasBlock(dshHome, digest)),
-    );
+    await Promise.all(missing.map((digest) => removeCasBlock(dshHome, digest)));
     await expect(
       uninstallProfile({ dshHome, profile: 'engine-pack', yes: true }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -1775,9 +1773,7 @@ describe('restore engine', () => {
     };
     generation.restorable = false;
     const missing = [...new Set(generation.entries.map((entry) => entry.sha256))];
-    await Promise.all(
-      missing.map((digest) => removeCasBlock(dshHome, digest)),
-    );
+    await Promise.all(missing.map((digest) => removeCasBlock(dshHome, digest)));
     await writeFile(path, `${JSON.stringify(generation)}\n`);
     const before = await logicalSnapshot(dshHome);
 
