@@ -90,16 +90,37 @@ node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目�
 
 ## 命令
 
+**装东西进来**
+
 | 命令 | 作用 | 副作用 |
 |---|---|---|
 | `validate <source>` | 校验 pack 格式、来源、完整性、凭据 | **零写入，且不调用 dsh** |
 | `install <source>` | 按计划以可回滚事务安装 | 见上方计划输出 |
-| `list` | 列出 tracked / untracked / broken profiles | 只读 |
 | `switch <profile>` | 校验并**打印**启动命令 | 默认不 spawn、不改 session；只有 `--run` 才前台启动 dsh |
-| `lock [dir]` | 为手写 pack 生成/更新 `pack.lock.yml` | 只写该目录，产物确定且幂等 |
-| `doctor` | 诊断环境与配置边界 | **会写**，见下 |
-| `export` | 把 profile 导出成本地 pack | dsh dump 会写 `profile/cordis.yml` |
-| `init` / `pack` | 作者向 | **未实现** |
+
+**管住已经装进来的**
+
+| 命令 | 作用 | 副作用 |
+|---|---|---|
+| `list` | 列出 tracked / untracked / reserved / broken profiles | 只读 |
+| `status` | 汇总所有 profile 的受跟踪状态 | 只读；**默认不联网**，`--check-updates` 才查上游 |
+| `diff <profile>` | 对比本地漂移与可选的上游差异 | 只读 |
+| `update <profile>` | 更新到已验证的目标 pack | 三路合并；**你后来改过的内容不会被静默覆盖** |
+| `restore <profile>` | 还原到某一代 | **不丢弃**你在那之后做的修改 |
+| `uninstall <profile>` | 卸载一个 tracked profile | **归属无法证明的内容一律保留**，宁可留下也不误删 |
+| `gc` | 回收无引用的 CAS block 与过期代际 | 只删确认无人引用的块 |
+| `migrate` | 把 legacy metadata 重建为 v1 | 就地升级元数据 |
+| `doctor` | 诊断 dsh 环境与配置边界 | **会写**，见下 |
+
+**做一个 pack 出来**
+
+| 命令 | 作用 | 副作用 |
+|---|---|---|
+| `init [dir]` | 四档模板起草一个 pack | 收尾自动 `lock` + `validate`，任一道不过就**整目录回滚** |
+| `export` | 把现有 profile 导出成 pack | dsh dump 会写 `profile/cordis.yml` |
+| `compose [compose.yml]` | 按清单从多个来源组装一个 pack | 冲突必须显式解决；产出前过三次凭据扫描 |
+| `lock [dir]` | 生成/更新 `pack.lock.yml` | 只写该目录，产物确定且幂等 |
+| `pack [dir]` | 打成可复现且带 SRI 的 tarball | 产出 tarball + `.sha512` + `manifest.json` |
 
 `doctor` 的副作用要说清楚，因为它容易被误以为只读：走 `--dump-*` 的检查项会让 **dsh** 重写 `profile/cordis.yml`（不是我们写的，但由我们触发），而 **dshpack 自己**会在 `$DSH_HOME/.dshpack/logs/` 写审计日志。`--json` 的 `sideEffects` 字段把两者都列出来并标注归属：
 
@@ -111,6 +132,57 @@ node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目�
 ```
 
 全命令支持 `--dsh-home`、`--no-color`、`--quiet`、`--json`。JSON 模式下 stdout 只有一个 object，进度走 stderr。
+
+## 自由组装：从别人的 pack 取材
+
+做一个 pack 有三条路：从零手写（`init`）、把自己现有的 profile 导出来（`export`）、或者从多个来源取材组装（`compose`）。第三条是 `compose` 存在的理由——你想要 A 包里的两个 skill 和 B 包里的一个，但不想 fork 任何一个。
+
+```yaml
+# compose.yml
+composeVersion: 0
+name: my-research-kit
+version: 0.1.0
+description: 我自己攒的科研写作套装
+author: your-name
+license: MIT
+
+include:
+  # 来源一：本机某个 profile（内部走 export，需要 --dsh-home）
+  - from: profile:research-writing
+    skills: [paper-outline, citation-verification]
+
+  # 来源二：别人发布的 pack —— 必须是 40 位小写 SHA，与 install 同一条纪律
+  - from: github:dsh-packs/web-dev#3414f1af3fd674998cea81716586f4716a538f50
+    skills: [commit-convention]
+
+  # 来源三：本地目录；"*" 表示该来源全部 skill
+  - from: ./my-skills
+    skills: ["*"]
+
+# 同名冲突必须在这里显式解决，只能二选一
+resolve:
+  - id: commit-convention
+    rename: web-commit-convention   # 或 prefer: <上面某个 from>
+
+defaults:
+  permissionPreset: workspace-write
+```
+
+```sh
+# 只报告将取什么、有哪些冲突，零写入
+dshpack compose compose.yml --dry-run
+
+# 真的组装（默认产出目录 = 与 compose.yml 同级的 <name>/）
+dshpack --dsh-home <隔离目录> compose compose.yml
+```
+
+**冲突绝不静默。** 两个来源给出同一个 skill id 时 `exit 30`，并**列出全部冲突**而不是只报第一个；你必须在 `resolve` 里选 `rename` 或 `prefer`。"后来的覆盖先来的"是最容易写出来的行为，也是这里明确不做的——它意味着你的 pack 内容取决于 `include` 的书写顺序，而你不会注意到。`rename` 本身也不能制造新冲突：改名撞上另一个来源已有的 id 同样报错。
+
+**取不到就失败。** 你点名的 skill 在来源里不存在时报错并列出该来源**实际有什么**，不会安静地少给你一个。
+
+**每个素材都记来源。** 产出的 `pack.yml` 里有 `provenance`，逐条记 `from` / `originalId` / `license`，`github:` 记的是完整 40 位 SHA。来源 license 不明时需要显式 `--allow-unknown-license`；与你声明的 license 冲突时如实列出，**绝不自动改写别人的许可声明**。
+
+**产出前过三次凭据扫描**（写入前 / 写入后 / lock 之后），任一次命中即 `exit 31` 且**零产出**。收尾自动跑 `lock` 与 `validate`，任一道不过就整体回滚——不会留下半个目录。
 
 ## pack 目录长什么样
 
