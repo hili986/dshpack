@@ -1,0 +1,13 @@
+formatVersion: 0
+name: team-notes
+version: 0.1.0
+description: The team's shared note-taking conventions.
+author: dshpack examples
+license: MIT
+dsh:
+  tested:
+    - 0.1.0-rc.6
+plugins: []
+mcp: []
+defaults:
+  permissionPreset: workspace-write

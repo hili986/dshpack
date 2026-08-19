@@ -151,6 +151,34 @@ describe('status profiles', () => {
     );
   });
 
+  it('does not call a profile’s own duplicate assets shared with anything', async () => {
+    // The two-profile test above passes under either reading — occurrences and distinct profiles
+    // both come to 2 there — so it is this case that pins the semantics. One profile holds two
+    // byte-identical presets and nothing else is installed: `sharedAssets` must be 0, because
+    // uninstalling this profile takes both copies with it. Counting occurrences returns 2 and
+    // tells the user the opposite of what removing the profile would do.
+    const dshHome = await home();
+    const runtime = fakeRuntime();
+    await expect(
+      installPack(
+        {
+          source: await enginePack({ assets: true, duplicateAsset: true, name: 'solo' }),
+          dshHome,
+          interactive: false,
+          yes: true,
+        },
+        runtime.runtime,
+      ),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    const result = await statusProfiles({ dshHome }, fakeRuntime().runtime);
+
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.metadata.profiles).toEqual([
+      expect.objectContaining({ profile: 'solo', status: 'tracked', sharedAssets: 0 }),
+    ]);
+  });
+
   it('returns the list failure and marks a tracked read failure without crashing', async () => {
     await expect(
       statusProfiles({ dshHome: 'relative' }, fakeRuntime().runtime),

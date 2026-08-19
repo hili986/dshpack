@@ -2,7 +2,7 @@
 
 把一个 dsh 场景——skills、MCP、profile patch、权限默认值——导出成一个**可安装、可分享、可审计**的 pack，再把 pack 装成标准的 dsh profile。
 
-> **当前状态：M0 已发布（`npm i -g dshpack`），仍属预发布。** pack 格式与 CLI 参数都还不是稳定 API。`init` 与 `pack` 两个作者向命令仍未实现。
+> **当前状态：0.2.x 已发布（`npm i -g dshpack`），仍属预发布。** pack 格式与 CLI 参数都还不是稳定 API。下方命令总表里的 17 个命令全部可用。
 
 ## 它不做什么
 
@@ -112,6 +112,8 @@ node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目�
 | `migrate` | 把 legacy metadata 重建为 v1 | 就地升级元数据 |
 | `doctor` | 诊断 dsh 环境与配置边界 | **会写**，见下 |
 
+`status` 每行给三个数，含义是钉死的：`drift` 是这个 profile 里被本地改过的资产数；`update` 只有加了 `--check-updates` 才不是 `not-checked`；**`shared` 是"有多少资产还被别的 profile 用着"**——按 profile 去重计数，同一个 profile 里两份内容相同的资产**不算**共享。这条区分是有意义的：`shared` 存在的意义就是回答"卸掉它会不会动到别人还要的字节"，而自己的两份副本会随它一起被删。想看引用计数意义上的共享看 `gc`，那是另一个问题。任一项无法计算时输出 `"unavailable"` 而不是 `0`——读不出来和真的是零，对自动化不是一回事。
+
 **做一个 pack 出来**
 
 | 命令 | 作用 | 副作用 |
@@ -184,6 +186,8 @@ dshpack --dsh-home <隔离目录> compose compose.yml
 
 **产出前过三次凭据扫描**（写入前 / 写入后 / lock 之后），任一次命中即 `exit 31` 且**零产出**。收尾自动跑 `lock` 与 `validate`，任一道不过就整体回滚——不会留下半个目录。
 
+上面这段冲突行为有一个**可以直接跑的**最小示例在 [`examples/compose/`](examples/compose/)：两个本地来源都提供 `note-taking`，用 `prefer` 裁决。CI 会把它组装一遍，**并且验证删掉 `resolve` 后确实以 30 被拒**——所以它不会退化成一个没有冲突的示例还继续绿着。
+
 ## pack 目录长什么样
 
 pack 目录里的文件分三类，各有各的待遇：
@@ -235,7 +239,7 @@ Windows 上开发命令应在 PowerShell 里直接可用，不依赖 Bash 专属
 
 ## 故障排查
 
-- `init` / `pack` 返回 `70`：这两个作者向命令尚未实现。
+- **exit 70 `INTERNAL`**：内部错误，不是你的用法问题。带上脱敏后的命令与版本报 issue。
 - **exit 10 `E_PROBE`**：`dsh` 或 `pnpm` 不在 PATH 上。注意 Windows 上可能同时存在无扩展名的 `dsh` 与 `dsh.CMD`。
 - **exit 25**：不要重试。先按输出里的人工恢复路径处理，机器处于中间态。
 - 装完插件但 dsh 没变化：插件变更不热加载，必须完全退出并启动新的 dsh 进程。

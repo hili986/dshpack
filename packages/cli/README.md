@@ -2,7 +2,7 @@
 
 把一个 dsh 场景——skills、MCP、profile patch、权限默认值——导出成一个**可安装、可分享、可审计**的 pack，再把 pack 装成标准的 dsh profile。
 
-> **0.1.x 为预发布。** pack 格式与 CLI 参数都还不是稳定 API。作者向命令 `init` / `pack` 尚未实现。
+> **0.2.x 仍为预发布。** pack 格式与 CLI 参数都还不是稳定 API。
 
 ```sh
 npm i -g dshpack
@@ -27,15 +27,35 @@ rollback snapshot: enabled=true state=sha256-bSGmM1FiexZIOjjfdgjsYA14kw8egAI8O58
 
 ## 常用命令
 
+**装东西进来**
+
 | 命令 | 作用 |
 | --- | --- |
-| `dshpack install <source>` | 安装 pack；`--dry-run` 只出计划 |
-| `dshpack list` | 列出 tracked / untracked / reserved / broken profile |
-| `dshpack export --profile <p>` | 从现有 profile 导出 pack |
-| `dshpack validate <path>` | 校验 pack 结构与 lock |
-| `dshpack doctor` | 体检 DSH_HOME |
-| `dshpack lock <path>` | 生成 / 更新 `pack.lock.yml` |
-| `dshpack switch <profile>` | 校验并显示启动命令；`--run` 才真启动 |
+| `validate <source>` | 校验 pack 格式、来源、完整性、凭据；零写入且不调用 dsh |
+| `install <source>` | 按计划以可回滚事务安装；`--dry-run` 只出计划 |
+| `switch <profile>` | 校验并**打印**启动命令；`--run` 才真启动 |
+
+**管住已经装进来的**
+
+| 命令 | 作用 |
+| --- | --- |
+| `list` / `status` | 列出 profile / 汇总受跟踪状态（默认不联网） |
+| `diff <profile>` | 对比本地漂移与可选的上游差异 |
+| `update <profile>` | 三路合并更新；你后来改过的内容不会被静默覆盖 |
+| `restore <profile>` | 还原到某一代，不丢弃之后的修改 |
+| `uninstall <profile>` | 卸载；**归属无法证明的内容一律保留** |
+| `gc` / `migrate` | 回收无引用的块与过期代际 / 把 legacy metadata 升到 v1 |
+| `doctor` | 体检 DSH_HOME（**会写**，`--json` 的 `sideEffects` 列出归属） |
+
+**做一个 pack 出来**
+
+| 命令 | 作用 |
+| --- | --- |
+| `init [dir]` | 四档模板起草；收尾自动 `lock` + `validate`，不过就整目录回滚 |
+| `export` | 把现有 profile 导出成 pack |
+| `compose [compose.yml]` | 从多个来源组装；**同名冲突必须显式解决**，否则 exit 30 |
+| `lock [dir]` | 生成 / 更新 `pack.lock.yml`，产物确定且幂等 |
+| `pack [dir]` | 打成可复现且带 SRI 的 tarball |
 
 来源支持本地目录、`github:owner/repo#<40 位 commit SHA>`、以及带 `sha512` SRI 的 HTTPS tarball。
 
@@ -46,7 +66,7 @@ rollback snapshot: enabled=true state=sha256-bSGmM1FiexZIOjjfdgjsYA14kw8egAI8O58
 - 不把第三方 install/build script 当可信代码执行；
 - 不热更新正在运行的 dsh 进程。
 
-导出会三重扫描凭据；命中即以退出码 31 中止，**不会**"悄悄删掉"再交给你一个无法审计的 pack。
+`export` / `pack` / `compose` 每条产出路径都三重扫描凭据；命中即以退出码 31 中止且**零产出**，**不会**"悄悄删掉"再交给你一个无法审计的 pack。
 
 ## 文档
 

@@ -1,0 +1,13 @@
+formatVersion: 0
+name: personal-notes
+version: 0.1.0
+description: A personal variant of the same note-taking skill.
+author: dshpack examples
+license: MIT
+dsh:
+  tested:
+    - 0.1.0-rc.6
+plugins: []
+mcp: []
+defaults:
+  permissionPreset: workspace-write

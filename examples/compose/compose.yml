@@ -1,0 +1,19 @@
+composeVersion: 0
+name: notes-kit
+version: 0.1.0
+description: Two sources that both ship a note-taking skill, with the collision resolved explicitly.
+author: dshpack examples
+license: MIT
+include:
+  - from: ./sources/team-notes
+    skills: ['*']
+  - from: ./sources/personal-notes
+    skills: ['*']
+# Both sources ship a skill with the id `note-taking`. compose refuses to guess: without this
+# block it exits 30 and lists every collision. Silently letting the later `include` win would make
+# the pack's contents depend on the order these were written in, which the author would not notice.
+resolve:
+  - id: note-taking
+    prefer: ./sources/team-notes
+defaults:
+  permissionPreset: workspace-write

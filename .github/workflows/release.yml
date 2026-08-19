@@ -9,6 +9,14 @@ on:
         description: 'Run every gate and pack the tarballs, but do not publish'
         type: boolean
         default: true
+      # The first publish of a package name cannot use the trusted publisher — npm has nothing to
+      # attach one to yet. That legitimate exception is the only reason the assertion below can be
+      # waived, and waiving it has to be a visible choice recorded in the run's inputs rather than
+      # a condition the workflow quietly tolerates every time.
+      allow_token_fallback:
+        description: 'First publish of a new package name: allow NPM_TOKEN instead of the trusted publisher'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,10 +113,66 @@ jobs:
 
       - name: Publish
         if: ${{ inputs.dry_run == false }}
-        run: pnpm publish --recursive --access public --no-git-checks --provenance
+        run: |
+          set -o pipefail
+          pnpm publish --recursive --access public --no-git-checks --provenance 2>&1 | tee publish.log
         env:
           # npm prefers the OIDC identity when a trusted publisher is configured for the
           # package and falls back to this token otherwise. The first publish of a new
           # package name has to use the token: npm cannot register a trusted publisher
           # for a package that does not exist yet.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # The dry-run step above proves the trusted publisher CAN work. Nothing proved it was still
+      # in effect for the publish that actually happened — pnpm sets NODE_AUTH_TOKEN first and lets
+      # a successful OIDC exchange overwrite it, so a silent fallback to the token publishes
+      # successfully and reads identically in the log. This marker is the only difference.
+      #
+      # Checking afterwards cannot undo an upload, and that is not what it is for: it is the
+      # difference between knowing which identity signed the release and assuming it.
+      - name: Assert the publish used the trusted publisher
+        if: ${{ inputs.dry_run == false && inputs.allow_token_fallback == false }}
+        run: |
+          if grep -q 'Skipped OIDC' publish.log; then
+            echo "::error::The publish fell back to NPM_TOKEN; the trusted publisher was not in effect."
+            echo "::error::The packages ARE published. Verify provenance on the registry before announcing."
+            exit 1
+          fi
+          echo "Publish used the trusted publisher."
+
+      # Being uploaded is not the same as being installable, and this repo has been bitten by the
+      # gap twice. Ask the registry, not the publish log.
+      #
+      # The registry also settles who published: `_npmUser` is what npm recorded, not what our
+      # tooling narrated. The step above reads pnpm's own output, which is the right place to fail
+      # fast with a reason; this is the authoritative version of the same question.
+      - name: Verify both packages resolve from the registry
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          expect_oidc='${{ inputs.allow_token_fallback == false }}'
+          resolves() {
+            name="$1"
+            version="$(node -p "require('./packages/$2/package.json').version")"
+            for attempt in 1 2 3 4 5; do
+              if [ "$(npm view "${name}@${version}" version 2>/dev/null)" = "${version}" ]; then
+                echo "${name}@${version} resolves from the registry."
+                if [ "$expect_oidc" = 'true' ]; then
+                  publisher="$(npm view "${name}@${version}" _npmUser --json 2>/dev/null || true)"
+                  case "$publisher" in
+                    *npm-oidc-no-reply*)
+                      echo "  published by the trusted publisher: ${publisher}" ;;
+                    *)
+                      echo "::error::${name}@${version} was published by ${publisher}, not the OIDC bot."
+                      return 1 ;;
+                  esac
+                fi
+                return 0
+              fi
+              echo "attempt ${attempt}: ${name}@${version} not resolvable yet"
+              sleep 10
+            done
+            echo "::error::${name}@${version} never became resolvable. Published is not delivered."
+            return 1
+          }
+          resolves '@dshpack/core' core
+          resolves dshpack cli

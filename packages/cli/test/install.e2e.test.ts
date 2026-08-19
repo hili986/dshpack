@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -208,6 +208,50 @@ describe('built install with an isolated PATH-first dsh/pnpm shim', () => {
     expect(replace.status).toBe(22);
     expect(replace.stderr).toContain('--replace');
     expect(await readFile(join(existing, 'user-sentinel'), 'utf8')).toBe('must-survive');
+  });
+
+  it('runs its own copyable install command successfully, exactly as printed', async () => {
+    // The refusal tests above assert that the hint *contains* `--allow-danger-full-access`. That
+    // is a claim about a string. `init` shipped a hint that contained exactly the right-looking
+    // flag and still did nothing when pasted, and no string assertion could have caught it —
+    // only running the thing does. This is the same nail for the command users are most likely to
+    // copy, and the one whose flags actually grant permissions.
+    //
+    // Nothing here names a flag: whatever the tool prints is what gets run.
+    const { env, home } = await fixture();
+    // Deliberately a path with a space in it. The hint quotes data values, and with every path in
+    // this suite being space-free a renderer that stopped quoting entirely would still produce a
+    // command that runs — so the quoting would be untested while looking tested.
+    const source = join(home, '..', 'source with space');
+    await cp(await enginePack({ permissionPreset: 'danger-full-access' }), source, {
+      recursive: true,
+    });
+
+    const refused = run(home, env, ['--json', 'install', source, '--yes']);
+    expect(refused.status).toBe(21);
+    expect(await emptyHome(home)).toBe(true);
+
+    const hint = (JSON.parse(refused.stdout).diagnostics as { hint?: string }[]).find(
+      ({ hint: text }) => text?.includes('dshpack install'),
+    )?.hint;
+    expect(hint).toBeDefined();
+    const printed = (hint as string).slice((hint as string).indexOf('dshpack install'));
+
+    // The hint quotes data values for PowerShell, whose single-quoted strings have exactly one
+    // rule: `''` is a literal quote and nothing else escapes. Decoding that is one substitution,
+    // not a re-implementation of a shell parser — the risk of getting it wrong the same way the
+    // renderer might is nil.
+    const argv = (printed.match(/'(?:[^']|'')*'|\S+/gu) ?? [])
+      .slice(1)
+      .map((token) => (token.startsWith("'") ? token.slice(1, -1).replaceAll("''", "'") : token));
+
+    const copied = spawnSync(process.execPath, [binPath, ...argv], { encoding: 'utf8', env });
+
+    // Unlike `init`, a successful `install` is not silent — the plan goes to stderr by design, so
+    // the pass condition is the exit code plus the profile actually being on disk.
+    expect(copied.status).toBe(0);
+    expect(copied.stderr).toContain('danger-full-access');
+    await expect(access(join(home, 'profiles', 'engine-pack'))).resolves.toBeUndefined();
   });
 
   it('rejects an unpinned GitHub source before any shim subprocess', async () => {

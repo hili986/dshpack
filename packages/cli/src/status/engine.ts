@@ -68,10 +68,17 @@ export async function statusProfiles(
       ),
     ),
   );
+  // Count each digest once per profile, not once per occurrence. `sharedAssets` sits next to
+  // `drift` and `update` as a per-profile number, and the question it answers is whether removing
+  // this profile would take bytes something else still needs. Counting occurrences answers a
+  // different question — the CAS refcount, which is `gc`'s business — and gets the first one
+  // wrong: one profile holding two byte-identical assets would report them as shared, while
+  // uninstalling that profile deletes both. A number that says "someone else is holding this" is
+  // worse than no number when it is the deletion decision it is meant to inform.
   const digestCounts = new Map<string, number>();
   for (const report of reports)
-    for (const asset of report.metadata.assetDigests)
-      digestCounts.set(asset.digest, (digestCounts.get(asset.digest) ?? 0) + 1);
+    for (const digest of new Set(report.metadata.assetDigests.map((asset) => asset.digest)))
+      digestCounts.set(digest, (digestCounts.get(digest) ?? 0) + 1);
   const profiles: StatusProfile[] = [];
   let failed = false;
   let firstFailure: StatusReport['diagnostics'] = [];

@@ -27,6 +27,13 @@ const sha512 = (content: string): string =>
 
 export interface EnginePackOptions {
   assets?: boolean;
+  /**
+   * Adds a second preset whose bytes are identical to the first, so one profile ends up holding
+   * two assets with the same digest. Presets rather than skills: two skills with the same bytes
+   * would also share a `name:` in their frontmatter, and a test that trips over id collision
+   * stops being a test about digest counting.
+   */
+  duplicateAsset?: boolean;
   name?: string;
   mcp?: boolean;
   permissionPreset?: 'workspace-write' | 'danger-full-access';
@@ -90,6 +97,7 @@ export async function enginePack(options: EnginePackOptions = {}): Promise<strin
     payloads['skills/notes.md'] = '---\nname: notes\ndescription: fixture notes\n---\n# Notes\n';
     payloads['presets/custom/agent.cordis.yml'] = '[]\n';
     payloads['settings/agent-presets.yml'] = 'custom:\n  model: fixture\n';
+    if (options.duplicateAsset) payloads['presets/twin/agent.cordis.yml'] = '[]\n';
   }
   const manifestText = stringify(manifest, { lineWidth: 0 });
   await writeFile(join(root, 'pack.yml'), manifestText);

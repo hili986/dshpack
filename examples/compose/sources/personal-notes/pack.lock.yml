@@ -1,0 +1,12 @@
+lockVersion: 0
+manifestSha256: sha256-usQ-qJaC5HCniQk_MeHZLbPH1GVNeDgX0BogNFJAzFc
+generatedBy: dshpack@0.2.1
+generatedAt: 1970-01-01T00:00:00Z
+dsh:
+  exportedFrom: 0.1.0-rc.6
+plugins: []
+files:
+  - path: patch/cordis.patch.yml
+    sha512: sha512-t6kzbtOkJLXU1Z2bINC7wzIXIHtYTba3WP3bmnC5nnyMn4OH7zGKayA55i8Jo6JZK/XHbWlHpuodEHuSTXRh9A==
+  - path: skills/note-taking/SKILL.md
+    sha512: sha512-cKEjDelH7E/G5aKpU68IvXRuULLZ81Zg2TAgVmE23uncmsL5bnrETXzdqHENxVvDaOYFhSldLC4ro+qaBhdZkA==
