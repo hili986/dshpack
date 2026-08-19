@@ -46,6 +46,20 @@ jobs:
           corepack prepare pnpm@11.7.0 --activate
           pnpm --version
 
+      # Defender scans every file the suite writes under the C: temp directory, and it holds
+      # a handle open while it does. That is one mechanism producing both symptoms seen on
+      # windows-latest: I/O-heavy tests running 20-34x slower than the same tests locally
+      # (848ms -> 20000ms timeout for the migrate cases), and `EBUSY ... rmdir` when a
+      # fixture root is removed while the scan still owns a handle. Excluding the paths this
+      # job owns is scoped to an ephemeral runner and changes no product behaviour.
+      - name: Exclude runner paths from Defender scanning
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}", "${{ runner.temp }}", "$env:TEMP"
+          Add-MpPreference -ExclusionProcess node.exe, pnpm.exe, powershell.exe
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
