@@ -150,28 +150,45 @@ jobs:
         if: ${{ inputs.dry_run == false }}
         run: |
           expect_oidc='${{ inputs.allow_token_fallback == false }}'
+
+          # Both loops retry rather than read once. This step runs after an irreversible upload, so
+          # a check that mistakes registry propagation lag for a failed release is worse than no
+          # check: it would cry wolf on a perfectly good publish and teach the next reader to
+          # ignore it. Fail only once the registry has had time to answer and still disagrees.
           resolves() {
             name="$1"
             version="$(node -p "require('./packages/$2/package.json').version")"
+            resolved=''
             for attempt in 1 2 3 4 5; do
               if [ "$(npm view "${name}@${version}" version 2>/dev/null)" = "${version}" ]; then
-                echo "${name}@${version} resolves from the registry."
-                if [ "$expect_oidc" = 'true' ]; then
-                  publisher="$(npm view "${name}@${version}" _npmUser --json 2>/dev/null || true)"
-                  case "$publisher" in
-                    *npm-oidc-no-reply*)
-                      echo "  published by the trusted publisher: ${publisher}" ;;
-                    *)
-                      echo "::error::${name}@${version} was published by ${publisher}, not the OIDC bot."
-                      return 1 ;;
-                  esac
-                fi
-                return 0
+                resolved=yes
+                break
               fi
               echo "attempt ${attempt}: ${name}@${version} not resolvable yet"
               sleep 10
             done
-            echo "::error::${name}@${version} never became resolvable. Published is not delivered."
+            if [ -z "$resolved" ]; then
+              echo "::error::${name}@${version} never became resolvable. Published is not delivered."
+              return 1
+            fi
+            echo "${name}@${version} resolves from the registry."
+            [ "$expect_oidc" = 'true' ] || return 0
+
+            for attempt in 1 2 3 4 5; do
+              publisher="$(npm view "${name}@${version}" _npmUser --json 2>/dev/null || true)"
+              case "$publisher" in
+                *npm-oidc-no-reply*)
+                  echo "  published by the trusted publisher: ${publisher}"
+                  return 0 ;;
+                '')
+                  echo "  attempt ${attempt}: _npmUser not published yet"
+                  sleep 10 ;;
+                *)
+                  echo "::error::${name}@${version} was published by ${publisher}, not the OIDC bot."
+                  return 1 ;;
+              esac
+            done
+            echo "::error::${name}@${version} never reported a publisher; cannot confirm the identity."
             return 1
           }
           resolves '@dshpack/core' core
