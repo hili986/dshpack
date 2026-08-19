@@ -38,11 +38,29 @@ before and after subcommands）。于是 `dshpack init my-pack --version 0.1.0` 
 
 一侧有真实 program 却没有那个 argv 形状，另一侧有那个形状却没有真实 program。
 
+### 撞名并不总是致命的——区别在于 program 级那个选项做什么
+
+实测三种形态，结论不同，规则必须按形态写：
+
+| program 级选项 | 子命令同名时会怎样 | 本仓实例 |
+|---|---|---|
+| **有立即生效并终止解析的 handler**（`.version()`） | **致命且静默**：program 打印后退出，子命令的 action 根本不会执行 | `--version`（本 ADR 的缺陷） |
+| **只是个待读的值**（`--json` / `--dsh-home` / `--quiet` / `--no-color`） | program 仍然赢，子命令那份**收不到值**；但只要子命令同时读 `program.opts()` 就没事 | `--json`：`init` 两级都注册，靠 `options.json === true \|\| root.json === true` 兜住，两个位置实测都工作 |
+| **`--help`** | **不受影响**：Commander 把 help 输出推迟到子命令分发**之后** | `init --help` 正确显示 `init` 自己的帮助 |
+
+**共同的底层事实：program 在任何位置都赢。** 子命令那份注册永远拿不到值。
+区别只在于"拿不到"的后果——值型选项可以靠读 `program.opts()` 补救，
+而 `.version()` 这种会**当场动作并退出**的，子命令连补救的机会都没有。
+
 ## 决策
 
-1. **子命令选项名不得与 program 级选项相同**（`--dsh-home` / `--no-color` / `--quiet` /
-   `--json` / `-V, --version`）。语义确实需要时改名并加前缀——pack 版本号用
-   **`--pack-version`**。这是 review 的必查项。
+1. **子命令绝不能依赖一个 program 也注册了的选项名拿到值。** 具体分两档：
+   - program 级那个选项会**动作并终止解析**（当前只有 `-V, --version`）⇒
+     子命令**禁止**使用该名字，改名加前缀。pack 版本号因此是 **`--pack-version`**。
+   - 纯值型（`--json` 等）⇒ 可以两级同名，但子命令**必须**同时读 `program.opts()`，
+     照 `init.ts` 里 `--json` 的既有写法。**不要**只读 `options.x` 就以为拿到了。
+
+   这是 review 的必查项。
 
 2. **版本旗标出现在子命令之后 ⇒ 拒绝**：`E_USAGE` / exit 2，提示按子命令定制
    （`init` 指向 `--pack-version`，其余指向"把 `--version` 放到子命令之前"）。
@@ -73,7 +91,9 @@ before and after subcommands）。于是 `dshpack init my-pack --version 0.1.0` 
 
 ## 对贡献者的规则
 
-- 新增子命令选项时，先对照 program 级选项清单。撞名时 **program 永远赢，而且是静默的**。
+- 新增子命令选项时，先对照 program 级选项清单。**program 在任何位置都赢**，
+  子命令那份注册拿不到值。值型选项照 `--json` 的写法读 `program.opts()` 兜住；
+  会动作并退出的（`--version`）**直接换名字**。
 - 新增子命令时**只需**把它加进 `cli.ts` 的 `commandDefinitions`——`COMMAND_NAMES` 由它派生，
   守卫自动覆盖。**不要**手写第二份命令名清单。
 - 守卫故意**不解析选项元数**（不知道每个选项吃几个值）。重新实现一遍 Commander 的解析器

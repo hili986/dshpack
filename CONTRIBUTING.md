@@ -52,7 +52,12 @@ pnpm pack:dry-run
 
 新增子命令选项之前，先读 [ADR-0004](./docs/adr/0004-cli-option-namespace.md)。
 
-一句话版本：**子命令选项不得与 program 级选项（`--dsh-home` / `--no-color` / `--quiet` / `--json` / `-V, --version`）撞名**。Commander 默认在子命令之后仍识别 program 级选项，撞名时 **program 永远赢，而且是静默的**——`init --version` 曾因此打印工具版本、退出 0、什么都不创建。需要同义选项就加前缀（pack 版本号是 `--pack-version`）。新增子命令只需把它加进 `cli.ts` 的 `commandDefinitions`，`COMMAND_NAMES` 与错位守卫会自动覆盖，**不要**手写第二份命令名清单。
+一句话版本：**Commander 默认在子命令之后仍识别 program 级选项，因此 program 在任何位置都赢，子命令那份同名注册拿不到值。** 后果分两档——
+
+- **纯值型**（`--json` / `--dsh-home` / `--quiet` / `--no-color`）：可以两级同名，但子命令**必须**同时读 `program.opts()`。照 `commands/init.ts` 里 `--json` 的既有写法（`options.json === true || root.json === true`），别只读 `options.x`。
+- **会动作并终止解析的**（当前只有 `-V, --version`）：**禁止**同名，直接换名字加前缀——pack 版本号是 `--pack-version`。`init --version` 曾因此打印工具版本、退出 0、什么都不创建。（`--help` 不在此列：Commander 把它推迟到子命令分发之后，`init --help` 正确显示 init 自己的帮助。）
+
+新增子命令只需把它加进 `cli.ts` 的 `commandDefinitions`，`COMMAND_NAMES` 与错位守卫会自动覆盖，**不要**手写第二份命令名清单。
 
 还有一条与之配套：**工具打印给用户“直接复制运行”的每一条命令，都要有一条测试把它抓出来照原样跑，并断言产物**。只断言退出码不够——静默 exit 0 在退出码上和真成功一模一样。
 
