@@ -1,5 +1,37 @@
 # dshpack
 
+## 0.2.1
+
+### Patch Changes
+
+- **修复：`dshpack init --version <x>` 会打印工具版本、退出 0、什么都不创建——而这正是工具自己让你复制的命令。**
+  
+  `init` 用 `--version` 接收 pack 版本号，但 `dshpack` 在 program 级注册了 `-V, --version`。
+  Commander 默认在子命令**之后**仍然识别 program 级选项，于是 `--version` 被 program 吃掉：
+  打印 `0.2.0`、退出 0、目录连建都没建。
+  
+  真正致命的是 exit 0。任何别的拼错（`--bogus`）都是 `unknown option` + exit 2，唯独这一个
+  **假装成功**——包着 dshpack 的脚本读到的是"干完了"。而 0.2.0 在缺必填项时打印的那条
+  "直接复制运行"的命令里，写的就是 `--version "0.1.0"`：**照着工具自己的建议敲，得到一个静默的空操作**。
+  
+  两处都修了：
+  
+  - `init` 的选项改名为 **`--pack-version`**（打印的那条可复制命令同步改对）。
+  - 版本旗标出现在子命令之后时**直接拒绝**：`E_USAGE` + exit 2，并指明该用 `--pack-version`
+    还是把 `--version` 挪到子命令之前。这一层保护所有子命令，不只是 `init`。
+  
+  `dshpack --version`、`--version --json`、`--` 之后的透传、以及子命令之后的 `--dsh-home`
+  （README 快速上手与 `install` 生成的机器 argv 都用这个形式）全部保持原样。
+  
+  Commander 官方的 `enablePositionalOptions()` 能一次性关掉整类撞名，这里用不了：它会让
+  `--dsh-home` 在子命令之后不再被识别，等于打断工具自己让人复制的那条 `install` 命令。
+  
+  漏到发布的原因值得记一笔：断言那条提示语的单测构造的是不带 `.version()` 的裸 `Command`，
+  撞名在它里面结构上不可能出现；而用真实 program 的边界测试从没把版本旗标放到子命令后面试过。
+  两类测试都在，只是没有一条同时跨过这两者。现在 `cli-boundary.e2e.test.ts` 会**把工具打印的
+  那条命令原样抓出来跑一遍**，不硬编码任何旗标名字。
+- @dshpack/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
