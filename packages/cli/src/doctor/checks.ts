@@ -4,7 +4,7 @@ import { type Diagnostic, scanSecrets } from '@dshpack/core';
 import { execa } from 'execa';
 import { parseDocument } from 'yaml';
 
-import { DshProcessError, runDsh as defaultRunDsh } from '../adapters/process.js';
+import { awaitDirectChild, DshProcessError, runDsh as defaultRunDsh } from '../adapters/process.js';
 import { diagnostic } from '../commands/shared.js';
 import {
   type DoctorDshRunner,
@@ -52,7 +52,7 @@ export async function dshVersion(
 
 export async function checkPnpm(input: DoctorInput, diagnostics: Diagnostic[]): Promise<void> {
   try {
-    const result = await execa('pnpm', ['--version'], {
+    const child = execa('pnpm', ['--version'], {
       cwd: input.dshHome,
       reject: false,
       shell: false,
@@ -60,6 +60,7 @@ export async function checkPnpm(input: DoctorInput, diagnostics: Diagnostic[]): 
       windowsHide: true,
       ...(input.env === undefined ? {} : { env: input.env }),
     });
+    const result = await awaitDirectChild(child, 5_000);
     const version = result.stdout.replace(/\n$/u, '');
     if (result.exitCode !== 0 || !versionAtLeast(version, [10, 0, 0]))
       diagnostics.push(

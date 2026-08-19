@@ -80,6 +80,14 @@ function deferredRejectedChild(outcome: FakeOutcome): {
   return { child, reject: () => rejectPromise?.(error) };
 }
 
+function pendingChild(): FakeChild {
+  return Object.assign(new Promise<FakeOutcome>(() => undefined), { kill: vi.fn(() => true) });
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 afterEach(async () => {
   execaMock.mockReset();
   await Promise.all(
@@ -293,6 +301,36 @@ describe('runDsh', () => {
       killDescendants: false,
       timeout: 321,
     });
+  });
+
+  it('returns a timeout attempt when a direct child never closes its inherited output', async () => {
+    const child = pendingChild();
+    execaMock.mockReturnValue(child);
+    const interrupted = vi.fn();
+    const options = await makeOptions({ onInterrupted: interrupted, timeout: 10 });
+
+    const outcome = await Promise.race([
+      runDsh(['--version'], options).then(
+        () => new Error('expected runDsh to reject after timing out'),
+        (reason: unknown) => reason,
+      ),
+      delay(600).then(() => new Error('unit-test safety valve: runDsh did not settle')),
+    ]);
+
+    expect(outcome).toMatchObject({ timedOut: true, interruptionReason: 'timeout' });
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(interrupted).toHaveBeenCalledExactlyOnceWith('timeout');
+  });
+
+  it('clears the local timeout guard after a child succeeds', async () => {
+    const child = resolvedChild({ stdout: 'ok', stderr: '', exitCode: 0 });
+    execaMock.mockReturnValue(child);
+    const options = await makeOptions({ timeout: 10 });
+
+    await expect(runDsh(['--version'], options)).resolves.toMatchObject({ stdout: 'ok' });
+    await delay(300);
+
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it('forwards a transaction interrupt to only the currently held direct child', async () => {

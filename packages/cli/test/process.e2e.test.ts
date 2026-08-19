@@ -10,6 +10,63 @@ import { DshProcessError, runDsh } from '../src/adapters/process.js';
 const fixtureDirectory = fileURLToPath(new URL('./e2e/shims/', import.meta.url));
 const temporaryRoots: string[] = [];
 
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForFile(path: string, timeout: number): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      await readFile(path, 'utf8');
+      return;
+    } catch {
+      await delay(25);
+    }
+  }
+  throw new Error(`timed out waiting for owned child PID at ${path}`);
+}
+
+async function terminateOwnedProcess(pidPath: string): Promise<void> {
+  try {
+    const pid = Number.parseInt((await readFile(pidPath, 'utf8')).trim(), 10);
+    if (!Number.isSafeInteger(pid) || pid <= 0) return;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      return;
+    }
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+        await delay(25);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+        throw error;
+      }
+    }
+    throw new Error(`owned child ${pid} did not exit after SIGKILL`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+async function removeTemporaryRoot(root: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      await rm(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== 'EBUSY' && code !== 'EPERM') || Date.now() >= deadline) throw error;
+      await delay(50);
+    }
+  }
+}
+
 function isolatedPath(shimDirectory: string): string {
   return [shimDirectory, dirname(process.execPath)].join(delimiter);
 }
@@ -32,9 +89,7 @@ async function prepareShim(root: string, command: 'dsh' | 'npx'): Promise<string
 }
 
 afterEach(async () => {
-  await Promise.all(
-    temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
+  await Promise.all(temporaryRoots.splice(0).map(removeTemporaryRoot));
 });
 
 describe('dsh process shim', () => {
@@ -150,5 +205,54 @@ describe('dsh process shim', () => {
     });
     expect(interruptions).toEqual(['timeout']);
     await expect(readFile(error.logPath, 'utf8')).resolves.toContain('[status]');
+  });
+
+  it('returns after the timeout when a launcher descendant keeps inherited stdout open', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack timeout descendant-'));
+    temporaryRoots.push(root);
+    const shimDirectory = await prepareShim(root, 'dsh');
+    const cwd = join(root, 'work');
+    const dshHome = join(root, 'dsh-home');
+    const launcherPidPath = join(root, 'owned-launcher.pid');
+    const descendantPidPath = join(root, 'owned-descendant.pid');
+    await mkdir(cwd, { recursive: true });
+    const timeout = 1_000;
+    let run: Promise<unknown> | undefined;
+
+    try {
+      run = runDsh(['--version'], {
+        cwd,
+        dshHome,
+        env: {
+          DSHPACK_NODE_EXE: process.execPath,
+          DSHPACK_SHIM_DESCENDANT_PID_PATH: descendantPidPath,
+          DSHPACK_SHIM_HOLD_STDIO: 'launcher',
+          DSHPACK_SHIM_HOLD_STDIO_MS: '8000',
+          DSHPACK_SHIM_LAUNCHER_PID_PATH: launcherPidPath,
+          PATH: isolatedPath(shimDirectory),
+        },
+        timeout,
+      });
+      void run.catch(() => undefined);
+      await waitForFile(descendantPidPath, timeout);
+      const startedAt = performance.now();
+      const error = await Promise.race([
+        run.then(
+          () => new Error('expected runDsh to reject after timing out'),
+          (reason: unknown) => reason,
+        ),
+        delay(timeout + 2_000).then(() => {
+          throw new Error('independent safety valve: runDsh did not settle after its timeout');
+        }),
+      ]);
+
+      expect(performance.now() - startedAt).toBeLessThan(timeout + 750);
+      expect(error).toBeInstanceOf(DshProcessError);
+      expect(error).toMatchObject({ timedOut: true, interruptionReason: 'timeout' });
+    } finally {
+      await terminateOwnedProcess(launcherPidPath);
+      await terminateOwnedProcess(descendantPidPath);
+      if (run !== undefined) await Promise.race([run.catch(() => undefined), delay(1_000)]);
+    }
   });
 });

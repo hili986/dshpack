@@ -2,6 +2,7 @@ import { join } from 'node:path';
 
 import { execa } from 'execa';
 
+import { awaitDirectChild } from '../adapters/process.js';
 import type {
   InstallSubprocessResult,
   LifecycleScriptPolicy,
@@ -75,7 +76,7 @@ const defaultSpawn: PathSpawn = async (command, args, options) => {
   // With shell:false, spawning the former can fail before Node considers PATHEXT, so choose
   // the command shim explicitly while preserving argv-based, direct-child execution.
   const executable = process.platform === 'win32' ? `${command}.cmd` : command;
-  const result = await execa(executable, [...args], options);
+  const result = await awaitDirectChild(execa(executable, [...args], options), options.timeout);
   return {
     exitCode: result.exitCode,
     stdout: result.stdout,

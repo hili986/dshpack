@@ -11,6 +11,18 @@ vi.mock('../src/adapters/process.js', () => {
     readonly logPath = 'forbidden-default.log';
   }
   return {
+    awaitDirectChild: async (
+      child: Promise<{ exitCode: number; stdout: string; stderr?: string }>,
+    ) => {
+      const result = await child;
+      return {
+        exitCode: result.exitCode,
+        failure: undefined,
+        stderr: result.stderr ?? '',
+        stdout: result.stdout,
+        timedOut: false,
+      };
+    },
     DshProcessError,
     runDsh: async () => {
       processState.defaultCalls += 1;

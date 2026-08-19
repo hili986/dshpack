@@ -3,7 +3,7 @@ import { access, mkdir, stat, writeFile } from 'node:fs/promises';
 import { delimiter, join, resolve } from 'node:path';
 
 import { redactSecrets } from '@dshpack/core';
-import { execa } from 'execa';
+import { execa, type Options, type ResultPromise } from 'execa';
 
 export interface ProcessAdapter {
   readonly argv: readonly string[];
@@ -79,8 +79,17 @@ interface InvocationAttempt {
   timedOut: boolean;
 }
 
+export interface DirectChildCompletion {
+  exitCode: number;
+  failure: unknown;
+  stderr: string;
+  stdout: string;
+  timedOut: boolean;
+}
+
 const slowPathMessage =
   '未在 PATH 中找到 dsh，改用 npx --yes @deepseek-ai/dsh（首次运行可能较慢）。';
+const directChildTimeoutGrace = 250;
 let logSequence = 0;
 
 function stringProperty(value: unknown, property: string): string {
@@ -98,6 +107,93 @@ function numberProperty(value: unknown, property: string): number | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
   const candidate = Reflect.get(value, property);
   return typeof candidate === 'number' ? candidate : undefined;
+}
+
+function unrefProcessHandle(value: unknown): void {
+  if (typeof value !== 'object' || value === null) return;
+  const unref = Reflect.get(value, 'unref');
+  if (typeof unref !== 'function') return;
+  try {
+    unref.call(value);
+  } catch {
+    // A closed stream may reject unref. Timeout completion must remain non-blocking.
+  }
+}
+
+/**
+ * Await one direct Execa child without making its descendants an interruption target.
+ * The local guard settles even when a descendant retains an inherited output pipe after Execa's
+ * own timeout has terminated the direct child.
+ */
+export async function awaitDirectChild<OptionsType extends Options>(
+  child: ResultPromise<OptionsType>,
+  timeout: number,
+  onTimeout?: () => void,
+): Promise<DirectChildCompletion> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const appendStdout = (chunk: string | Uint8Array): void => {
+    stdoutChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+  };
+  const appendStderr = (chunk: string | Uint8Array): void => {
+    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+  };
+  child.stdout?.on('data', appendStdout);
+  child.stderr?.on('data', appendStderr);
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const childCompletion = child.then(
+      (result): DirectChildCompletion => {
+        const timedOut = booleanProperty(result, 'timedOut');
+        if (timedOut) onTimeout?.();
+        return {
+          exitCode: numberProperty(result, 'exitCode') ?? 1,
+          failure: undefined,
+          stderr: typeof result.stderr === 'string' ? result.stderr : '',
+          stdout: typeof result.stdout === 'string' ? result.stdout : '',
+          timedOut,
+        };
+      },
+      (failure): DirectChildCompletion => {
+        const timedOut = booleanProperty(failure, 'timedOut');
+        if (timedOut) onTimeout?.();
+        return {
+          exitCode: numberProperty(failure, 'exitCode') ?? 1,
+          failure,
+          stderr: stringProperty(failure, 'stderr'),
+          stdout: stringProperty(failure, 'stdout'),
+          timedOut,
+        };
+      },
+    );
+    if (timeout <= 0) return await childCompletion;
+    const timeoutCompletion = new Promise<DirectChildCompletion>((resolveTimeout) => {
+      timeoutTimer = setTimeout(() => {
+        onTimeout?.();
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // Execa may expose an already-closed direct child; do not wait for its descendants.
+        }
+        // Inherited pipes must not keep the CLI event loop alive after the timeout returns.
+        unrefProcessHandle(child.nodeChildProcess);
+        unrefProcessHandle(child.stdout);
+        unrefProcessHandle(child.stderr);
+        resolveTimeout({
+          exitCode: 1,
+          failure: new Error('subprocess timed out before its inherited output closed'),
+          stderr: stderrChunks.join(''),
+          stdout: stdoutChunks.join(''),
+          timedOut: true,
+        });
+      }, timeout + directChildTimeoutGrace);
+    });
+    return await Promise.race([childCompletion, timeoutCompletion]);
+  } finally {
+    if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
+    child.stdout?.off('data', appendStdout);
+    child.stderr?.off('data', appendStderr);
+  }
 }
 
 function isMissingCommand(error: unknown): boolean {
@@ -250,29 +346,18 @@ export async function runDsh(
     });
     activeChild = child;
     try {
-      const result = await child;
+      const result = await awaitDirectChild(child, options.timeout, () =>
+        markInterrupted('timeout'),
+      );
       return {
         args: commandArgs,
         command,
-        exitCode: result.exitCode ?? 0,
-        failure: undefined,
+        exitCode: result.exitCode,
+        failure: result.failure,
         launcher,
-        stderr: typeof result.stderr === 'string' ? result.stderr : '',
-        stdout: typeof result.stdout === 'string' ? result.stdout : '',
-        timedOut: false,
-      };
-    } catch (failure) {
-      const timedOut = booleanProperty(failure, 'timedOut');
-      if (timedOut) markInterrupted('timeout');
-      return {
-        args: commandArgs,
-        command,
-        exitCode: numberProperty(failure, 'exitCode') ?? 1,
-        failure,
-        launcher,
-        stderr: stringProperty(failure, 'stderr'),
-        stdout: stringProperty(failure, 'stdout'),
-        timedOut,
+        stderr: result.stderr,
+        stdout: result.stdout,
+        timedOut: result.timedOut,
       };
     } finally {
       if (activeChild === child) activeChild = undefined;
