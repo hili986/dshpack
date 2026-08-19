@@ -103,6 +103,10 @@ async function collect(root: string, output: string): Promise<SourceFile[]> {
 function scan(files: readonly SourceFile[]): Diagnostic[] {
   return files.flatMap(({ bytes, path }) =>
     scanSecrets({ path, content: Buffer.from(bytes).toString('utf8') }).filter(
+      // pack.lock.yml necessarily contains base64 SRI hashes, which trip the entropy heuristic on
+      // every pack. They are digest-checked independently, so only that one heuristic is waived —
+      // and only for that one file. Every pattern-based rule still applies, so a real token
+      // written into the lock is still a hit. `validate-pack.ts` waives it the same way.
       ({ code }) => !(path === 'pack.lock.yml' && code === 'E_SECRET_HIGH_ENTROPY'),
     ),
   );

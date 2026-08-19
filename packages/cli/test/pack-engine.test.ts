@@ -153,6 +153,64 @@ describe('packDirectory', () => {
     await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('records a manifest digest that matches the bytes actually packed, for every entry', async () => {
+    const { root, output } = await packFixture();
+    const report = await packDirectory({ directory: root, output });
+    expect(report.exitCode).toBe(EXIT_CODES.SUCCESS);
+
+    const manifest = JSON.parse(await readFile(report.metadata.manifest as string, 'utf8')) as {
+      files: readonly { path: string; sha256: string }[];
+    };
+
+    // manifest.json is the audit record — the thing that lets someone check which bytes went
+    // into the archive. Asserting the digests are strings only proves the field exists; it would
+    // pass just as happily if every entry carried the digest of an empty buffer. Recompute each
+    // one from the source file instead.
+    expect(manifest.files.length).toBeGreaterThan(0);
+    for (const { path, sha256: recorded } of manifest.files) {
+      const bytes = await readFile(join(root, ...path.split('/')));
+      expect({ path, sha256: recorded }).toEqual({
+        path,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      });
+    }
+  });
+
+  it('waives only the entropy heuristic for pack.lock.yml, never a pattern-matched token', async () => {
+    const { root, output } = await packFixture();
+    const lock = join(root, 'pack.lock.yml');
+    // The lock legitimately carries base64 SRI digests, so the entropy heuristic is waived for
+    // this one file. Widening that waiver to every rule would let a real credential ride along
+    // inside an artifact whose whole selling point is being auditable.
+    //
+    // Validation must be injected as successful, and the token written during the collect phase:
+    // `validate-pack.ts` keeps its own copy of this waiver and would otherwise catch the token
+    // first, leaving this test green no matter what `pack` itself does. Appending the token as a
+    // YAML comment keeps the document parseable so the only possible failure is the secret scan.
+    const report = await packDirectory(
+      { directory: root, output },
+      {
+        validate: async () => ({
+          diagnostics: [],
+          exitCode: EXIT_CODES.SUCCESS,
+          metadata: { source: root, valid: true },
+        }),
+        onScanPhase: async (phase) => {
+          if (phase === 'collect')
+            await writeFile(
+              lock,
+              `${await readFile(lock, 'utf8')}# token ghp_1234567890abcdefghijklmnop\n`,
+              'utf8',
+            );
+        },
+      },
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SECURITY);
+    expect(report.diagnostics.some(({ code }) => code.startsWith('E_SECRET'))).toBe(true);
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('fails closed when strict validation or collection fails', async () => {
     const { root, output } = await packFixture();
     const validation = await packDirectory(
