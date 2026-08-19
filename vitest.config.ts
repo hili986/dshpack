@@ -22,21 +22,22 @@ export default defineConfig({
     // fails, 15s later — and it removes a class of flake that was about to spread from one
     // test to its neighbours. Per-file overrides stay available for anything slower.
     //
-    // 2026-08-19, second raise, this time with measurements instead of a guess. Three
-    // update-engine cases and one restore-engine case still crossed the 20s/30s marks on
-    // windows-latest. Timed in isolation locally — directly comparable, since `maxWorkers: 1`
-    // makes both runs serial:
+    // 2026-08-19, second raise. It was made for four windows-latest failures, but only one of
+    // them was actually a timing problem — recorded here because the first version of this
+    // comment claimed all four were, and that reading is wrong:
     //
-    //   update    "does not make a user-edited unselected skill uninstall-owned"  1951ms
-    //   update    "keeps an intact unselected skill uninstall-owned"              2252ms
-    //   restore   "restores only absent settings keys ... every conflict form"    6490ms
+    //   restore  "restores only absent settings keys ... every conflict form"  6490ms local
     //
-    // Roughly 10x under the runner's budget, against 20-34x for the cases that Defender
-    // exclusion just fixed. That remaining gap is cold small-file I/O on a slower volume,
-    // not a block: the work completes, it is simply expensive. With no parallelism left to
-    // tune, the honest options are a faster volume (the workflow now points TMP at the D:
-    // drive) and a budget that reflects the real cost. 6.5s of genuine work does not fit a
-    // 20s ceiling on hardware several times slower.
+    // 6.5s of genuine work against a 20s ceiling is a ~3x margin, which cold small-file I/O on
+    // a slower volume eats. That case is why the ceiling is 60s, and it passed after the raise.
+    //
+    // The other three (update-engine) measured 1951ms and 2252ms locally and were never slow.
+    // They consumed exactly whatever ceiling was offered — 20s under a 20s limit, then 60407ms
+    // and 60460ms under this one — which is the signature of a block, not of expense. Their
+    // cause was separate: an uninstall probe reached the real doctor, which falls back to
+    // `npx --yes @deepseek-ai/dsh` when `dsh` is absent from PATH, and that spawn cannot honour
+    // its own 5s timeout while `killDescendants: false` leaves a grandchild holding the pipes.
+    // Raising a ceiling never helps that shape, and the number above is not evidence for it.
     //
     // This still catches deadlocks — one minute later — and the job's own 30-minute cap is
     // the real backstop.

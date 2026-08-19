@@ -60,6 +60,21 @@ jobs:
           Add-MpPreference -ExclusionPath "${{ github.workspace }}", "${{ runner.temp }}", "$env:TEMP"
           Add-MpPreference -ExclusionProcess node.exe, pnpm.exe, powershell.exe
 
+      # `safe-fs` asserts that a root spelled as its 8.3 alias is accepted rather than mistaken
+      # for a symlink, which is a real Windows path-security property and was a real bug once.
+      # Building that input requires the volume to generate 8.3 names, and every non-system
+      # volume has that off by default — so pointing the suite's temp at D: (below) took the
+      # test's input away. Turning it on for the runner's scratch volume keeps the assertion
+      # running for real instead of degrading it to a skip. Scoped to an ephemeral runner.
+      - name: Enable 8.3 name generation on the runner temp volume
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $volume = Split-Path -Qualifier "${{ runner.temp }}"
+          fsutil 8dot3name set $volume 0
+          fsutil 8dot3name query $volume
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

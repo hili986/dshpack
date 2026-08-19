@@ -11,7 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -89,8 +89,18 @@ describe('secure root ancestors', () => {
       // differs from the one we created the directory with. Without it the test would
       // pass while testing nothing, since 8.3 generation can be turned off machine-wide.
       // Stated against realpath so it holds even when TEMP is itself an aliased path.
-      expect(short).not.toBe(await realpath(short));
-      expect(await realpath(short)).toBe(await realpath(long));
+      const canonical = await realpath(short);
+      if (short === canonical)
+        // `%~sI` echoes its input unchanged when the volume generates no 8.3 names, which is
+        // the default for every non-system volume. That is a missing input, not a passing
+        // assertion, and it is why pointing the suite's TEMP at the runner's D: scratch volume
+        // broke this test. Say so with the command that fixes it rather than reporting
+        // `expected X not to be X`, which names neither the cause nor the remedy.
+        throw new Error(
+          `8.3 name generation is disabled on the volume holding ${long}, so this test has no ` +
+            `alias to check. Enable it with: fsutil 8dot3name set ${parse(long).root} 0`,
+        );
+      expect(canonical).toBe(await realpath(long));
 
       // The old check compared this spelling against its realpath and called the
       // difference a symlink ancestor, refusing an ordinary home outright.

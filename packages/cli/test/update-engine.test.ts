@@ -16,6 +16,29 @@ import { updateProfile } from '../src/update/engine.js';
 import { removeFixtureDirectory } from './fixture-cleanup.js';
 import { enginePack, fakeRuntime, snapshot } from './install-engine-fixture.js';
 
+// The subject of this file is update semantics; the `uninstallProfile` calls below are probes
+// that ask "what does uninstall do with the ownership this update recorded?". Uninstall ends by
+// running doctor to verify the state it left, and doctor resolves `dsh --version` — falling back
+// to `npx --yes @deepseek-ai/dsh` when `dsh` is absent from PATH. That makes an update unit test
+// download a package over the network, which is why the three probes below consumed whatever
+// per-test ceiling CI offered (20s at a 20s limit, 60s at a 60s limit) on a runner with no `dsh`.
+// `uninstall-engine.test.ts` already stubs doctor the same way for the same reason.
+//
+// This hides no defect: the underlying hang — `timeout` cannot be enforced when the killed child
+// leaves a grandchild holding the stdio pipes, because `killDescendants: false` forbids tree
+// kills — is tracked as its own fix with its own regression test. It does not belong to update.
+vi.mock('../src/doctor/engine.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/doctor/engine.js')>();
+  return {
+    ...actual,
+    runDoctor: async () => ({
+      diagnostics: [],
+      exitCode: EXIT_CODES.SUCCESS,
+      metadata: { sideEffects: [] },
+    }),
+  };
+});
+
 const homes = new Set<string>();
 
 async function home(): Promise<string> {
