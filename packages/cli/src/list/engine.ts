@@ -36,6 +36,8 @@ export interface ListInput {
   dshHome: string;
 }
 
+export type ListReport = CommandReport<ListMetadata>;
+
 function commandFailure(
   code: string,
   message: string,
@@ -74,7 +76,7 @@ async function profileManifest(
   return result.kind === 'missing' ? 'absent' : 'refused';
 }
 
-export async function listProfiles(input: ListInput): Promise<CommandReport<ListMetadata>> {
+export async function listProfiles(input: ListInput): Promise<ListReport> {
   const resolution = resolveDshHomeValue(input.dshHome);
   if (!resolution.ok) {
     const item = resolution.report.diagnostics[0] as NonNullable<

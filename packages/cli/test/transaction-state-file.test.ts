@@ -886,6 +886,33 @@ describe('transaction binary state files', () => {
     await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('fails closed when a state adapter cannot verify binary output after writing', async () => {
+    const dshHome = await home();
+    const bytes = Buffer.from('state capability seal');
+    const path = storePath(dshHome, bytes);
+    const base = createNodeTransactionAdapter();
+    const { readBytesIfExists: _readBytesIfExists, ...withoutPostwriteReader } = base;
+
+    const result = await runTransaction(
+      {
+        adapter: withoutPostwriteReader,
+        dshHome,
+        txid: 'state-no-postwrite-reader',
+      },
+      async (transaction) => transaction.writeStateFile('store-block', path, bytes),
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 25,
+      status: 'rollback-failed',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_TRANSACTION_STATE_ADAPTER' }),
+      ]),
+    });
+    expect(result.manualRecovery.some((step) => step.sourcePath === path)).toBe(true);
+    expect(await readFile(path)).toEqual(bytes);
+  });
+
   it('requires manual recovery if an adapter throws after it has created a binary state file', async () => {
     const dshHome = await home();
     const bytes = Buffer.from([0, 255, 1, 0, 128]);
@@ -1721,6 +1748,55 @@ describe('transaction binary state files', () => {
       diagnostics: [{ code: 'E_TRANSACTION_GENERATION_CURRENT_CHANGED' }],
     });
     expect(await readFile(current, 'utf8')).toBe('1\n');
+  });
+
+  it('fails closed when bounded document CAS capabilities are absent', async () => {
+    const dshHome = await home();
+    const current = join(dshHome, '.dshpack', 'generations', 'demo-pack', 'current');
+    const marker = join(dshHome, '.dshpack', 'installed', 'demo-pack.json');
+    await mkdir(dirname(current), { recursive: true });
+    await writeFile(current, '1\n');
+    const base = createNodeTransactionAdapter();
+    const {
+      compareAndSwapGenerationCurrent: _compareAndSwapGenerationCurrent,
+      ...withoutGenerationCurrentWriter
+    } = base;
+    const {
+      compareAndSwapManagedDocument: _compareAndSwapManagedDocument,
+      ...withoutManagedDocumentWriter
+    } = base;
+
+    const currentResult = await runTransaction(
+      {
+        adapter: withoutGenerationCurrentWriter,
+        dshHome,
+        txid: 'current-no-cas-capability',
+      },
+      async (transaction) => transaction.writeGenerationCurrent(current, '1\n', '2\n'),
+    );
+    expect(currentResult).toMatchObject({
+      exitCode: 25,
+      status: 'rollback-failed',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_TRANSACTION_STATE_ADAPTER' }),
+      ]),
+    });
+
+    const markerResult = await runTransaction(
+      {
+        adapter: withoutManagedDocumentWriter,
+        dshHome,
+        txid: 'marker-no-cas-capability',
+      },
+      async (transaction) => transaction.writeManagedDocument(marker, '{"metadataVersion":1}\n'),
+    );
+    expect(markerResult).toMatchObject({
+      exitCode: 25,
+      status: 'rollback-failed',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ code: 'E_TRANSACTION_STATE_ADAPTER' }),
+      ]),
+    });
   });
 
   it('restores a transaction-bound deleted generation current pointer on rollback', async () => {

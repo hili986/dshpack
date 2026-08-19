@@ -14,6 +14,7 @@ import { registerRestoreCommand, restoreCommand } from './commands/restore.js';
 import { diagnostic, writeReport } from './commands/shared.js';
 import { registerStatusCommand, statusCommand } from './commands/status.js';
 import { registerSwitchCommand, switchCommand } from './commands/switch.js';
+import { registerUiCommand, uiCommand } from './commands/ui.js';
 import { registerUninstallCommand, uninstallCommand } from './commands/uninstall.js';
 import { registerUpdateCommand, updateCommand } from './commands/update.js';
 import { registerValidateCommand, validateCommand } from './commands/validate.js';
@@ -38,6 +39,7 @@ const commandDefinitions = [
   initCommand,
   packCommand,
   composeCommand,
+  uiCommand,
 ] as const;
 
 export const COMMAND_NAMES = commandDefinitions.map(({ name }) => name);
@@ -69,6 +71,7 @@ export function createProgram(): Command {
   registerInitCommand(program);
   registerPackCommand(program);
   registerComposeCommand(program);
+  registerUiCommand(program);
 
   return program;
 }

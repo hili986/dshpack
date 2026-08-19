@@ -38,6 +38,8 @@ export interface SwitchMetadata {
   effect?: 'new-session';
 }
 
+export type SwitchReport = CommandReport<SwitchMetadata>;
+
 export interface SwitchRuntime {
   isTTY: boolean;
   showDiff(diff: string): void;
@@ -262,7 +264,7 @@ async function setDefaultPreset(
 export async function switchProfile(
   input: SwitchInput,
   runtime: SwitchRuntime = nodeSwitchRuntime,
-): Promise<CommandReport<SwitchMetadata>> {
+): Promise<SwitchReport> {
   if (input.run === true && input.json === true)
     return report(
       input,

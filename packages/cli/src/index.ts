@@ -51,12 +51,27 @@ export {
   packCommand,
   registerPackCommand,
 } from './commands/pack.js';
+export type { CommandReport } from './commands/shared.js';
 export {
   registerStatusCommand,
   type StatusRunner,
   type StatusRuntimeFactory,
   statusCommand,
 } from './commands/status.js';
+export {
+  openUiBrowser,
+  registerUiCommand,
+  type UiBrowserChild,
+  type UiBrowserOpener,
+  type UiBrowserRuntime,
+  type UiCommandDependencies,
+  type UiCommandServerHandle,
+  type UiCommandServerOptions,
+  type UiServerStarter,
+  type UiShutdownSignal,
+  type UiSignalRuntime,
+  uiCommand,
+} from './commands/ui.js';
 export {
   registerUpdateCommand,
   type UpdateRunner,
@@ -80,7 +95,21 @@ export {
   diffProfile,
   type EffectiveMismatch,
 } from './diff/engine.js';
+export {
+  type DoctorDependencies,
+  type DoctorInput,
+  type DoctorMetadata,
+  type DoctorReport,
+  runDoctor,
+} from './doctor/engine.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
+export {
+  type GcDependencies,
+  type GcInput,
+  type GcMetadata,
+  type GcReport,
+  runGc,
+} from './gc/engine.js';
 export {
   type InitDependencies,
   type InitInput,
@@ -109,6 +138,29 @@ export type {
   InstallPreflightResult,
 } from './install/types.js';
 export {
+  type ListedProfile,
+  type ListInput,
+  type ListMetadata,
+  type ListReport,
+  listProfiles,
+  type ProfileStatus,
+} from './list/engine.js';
+export {
+  generateAndWriteLock,
+  generateLock,
+  type LockInput,
+  type LockMetadata,
+  type LockOptions,
+  type LockReport,
+} from './lock/engine.js';
+export {
+  type MigrateInput,
+  type MigrateMetadata,
+  type MigrateReport,
+  type MigrateRuntime,
+  migrateProfile,
+} from './migrate/engine.js';
+export {
   type PackedFile,
   type PackInput,
   type PackMetadata,
@@ -119,6 +171,7 @@ export {
   type RestoreDependencies,
   type RestoreInput,
   type RestoreMetadata,
+  type RestoreReport,
   restoreProfile,
 } from './restore/engine.js';
 export {
@@ -128,11 +181,61 @@ export {
   type StatusReport,
   statusProfiles,
 } from './status/engine.js';
+export {
+  nodeSwitchRuntime,
+  type SwitchInput,
+  type SwitchMetadata,
+  type SwitchReport,
+  type SwitchRuntime,
+  switchProfile,
+} from './switch/engine.js';
 export * from './transaction.js';
+export {
+  startUiServer,
+  type UiServerEngineRegistry,
+  type UiServerEngineReport,
+  type UiServerHandle,
+  type UiServerOptions,
+  type UiServerReadInvocation,
+  type UiServerWriteInvocation,
+} from './ui/server.js';
+export type {
+  UiApplyRequest,
+  UiDangerousPermission,
+  UiDiffInput,
+  UiDiffRequest,
+  UiDoctorInput,
+  UiDoctorRequest,
+  UiGcInput,
+  UiGcRequest,
+  UiInstallInput,
+  UiInstallRequest,
+  UiJsonObject,
+  UiJsonPrimitive,
+  UiJsonValue,
+  UiListInput,
+  UiListRequest,
+  UiPlanRequest,
+  UiReadRequest,
+  UiRequest,
+  UiResponse,
+  UiResponseMetadata,
+  UiRestoreInput,
+  UiRestoreRequest,
+  UiStatusInput,
+  UiStatusRequest,
+  UiUninstallInput,
+  UiUninstallRequest,
+  UiUpdateInput,
+  UiUpdateRequest,
+  UiWriteOperation,
+  UiWriteRequest,
+} from './ui/wire.js';
 export {
   type UninstallDependencies,
   type UninstallInput,
   type UninstallMetadata,
+  type UninstallReport,
   uninstallProfile,
 } from './uninstall/engine.js';
 export {

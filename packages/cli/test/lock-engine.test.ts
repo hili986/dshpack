@@ -216,6 +216,40 @@ describe('handwritten pack lock generation', () => {
     expect(result.lockText).toContain('generatedAt: 1970-01-01T00:00:00Z');
   });
 
+  it('skips ignored dependency trees while collecting semantic pack files', async () => {
+    const root = await makePack();
+    await mkdir(join(root, 'node_modules', 'untrusted'), { recursive: true });
+    await writeFile(
+      join(root, 'node_modules', 'untrusted', 'package.json'),
+      '{not yaml}\n',
+      'utf8',
+    );
+
+    const result = await generateLock(root);
+
+    expect(result).toMatchObject({ exitCode: 0, diagnostics: [] });
+    expect(result.lockText).not.toContain('node_modules');
+  });
+
+  it('uses the process environment only when no environment override is supplied', async () => {
+    const root = await makePack([
+      { name: 'fixture-bundle', source: { kind: 'npm', range: '1.0.0' }, allowBuilds: false },
+    ]);
+    const shimEnvironment = await writeDshShim(await temporary());
+    const originalPath = process.env.PATH;
+    process.env.PATH = shimEnvironment.PATH;
+    try {
+      const result = await generateLock(root, { dshHome: join(root, '.isolated-home') });
+      expect(result).toMatchObject({
+        exitCode: 30,
+        diagnostics: [expect.objectContaining({ code: 'E_LOCK_PACKAGE_FACTS' })],
+      });
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
   it('cleans its generated in-pack temporary DSH_HOME after a plugin lock attempt', async () => {
     const root = await makePack([
       { name: 'fixture-bundle', source: { kind: 'npm', range: '1.0.0' }, allowBuilds: false },

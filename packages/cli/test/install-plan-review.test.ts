@@ -306,6 +306,29 @@ describe('install plan review mutants', () => {
     expect(result.diagnostics[0]).toMatchObject({ code });
   });
 
+  it('rejects an unsupported pnpm and a tampered target-before-state digest before planning', async () => {
+    const root = await fixture();
+    const base = input(root);
+
+    const unsupportedPnpm = await prepareInstallPlan({
+      ...base,
+      environment: { ...base.environment, pnpmVersion: '9.9.0' },
+    });
+    expect(unsupportedPnpm).toMatchObject({
+      exitCode: 10,
+      diagnostics: [expect.objectContaining({ code: 'E_PNPM_VERSION_UNSUPPORTED' })],
+    });
+
+    const tamperedState = await prepareInstallPlan({
+      ...base,
+      environment: { ...base.environment, targetBeforeStateDigest: 'sha256-tampered' },
+    });
+    expect(tamperedState).toMatchObject({
+      exitCode: 30,
+      diagnostics: [expect.objectContaining({ code: 'E_BEFORE_STATE_DIGEST' })],
+    });
+  });
+
   it('rejects a junction in a SOURCE ancestor before validator execution', async () => {
     const target = await fixture();
     const parent = await mkdtemp(join(target, '..', 'dshpack-junction-parent-'));

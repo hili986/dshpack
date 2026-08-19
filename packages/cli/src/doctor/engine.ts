@@ -33,7 +33,9 @@ import {
   versionAtLeast,
 } from './support.js';
 
-export type { DoctorInput, DoctorMetadata } from './support.js';
+export type { DoctorDependencies, DoctorInput, DoctorMetadata } from './support.js';
+
+export type DoctorReport = CommandReport<DoctorMetadata>;
 
 function doctorExit(diagnostics: readonly Diagnostic[]): ExitCode {
   if (!diagnostics.some(({ severity }) => severity === 'error')) return EXIT_CODES.SUCCESS;
@@ -94,7 +96,7 @@ async function fixSkillName(
 export async function runDoctor(
   input: DoctorInput,
   dependencies: DoctorDependencies = {},
-): Promise<CommandReport<DoctorMetadata>> {
+): Promise<DoctorReport> {
   const diagnostics: Diagnostic[] = [];
   const runDsh = dependencies.runDsh ?? defaultRunDsh;
   const nodeVersion = input.nodeVersion ?? process.versions.node;

@@ -46,6 +46,7 @@ rollback snapshot: enabled=true state=sha256-bSGmM1FiexZIOjjfdgjsYA14kw8egAI8O58
 | `uninstall <profile>` | 卸载；**归属无法证明的内容一律保留** |
 | `gc` / `migrate` | 回收无引用的块与过期代际 / 把 legacy metadata 升到 v1 |
 | `doctor` | 体检 DSH_HOME（**会写**，`--json` 的 `sideEffects` 列出归属） |
+| `ui` | 启动仅监听 `127.0.0.1` 的本机管理服务；stdout URL 含本次启动 token |
 
 **做一个 pack 出来**
 

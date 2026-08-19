@@ -100,6 +100,8 @@ export interface RestoreMetadata {
   readonly manualRecovery: readonly unknown[];
 }
 
+export type RestoreReport = CommandReport<RestoreMetadata>;
+
 export interface RestoreDependencies {
   readonly createAdapter?: () => TransactionAdapter;
   readonly createTxid?: () => string;
@@ -1149,7 +1151,7 @@ async function verifyPostRestore(
 export async function restoreProfile(
   input: RestoreInput,
   dependencies: RestoreDependencies = {},
-): Promise<CommandReport<RestoreMetadata>> {
+): Promise<RestoreReport> {
   const resolution = resolveDshHomeValue(input.dshHome);
   if (!resolution.ok) return { ...resolution.report, metadata: metadata(input) };
   const normalized = { ...input, dshHome: resolution.value };

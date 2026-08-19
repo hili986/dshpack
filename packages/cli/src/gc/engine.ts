@@ -73,6 +73,8 @@ export interface GcMetadata {
   manualRecovery: readonly unknown[];
 }
 
+export type GcReport = CommandReport<GcMetadata>;
+
 interface PlannedStateFile {
   path: string;
   relative: string;
@@ -1228,10 +1230,7 @@ function lockedScanFailure(error: unknown): never {
   throw error;
 }
 
-export async function runGc(
-  input: GcInput,
-  dependencies: GcDependencies = {},
-): Promise<CommandReport<GcMetadata>> {
+export async function runGc(input: GcInput, dependencies: GcDependencies = {}): Promise<GcReport> {
   const resolution = resolveDshHomeValue(input.dshHome);
   if (!resolution.ok) {
     return {

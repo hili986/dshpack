@@ -103,6 +103,8 @@ export interface UninstallMetadata {
   readonly manualRecovery: readonly unknown[];
 }
 
+export type UninstallReport = CommandReport<UninstallMetadata>;
+
 export interface UninstallDependencies {
   readonly createAdapter?: () => TransactionAdapter;
   readonly createTxid?: () => string;
@@ -1300,7 +1302,7 @@ async function verifyPostUninstall(
 export async function uninstallProfile(
   input: UninstallInput,
   dependencies: UninstallDependencies = {},
-): Promise<CommandReport<UninstallMetadata>> {
+): Promise<UninstallReport> {
   const resolution = resolveDshHomeValue(input.dshHome);
   if (!resolution.ok) return { ...resolution.report, metadata: metadataReport(input) };
   const normalized = { ...input, dshHome: resolution.value };

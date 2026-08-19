@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import type { PackLockedPlugin, PluginDeclaration } from '@dshpack/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { stagePluginTarballDownload } from '../src/install/plugin-download.js';
+import {
+  resolvePluginTarball,
+  stagePluginTarballDownload,
+} from '../src/install/plugin-download.js';
 
 const roots: string[] = [];
 const plugin: PluginDeclaration = {
@@ -151,6 +154,21 @@ describe('secure plugin tarball download', () => {
         stagePluginTarballDownload(declaration, locked, await parent(), { download: requested }),
       ).rejects.toMatchObject({ code: 'E_PLUGIN_LOCK', exitCode: 20 });
     }
+    expect(requested).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-tarball request before creating a resolver workspace or requesting bytes', async () => {
+    const requested = vi.fn();
+    const npmPlugin: PluginDeclaration = {
+      name: plugin.name,
+      source: { kind: 'npm', range: '1.0.0' },
+      allowBuilds: false,
+    };
+
+    await expect(resolvePluginTarball(npmPlugin, { download: requested })).rejects.toMatchObject({
+      code: 'E_PLUGIN_SOURCE',
+      exitCode: 20,
+    });
     expect(requested).not.toHaveBeenCalled();
   });
 

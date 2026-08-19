@@ -41,6 +41,8 @@ export interface LockOptions {
   env?: Readonly<NodeJS.ProcessEnv>;
 }
 
+export type LockInput = LockOptions;
+
 export interface LockReport extends CommandReport<LockMetadata> {
   lockText?: string;
 }
