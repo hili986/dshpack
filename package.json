@@ -22,6 +22,7 @@
     "verify:adr-text-encoding": "node scripts/verify-adr-text-encoding.mjs",
     "verify:readme-commands": "node scripts/verify-readme-commands.mjs",
     "verify:release-pack": "node scripts/verify-release-pack.mjs",
+    "verify:from-registry": "bash scripts/release-verification/verify-from-registry.sh",
     "pack:dry-run": "pnpm --filter @dshpack/core pack --dry-run && pnpm --filter dshpack pack --dry-run",
     "publint": "publint packages/core && publint packages/cli",
     "check": "pnpm --recursive build && pnpm typecheck && pnpm lint && pnpm verify:pack-schema && pnpm verify:adr-text-encoding && pnpm verify:readme-commands && pnpm test && pnpm test:e2e && pnpm pack:validate && pnpm compose:validate",
