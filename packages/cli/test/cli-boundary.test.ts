@@ -203,32 +203,29 @@ describe('JSON mode closure', () => {
   );
 
   it.each(['init', 'pack'] as const)(
-    'serializes the %s placeholder for root and child JSON placement',
+    'serializes the implemented %s command for root and child JSON placement',
     async (command) => {
       for (const args of [
-        ['--json', command],
-        [command, '--json'],
+        ['--json', command, ...(command === 'pack' ? ['missing-source'] : [])],
+        [command, '--json', ...(command === 'pack' ? ['missing-source'] : [])],
       ]) {
         const result = await capture(args);
-        expect(result).toMatchObject({ exitCode: 70, stderr: '' });
+        expect(result).toMatchObject({ exitCode: expect.any(Number), stderr: '' });
         expect(result.stdout.trim().split('\n')).toHaveLength(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          diagnostics: [expect.objectContaining({ code: 'E_NOT_IMPLEMENTED', severity: 'error' })],
-        });
+        expect(JSON.parse(result.stdout)).toEqual(
+          expect.objectContaining({ diagnostics: expect.any(Array) }),
+        );
         vi.restoreAllMocks();
       }
     },
   );
 
-  it.each(['init', 'pack'] as const)(
-    'reports the %s placeholder to stderr outside JSON mode',
-    async (command) => {
-      const result = await capture([command]);
+  it.each(['init', 'pack'] as const)('reports the %s result outside JSON mode', async (command) => {
+    const result = await capture([command, ...(command === 'pack' ? ['missing-source'] : [])]);
 
-      expect(result).toMatchObject({ exitCode: 70, stdout: '' });
-      expect(result.stderr).not.toBe('');
-    },
-  );
+    expect(result).toMatchObject({ exitCode: expect.any(Number), stdout: '' });
+    expect(result.stderr).not.toBe('');
+  });
 
   it.each([
     ['root', ['--json', 'install']],

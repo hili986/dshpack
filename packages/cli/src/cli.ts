@@ -3,12 +3,12 @@ import { diffCommand, registerDiffCommand } from './commands/diff.js';
 import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
 import { gcCommand, registerGcCommand } from './commands/gc.js';
-import { initCommand } from './commands/init.js';
+import { initCommand, registerInitCommand } from './commands/init.js';
 import { installCommand, registerInstallCommand } from './commands/install.js';
 import { listCommand, registerListCommand } from './commands/list.js';
 import { lockCommand, registerLockCommand } from './commands/lock.js';
 import { migrateCommand, registerMigrateCommand } from './commands/migrate.js';
-import { packCommand } from './commands/pack.js';
+import { packCommand, registerPackCommand } from './commands/pack.js';
 import { registerRestoreCommand, restoreCommand } from './commands/restore.js';
 import { diagnostic, writeReport } from './commands/shared.js';
 import { registerStatusCommand, statusCommand } from './commands/status.js';
@@ -40,31 +40,6 @@ const commandDefinitions = [
 
 export const COMMAND_NAMES = commandDefinitions.map(({ name }) => name);
 
-const NOT_IMPLEMENTED_MESSAGE = '未实现（W10+）';
-
-function reportNotImplemented(json: boolean): void {
-  if (!json) {
-    process.stderr.write(`${NOT_IMPLEMENTED_MESSAGE}\n`);
-    process.exitCode = EXIT_CODES.INTERNAL;
-    return;
-  }
-  writeReport(
-    {
-      diagnostics: [
-        diagnostic(
-          'E_NOT_IMPLEMENTED',
-          'error',
-          '该命令尚未实现。',
-          '请使用已实现的命令，或等待后续版本。',
-        ),
-      ],
-      exitCode: EXIT_CODES.INTERNAL,
-      metadata: {},
-    },
-    true,
-  );
-}
-
 export function createProgram(): Command {
   const program = new Command()
     .name('dshpack')
@@ -75,34 +50,6 @@ export function createProgram(): Command {
     .option('--quiet', '仅输出必要信息')
     .option('--json', '使用 JSON 输出');
 
-  for (const { description, name } of commandDefinitions) {
-    if (
-      name === 'validate' ||
-      name === 'doctor' ||
-      name === 'gc' ||
-      name === 'migrate' ||
-      name === 'export' ||
-      name === 'install' ||
-      name === 'list' ||
-      name === 'lock' ||
-      name === 'switch' ||
-      name === 'uninstall' ||
-      name === 'restore' ||
-      name === 'update' ||
-      name === 'diff' ||
-      name === 'status'
-    )
-      continue;
-    program
-      .command(name)
-      .description(description)
-      .option('--json', 'stdout only emits one JSON object')
-      .action((options: { json?: boolean }) =>
-        reportNotImplemented(
-          options.json === true || program.opts<{ json?: boolean }>().json === true,
-        ),
-      );
-  }
   registerValidateCommand(program);
   registerDoctorCommand(program);
   registerGcCommand(program);
@@ -117,6 +64,8 @@ export function createProgram(): Command {
   registerUpdateCommand(program);
   registerDiffCommand(program);
   registerStatusCommand(program);
+  registerInitCommand(program);
+  registerPackCommand(program);
 
   return program;
 }

@@ -129,6 +129,22 @@ describe('materializeSource', () => {
     await result.cleanup();
     await expect(access(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('requires SRI for file: tarballs and rejects a tampered archive', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'pack.tgz');
+    const bytes = archive();
+    await writeFile(source, bytes);
+
+    await expectSourceError(materialize(`file:${source}`), 20, 'SOURCE_INVALID');
+    const valid = await materialize(`file:${source}#${sri(bytes)}`);
+    expect(valid.provenance).toEqual({ kind: 'file', path: resolve(source), integrity: sri(bytes) });
+    await valid.cleanup();
+
+    const tampered = Buffer.from(bytes);
+    tampered[tampered.length - 1] = (tampered[tampered.length - 1] ?? 0) ^ 0xff;
+    await writeFile(source, tampered);
+    await expectSourceError(materialize(`file:${source}#${sri(bytes)}`), 20, 'SOURCE_INTEGRITY');
+  });
   it('propagates cleanup failure and retries removal', async () => {
     const root = await temporaryRoot(); const source = join(root, 'retry.dshpack.tgz'); const workspace = join(root, 'retry-temp'); await writeFile(source, archive());
     const removeTempDirectory = vi.fn().mockRejectedValueOnce(new Error('busy')).mockImplementation((path: string) => rm(path, { recursive: true, force: true }));

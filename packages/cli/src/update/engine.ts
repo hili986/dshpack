@@ -186,6 +186,8 @@ function sourceReview(preflight: UpdatePreflight): string {
       return 'validated https archive';
     case 'archive':
       return 'validated local archive';
+    case 'file':
+      return 'validated local archive with sha512 integrity';
     case 'directory':
       return 'validated local directory';
   }

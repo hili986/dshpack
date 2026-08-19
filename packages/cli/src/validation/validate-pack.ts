@@ -24,6 +24,7 @@ import {
 
 export interface ValidateOptions {
   strict?: boolean;
+  ignoredPaths?: readonly string[];
   /** Install default mode validates manifest/payload bytes but deliberately ignores stale locks. */
   lockPolicy?: 'required' | 'ignored';
 }
@@ -96,7 +97,10 @@ function statKind(stat: Awaited<ReturnType<typeof lstat>>): PackTreeEntry['stat'
   if (stat.isBlockDevice()) return 'block-device';
   return 'character-device';
 }
-async function inspectTree(root: string): Promise<TreeInspection> {
+async function inspectTree(
+  root: string,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): Promise<TreeInspection> {
   const diagnostics: Diagnostic[] = [];
   const entries: PackTreeEntry[] = [];
   const files: FileEntry[] = [];
@@ -139,7 +143,12 @@ async function inspectTree(root: string): Promise<TreeInspection> {
       const absolute = join(directory, name);
       const path = posixRelative(root, absolute);
       // Do not even lstat ignored entries: .git and node_modules can contain huge binary trees.
-      if (isIgnoredPackPath(path)) continue;
+      if (
+        isIgnoredPackPath(path) ||
+        ignoredPaths.has(path) ||
+        [...ignoredPaths].some((ignored) => path.startsWith(`${ignored}/`))
+      )
+        continue;
       const stat = await lstat(absolute);
       const kind = statKind(stat);
       entries.push({ path, stat: { kind, size: stat.size } });
@@ -362,7 +371,7 @@ export async function validateLocalPack(
     );
     return { diagnostics, exitCode: 70, metadata: { source, valid: false } };
   }
-  const inspected = await inspectTree(source);
+  const inspected = await inspectTree(source, new Set(options.ignoredPaths ?? []));
   diagnostics.push(...inspected.diagnostics);
   const paths = new Set(inspected.entries.map(({ path }) => path));
   const filePaths = new Set(inspected.files.map(({ path }) => path));

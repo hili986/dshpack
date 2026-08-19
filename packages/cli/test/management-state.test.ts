@@ -638,6 +638,7 @@ describe('tracked management state', () => {
   it.each([
     { kind: 'directory', path: resolve('packs', 'demo-pack') },
     { kind: 'archive', path: resolve('packs', 'demo-pack.tgz') },
+    { kind: 'file', path: resolve('packs', 'demo-pack.tgz'), integrity: sourceIntegrity },
     { kind: 'https', url: 'https://example.test/demo-pack.tgz', integrity: sourceIntegrity },
     {
       kind: 'github',

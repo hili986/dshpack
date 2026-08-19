@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -8,7 +9,12 @@ const { execaMock } = vi.hoisted(() => ({ execaMock: vi.fn() }));
 
 vi.mock('execa', () => ({ execa: execaMock }));
 
-import { DshProcessError, runDsh } from '../src/adapters/process.js';
+import {
+  awaitDirectChild,
+  DshProcessError,
+  environmentValue,
+  runDsh,
+} from '../src/adapters/process.js';
 
 interface FakeOutcome {
   stdout: string;
@@ -84,18 +90,89 @@ function pendingChild(): FakeChild {
   return Object.assign(new Promise<FakeOutcome>(() => undefined), { kill: vi.fn(() => true) });
 }
 
+function pendingChildWithStreams(unref: () => void = vi.fn()): {
+  child: FakeChild & {
+    nodeChildProcess: { unref: () => void };
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+  };
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+} {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const child = Object.assign(new Promise<FakeOutcome>(() => undefined), {
+    kill: vi.fn(() => true),
+    nodeChildProcess: { unref },
+    stdout,
+    stderr,
+  });
+  return { child, stdout, stderr };
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 afterEach(async () => {
   execaMock.mockReset();
+  vi.restoreAllMocks();
   await Promise.all(
     temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
 describe('runDsh', () => {
+  it('resolves process environment keys case-insensitively when the exact key is absent', () => {
+    expect(environmentValue(undefined, 'PATH', { Path: 'case-insensitive-path' })).toBe(
+      'case-insensitive-path',
+    );
+  });
+
+  it('uses an exact process environment key when no command override is provided', () => {
+    expect(environmentValue(undefined, 'PATH', { PATH: 'exact-process-path' })).toBe(
+      'exact-process-path',
+    );
+    expect(environmentValue({}, 'PATH', { PATH: 'exact-process-path' })).toBe('exact-process-path');
+  });
+
+  it('uses a case-insensitive PATH override when selecting the direct dsh launcher', async () => {
+    execaMock.mockReturnValue(resolvedChild({ stdout: 'ok', stderr: '', exitCode: 0 }));
+    const options = await makeOptions();
+    options.env = { Path: options.env?.PATH };
+
+    const result = await runDsh(['--version'], options);
+
+    expect(result.launcher).toBe('path');
+    expect(execaMock).toHaveBeenCalledExactlyOnceWith(
+      'dsh',
+      ['--version'],
+      expect.objectContaining({ shell: false }),
+    );
+  });
+
+  it('uses non-empty PATHEXT entries to find a Windows command suffix', async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    try {
+      execaMock.mockReturnValue(resolvedChild({ stdout: 'ok', stderr: '', exitCode: 0 }));
+      const options = await makeOptions();
+      options.env = { PATH: options.env?.PATH, PATHEXT: ';.cmd' };
+
+      const result = await runDsh(['--version'], options);
+
+      expect(result.launcher).toBe('path');
+      expect(execaMock).toHaveBeenCalledExactlyOnceWith(
+        'dsh',
+        ['--version'],
+        expect.objectContaining({ shell: false }),
+      );
+    } finally {
+      if (originalPlatform === undefined) Reflect.deleteProperty(process, 'platform');
+      else Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  });
+
   it('uses an argument array without a shell and writes only redacted child output to the log', async () => {
     const fakeToken = 'ghp_1234567890abcdefghijklmnop';
     const child = resolvedChild({
@@ -322,6 +399,26 @@ describe('runDsh', () => {
     expect(interrupted).toHaveBeenCalledExactlyOnceWith('timeout');
   });
 
+  it('reports a duplicated local-and-Execa timeout interruption only once', async () => {
+    const { child } = deferredRejectedChild({
+      stdout: '',
+      stderr: '',
+      timedOut: true,
+      isTerminated: true,
+    });
+    execaMock.mockReturnValue(child);
+    const interrupted = vi.fn();
+    const options = await makeOptions({ onInterrupted: interrupted, timeout: 1 });
+
+    await expect(runDsh(['--version'], options)).rejects.toMatchObject({
+      timedOut: true,
+      interruptionReason: 'timeout',
+    });
+
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(interrupted).toHaveBeenCalledExactlyOnceWith('timeout');
+  });
+
   it('clears the local timeout guard after a child succeeds', async () => {
     const child = resolvedChild({ stdout: 'ok', stderr: '', exitCode: 0 });
     execaMock.mockReturnValue(child);
@@ -331,6 +428,129 @@ describe('runDsh', () => {
     await delay(300);
 
     expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it('unrefs the direct process and both output streams when the local guard times out', async () => {
+    const processUnref = vi.fn();
+    const stdoutUnref = vi.fn();
+    const stderrUnref = vi.fn();
+    const { child, stdout, stderr } = pendingChildWithStreams(processUnref);
+    child.stdout = Object.assign(stdout, { unref: stdoutUnref });
+    child.stderr = Object.assign(stderr, { unref: stderrUnref });
+
+    const completion = await awaitDirectChild(child as never, 1);
+
+    expect(completion).toMatchObject({ timedOut: true });
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(processUnref).toHaveBeenCalledOnce();
+    expect(stdoutUnref).toHaveBeenCalledOnce();
+    expect(stderrUnref).toHaveBeenCalledOnce();
+  });
+
+  it('keeps timeout completion non-blocking when an unref implementation throws', async () => {
+    const throwingUnref = vi.fn(() => {
+      throw new Error('closed handle');
+    });
+    const { child } = pendingChildWithStreams(throwingUnref);
+
+    const completion = await awaitDirectChild(child as never, 1);
+
+    expect(completion).toMatchObject({ timedOut: true });
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(throwingUnref).toHaveBeenCalledOnce();
+  });
+
+  it('decodes Uint8Array output chunks before a timeout settles', async () => {
+    const { child, stdout, stderr } = pendingChildWithStreams();
+    const completionPromise = awaitDirectChild(child as never, 1);
+    stdout.emit('data', new Uint8Array([0x6f, 0x6b]));
+    stderr.emit('data', new Uint8Array([0x6e, 0x6f]));
+
+    await expect(completionPromise).resolves.toMatchObject({
+      timedOut: true,
+      stdout: 'ok',
+      stderr: 'no',
+    });
+  });
+
+  it('preserves an already-settled timed-out result without arming a second timeout guard', async () => {
+    const callback = vi.fn();
+    const child = resolvedChild({ stdout: '', stderr: '', timedOut: true });
+
+    await expect(awaitDirectChild(child as never, 0, callback)).resolves.toEqual({
+      exitCode: 1,
+      failure: undefined,
+      stderr: '',
+      stdout: '',
+      timedOut: true,
+    });
+    expect(callback).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it('normalizes missing successful child output to stable empty strings', async () => {
+    const child = resolvedChild({ exitCode: 0 } as FakeOutcome);
+
+    await expect(awaitDirectChild(child as never, 0)).resolves.toEqual({
+      exitCode: 0,
+      failure: undefined,
+      stderr: '',
+      stdout: '',
+      timedOut: false,
+    });
+  });
+
+  it('normalizes non-string successful child output to stable empty strings', async () => {
+    const child = resolvedChild({
+      exitCode: 0,
+      stdout: 42 as unknown as string,
+      stderr: { value: 'not text' } as unknown as string,
+    });
+
+    await expect(awaitDirectChild(child as never, 0)).resolves.toEqual({
+      exitCode: 0,
+      failure: undefined,
+      stderr: '',
+      stdout: '',
+      timedOut: false,
+    });
+  });
+
+  it('normalizes malformed child rejection values into a nonzero completion', async () => {
+    const promise = Promise.reject<never>(null);
+    void promise.catch(() => undefined);
+    const child = Object.assign(promise, { kill: vi.fn(() => true) });
+
+    await expect(awaitDirectChild(child as never, 0)).resolves.toEqual({
+      exitCode: 1,
+      failure: null,
+      stderr: '',
+      stdout: '',
+      timedOut: false,
+    });
+  });
+
+  it('collects string output chunks before timing out', async () => {
+    const { child, stdout, stderr } = pendingChildWithStreams();
+    const completionPromise = awaitDirectChild(child as never, 1);
+    stdout.emit('data', 'standard output');
+    stderr.emit('data', 'standard error');
+
+    await expect(completionPromise).resolves.toMatchObject({
+      timedOut: true,
+      stdout: 'standard output',
+      stderr: 'standard error',
+    });
+  });
+
+  it('reports the npx fallback through the default stderr writer when no callback is supplied', async () => {
+    execaMock.mockReturnValue(resolvedChild({ stdout: 'ok', stderr: '', exitCode: 0 }));
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const options = await makeOptions({ env: { PATH: join(process.cwd(), 'missing-bin') } });
+
+    await expect(runDsh(['--version'], options)).resolves.toMatchObject({ launcher: 'npx' });
+
+    expect(write).toHaveBeenCalledOnce();
+    expect(String(write.mock.calls[0]?.[0])).toContain('npx --yes @deepseek-ai/dsh');
   });
 
   it('forwards a transaction interrupt to only the currently held direct child', async () => {

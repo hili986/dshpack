@@ -32,11 +32,20 @@ export {
   registerDiffCommand,
 } from './commands/diff.js';
 export {
+  initCommand,
+  registerInitCommand,
+} from './commands/init.js';
+export {
   type InstallRunner,
   type InstallRuntimeFactory,
   installCommand,
   registerInstallCommand,
 } from './commands/install.js';
+export {
+  type PackRunner,
+  packCommand,
+  registerPackCommand,
+} from './commands/pack.js';
 export {
   registerStatusCommand,
   type StatusRunner,
@@ -59,6 +68,14 @@ export {
   type EffectiveMismatch,
 } from './diff/engine.js';
 export { EXIT_CODES, type ExitCode } from './exit-codes.js';
+export {
+  type InitDependencies,
+  type InitInput,
+  type InitMetadata,
+  type InitReport,
+  type InitTemplate,
+  initializePack,
+} from './init/engine.js';
 export { installPack } from './install/engine.js';
 export {
   createNodeInstallRuntime,
@@ -78,6 +95,13 @@ export type {
   InstallPlanWrite,
   InstallPreflightResult,
 } from './install/types.js';
+export {
+  type PackedFile,
+  type PackInput,
+  type PackMetadata,
+  type PackReport,
+  packDirectory,
+} from './pack/engine.js';
 export {
   type RestoreDependencies,
   type RestoreInput,

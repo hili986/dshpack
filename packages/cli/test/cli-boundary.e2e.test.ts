@@ -54,19 +54,21 @@ afterAll(async () => {
 
 describe('built CLI boundary', () => {
   it.each(['init', 'pack'] as const)(
-    '%s emits a structured placeholder for root and child JSON placement',
+    '%s emits one structured result for root and child JSON placement',
     (command) => {
       for (const args of [
-        ['--json', command],
-        [command, '--json'],
+        ['--json', command, ...(command === 'pack' ? ['missing-source'] : [])],
+        [command, '--json', ...(command === 'pack' ? ['missing-source'] : [])],
       ]) {
         const result = spawnSync(process.execPath, [binPath, ...args], { encoding: 'utf8' });
-        expect(result.status).toBe(70);
+        expect(result.status).toBe(command === 'init' ? 21 : 30);
         expect(result.stderr).toBe('');
         expect(result.stdout.trim().split('\n')).toHaveLength(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          diagnostics: [expect.objectContaining({ code: 'E_NOT_IMPLEMENTED' })],
-        });
+        const report = JSON.parse(result.stdout);
+        expect(report).toEqual(expect.objectContaining({ diagnostics: expect.any(Array) }));
+        expect(report.diagnostics[0].code).toBe(
+          command === 'init' ? 'E_INIT_REQUIRED' : 'E_SOURCE_DIRECTORY',
+        );
       }
     },
   );

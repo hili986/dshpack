@@ -198,6 +198,14 @@ function validSource(value: unknown): value is Record<string, unknown> {
     return (
       exactKeys(value, ['kind', 'path']) && typeof value.path === 'string' && isAbsolute(value.path)
     );
+  if (value.kind === 'file')
+    return (
+      exactKeys(value, ['kind', 'path', 'integrity']) &&
+      typeof value.path === 'string' &&
+      isAbsolute(value.path) &&
+      typeof value.integrity === 'string' &&
+      isCanonicalSha512Sri(value.integrity)
+    );
   if (value.kind === 'https')
     return (
       exactKeys(value, ['kind', 'url', 'integrity']) &&

@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { chmod, type FileHandle, lstat, mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { EXIT_CODES } from '../exit-codes.js';
 import { inspectAndExtractArchive } from './source-archive.js';
 import {
@@ -26,6 +27,7 @@ export interface SourceDependencies extends NetworkDependencies {
 export type SourceProvenance =
   | { kind: 'directory'; path: string }
   | { kind: 'archive'; path: string }
+  | { kind: 'file'; path: string; integrity: string }
   | { kind: 'https'; url: string; integrity: string }
   | { kind: 'github'; owner: string; repo: string; commit: string; url: string };
 
@@ -41,6 +43,8 @@ export function sourceReferenceFromProvenance(provenance: SourceProvenance): str
     case 'directory':
     case 'archive':
       return provenance.path;
+    case 'file':
+      return `${pathToFileURL(provenance.path).href}#${provenance.integrity}`;
     case 'https':
       return `${provenance.url}#${provenance.integrity}`;
     case 'github':
@@ -144,6 +148,39 @@ function parseHttpsSource(reference: string): { requestUrl: URL; integrity: stri
   }
   url.hash = '';
   return { requestUrl: url, integrity };
+}
+
+function parseFileSource(reference: string): { integrity: string; path: string } {
+  if ([...reference].some(isUnsafeRawUrlCharacter))
+    throw sourceFailure('SOURCE_INVALID', '本地 tarball source URL 无效。');
+  const hash = reference.lastIndexOf('#');
+  const base = hash < 0 ? reference : reference.slice(0, hash);
+  const integrity = hash < 0 ? '' : reference.slice(hash + 1);
+  if (!/^sha512-[A-Za-z0-9+/]{86}==$/u.test(integrity))
+    throw sourceFailure('SOURCE_INVALID', 'file tarball 必须提供有效 sha512 完整性片段。');
+  let url: URL;
+  try {
+    url = new URL(base, pathToFileURL(`${process.cwd()}${sep}`));
+  } catch {
+    throw sourceFailure('SOURCE_INVALID', '本地 tarball source URL 无效。');
+  }
+  if (
+    url.protocol !== 'file:' ||
+    url.host !== '' ||
+    url.search !== '' ||
+    url.username !== '' ||
+    url.password !== ''
+  )
+    throw sourceFailure('SOURCE_INVALID', '本地 tarball source URL 不符合安全策略。');
+  let path: string;
+  try {
+    path = fileURLToPath(url);
+  } catch {
+    throw sourceFailure('SOURCE_INVALID', '本地 tarball source URL 无效。');
+  }
+  if (!path.endsWith('.tgz'))
+    throw sourceFailure('SOURCE_INVALID', '本地 tarball source 必须指向 .tgz 文件。');
+  return { integrity, path: resolve(path) };
 }
 
 function githubSource(reference: string): {
@@ -274,8 +311,10 @@ async function copyLocalArchive(
   sourcePath: string,
   filename: string,
   dependencies: SourceDependencies,
+  expectedIntegrity?: string,
 ): Promise<void> {
   const handle = await open(filename, 'wx', 0o600);
+  const hash = createHash('sha512');
   let total = 0;
   try {
     const chunks = dependencies.readLocalArchive?.(sourcePath) ?? createReadStream(sourcePath);
@@ -284,9 +323,12 @@ async function copyLocalArchive(
       if (total > MAX_DOWNLOAD_BYTES) {
         throw sourceFailure('SOURCE_TOO_LARGE', '本地 source 归档超过 50 MiB 限制。');
       }
+      hash.update(chunk);
       await writeAll(handle, chunk, dependencies.writeChunk);
     }
     await handle.sync();
+    if (expectedIntegrity !== undefined && `sha512-${hash.digest('base64')}` !== expectedIntegrity)
+      throw sourceFailure('SOURCE_INTEGRITY', '本地 source 完整性校验失败。');
   } finally {
     await handle.close();
   }
@@ -323,7 +365,7 @@ async function materializeArchive(
     await chmod(workspace, 0o700);
     const archivePath = join(workspace, 'source.dshpack.tgz');
     if (source.localPath !== undefined) {
-      await copyLocalArchive(source.localPath, archivePath, dependencies);
+      await copyLocalArchive(source.localPath, archivePath, dependencies, source.integrity);
     } else if (source.url !== undefined) {
       await downloadToPrivateFile(
         source.url,
@@ -364,6 +406,22 @@ export async function materializeSource(
     return materializeArchive(
       { url: parsed.requestUrl, hint: GITHUB_HINT, githubCommit: parsed.commit },
       provenance,
+      dependencies,
+    );
+  }
+  if (reference.startsWith('file:')) {
+    const parsed = parseFileSource(reference);
+    let metadata: Awaited<ReturnType<typeof lstat>>;
+    try {
+      metadata = await lstat(parsed.path);
+    } catch {
+      throw sourceFailure('SOURCE_INVALID', '本地 tarball source 不存在或无法读取。');
+    }
+    if (!metadata.isFile() || metadata.isSymbolicLink())
+      throw sourceFailure('SOURCE_INVALID', '本地 tarball source 必须是普通文件。');
+    return materializeArchive(
+      { localPath: parsed.path, integrity: parsed.integrity },
+      { kind: 'file', path: parsed.path, integrity: parsed.integrity },
       dependencies,
     );
   }

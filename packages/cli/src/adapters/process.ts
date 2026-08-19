@@ -201,9 +201,10 @@ function isMissingCommand(error: unknown): boolean {
   return /\bENOENT\b/u.test(stringProperty(error, 'shortMessage'));
 }
 
-function environmentValue(
+export function environmentValue(
   overrides: Readonly<NodeJS.ProcessEnv> | undefined,
   name: string,
+  processEnvironment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): string | undefined {
   const normalizedName = name.toLowerCase();
   const exactOverride = overrides?.[name];
@@ -212,9 +213,11 @@ function environmentValue(
     ([key]) => key.toLowerCase() === normalizedName,
   )?.[1];
   if (override !== undefined) return override;
-  const exactProcessValue = process.env[name];
+  const exactProcessValue = processEnvironment[name];
   if (exactProcessValue !== undefined) return exactProcessValue;
-  return Object.entries(process.env).findLast(([key]) => key.toLowerCase() === normalizedName)?.[1];
+  return Object.entries(processEnvironment).findLast(
+    ([key]) => key.toLowerCase() === normalizedName,
+  )?.[1];
 }
 
 async function isExecutableFile(path: string): Promise<boolean> {

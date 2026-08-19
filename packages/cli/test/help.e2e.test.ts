@@ -35,14 +35,17 @@ describe('dshpack --help', () => {
   });
 
   for (const command of ['init', 'pack'] as const) {
-    it(`${command} reports the placeholder contract`, () => {
-      const result = spawnSync(process.execPath, [binPath, command], {
+    it(`${command} reports its implemented validation contract`, () => {
+      const args = command === 'pack' ? [command, 'missing-source'] : [command];
+      const result = spawnSync(process.execPath, [binPath, ...args], {
         encoding: 'utf8',
       });
 
-      expect(result.status).toBe(70);
+      expect(result.status).toBe(command === 'init' ? 21 : 30);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toBe('未实现（W10+）\n');
+      expect(result.stderr).toContain(
+        command === 'init' ? 'E_INIT_REQUIRED' : 'E_SOURCE_DIRECTORY',
+      );
     });
   }
 

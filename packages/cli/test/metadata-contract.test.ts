@@ -351,6 +351,7 @@ describe('installed metadata v1 contract', () => {
     for (const source of [
       { kind: 'directory', path: resolve('packs', 'demo-pack') },
       { kind: 'archive', path: resolve('packs', 'demo-pack.tgz') },
+      { kind: 'file', path: resolve('packs', 'demo-pack.tgz'), integrity: SHA512 },
       { kind: 'https', url: 'https://example.test/demo-pack.tgz', integrity: SHA512 },
       {
         kind: 'github',
