@@ -337,7 +337,7 @@ describe('doctor', () => {
     await expect(runDoctor({ dshHome: home, env, nodeVersion: '25.0.0' })).resolves.toMatchObject({
       diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'DSH001' })]),
     });
-  }, 20_000);
+  });
 
   it('discloses dump side effects and declines an untracked profile without --yes', async () => {
     const home = await makeDshHome();

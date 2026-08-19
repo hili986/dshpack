@@ -1953,7 +1953,7 @@ describe('restore engine', () => {
       const restored = await readFile(settingsPath, 'utf8');
       expect(scenario.expected(restored), scenario.name).toBe(true);
     }
-  }, 30_000);
+  });
 
   it('rejects invalid settings YAML and keeps a skip-owned current asset untouched', async () => {
     const settingsHome = await home();

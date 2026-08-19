@@ -21,8 +21,27 @@ export default defineConfig({
     // Raising the wait changes nothing about what is asserted — a genuine deadlock still
     // fails, 15s later — and it removes a class of flake that was about to spread from one
     // test to its neighbours. Per-file overrides stay available for anything slower.
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    //
+    // 2026-08-19, second raise, this time with measurements instead of a guess. Three
+    // update-engine cases and one restore-engine case still crossed the 20s/30s marks on
+    // windows-latest. Timed in isolation locally — directly comparable, since `maxWorkers: 1`
+    // makes both runs serial:
+    //
+    //   update    "does not make a user-edited unselected skill uninstall-owned"  1951ms
+    //   update    "keeps an intact unselected skill uninstall-owned"              2252ms
+    //   restore   "restores only absent settings keys ... every conflict form"    6490ms
+    //
+    // Roughly 10x under the runner's budget, against 20-34x for the cases that Defender
+    // exclusion just fixed. That remaining gap is cold small-file I/O on a slower volume,
+    // not a block: the work completes, it is simply expensive. With no parallelism left to
+    // tune, the honest options are a faster volume (the workflow now points TMP at the D:
+    // drive) and a budget that reflects the real cost. 6.5s of genuine work does not fit a
+    // 20s ceiling on hardware several times slower.
+    //
+    // This still catches deadlocks — one minute later — and the job's own 30-minute cap is
+    // the real backstop.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     include: ['packages/*/test/**/*.test.ts', 'packages/cli/test/export.e2e.test.ts'],
     exclude: ['packages/cli/test/help.e2e.test.ts', 'packages/cli/test/process.e2e.test.ts'],
     coverage: {

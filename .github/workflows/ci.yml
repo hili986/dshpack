@@ -71,11 +71,22 @@ jobs:
       - name: Check source
         run: pnpm check:ci
 
+      # The suite builds its fixture homes under `os.tmpdir()`, which on windows-latest is a
+      # C: path while the workspace already lives on the faster D: volume. `runner.temp` is
+      # on D:, so pointing the temp directory there puts thousands of small fixture writes on
+      # the same volume as the checkout. The `runner` context only resolves inside a step,
+      # which is why this is set per step rather than once at job level.
       - name: Run coverage suite
         run: pnpm test:coverage
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
 
       - name: Run end-to-end suite
         run: pnpm test:e2e
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
 
       - name: Dry-run package contents
         run: pnpm pack:dry-run
