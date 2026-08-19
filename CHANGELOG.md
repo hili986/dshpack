@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.3.0
+
+**自由组装第一次到用户手里。** `compose` 在仓库里躺了一阵、CI 一直是绿的，但它的 changeset 从没被消费过——直到这次发版号落在 0.3.0 而不是预期的 0.2.2，才发现它压根没发布过。去 0.2.1 的已发布 tarball 里 grep，`composeVersion` 出现 **0 次**。合并不等于发布。
+
+### 新增
+
+- **`dshpack compose [compose.yml]`** —— 按一份声明式清单，从多个来源取材组装成一个新 pack。做 pack 的第三条路：此前只能从自己的 profile 导出（`export`）或从零手写（`init`），没法从别人的 pack 取材而不 fork 它。
+
+  三类来源可混用：`profile:<name>`（内部走 `export`）、`github:<owner>/<repo>#<40 位 SHA>` 与 `tarball:`（走 `install` 同一条获取链，**SHA 与 SRI 一样强制**）、以及本地目录。
+
+  **冲突绝不静默。** 同一个 skill id 来自多个来源时 `exit 30` 并**列出全部冲突**，你必须在 `resolve` 里用 `rename` 或 `prefer` 明确裁决。"后来的覆盖先来的"是最容易写出来的行为，也是这里明确不做的——它会让 pack 的内容取决于 `include` 的书写顺序，而作者不会注意到。
+
+  可直接跑的最小示例在 [`examples/compose/`](./examples/compose/)。CI 不只验它能组装，还验**删掉 `resolve` 后确实以 30 被拒**——只验前者的话，示例哪天退化成"其实没有冲突"也照样绿，而它要演示的东西已经悄悄没了。
+
+### 修复
+
+- **`status` 的 `shared` 改为按 profile 去重计数。** 原先按资产出现次数累加，于是同一个 profile 里两份内容相同的资产会把自己标成"共享"——可卸载这个 profile 时两份都会被删。这个数存在的意义就是回答"卸掉它会不会动到别人还要的字节"，旧算法**恰好在它要提示的那个动作上给出相反的答案**。引用计数意义上的共享属于 `gc` 的账本。
+
+- **npm 页面上的 README 是过期的。** npmjs.com 展示的是 `packages/cli/README.md`，它仍写着 `init` / `pack` 未实现、命令表只列了 17 个里的 7 个——仓库根那份早已更新，两者之间没有任何东西连着。**这类缺陷任何行为测试都抓不到：工具是对的，对工具的描述是错的**，而它恰好落在用户的第一触点上。
+
+  新增 `verify:readme-commands` 门禁，三条机械不变式：CLI 注册的每个命令必须在每份会被发布的 README 里被提及、任一 README 不得称已发布命令未实现、预发布说明必须跟随当前版本序列。它建好的当次就抓到了根 README 里另外两处同样没改干净的地方。
+
+### 其他
+
+- 真发布这一步现在有断言了：日志出现 `Skipped OIDC` 即失败，并向 registry 核对 `_npmUser` 为 OIDC bot、两个包都能解析出预期版本。此前只有 dry-run 验证 trusted publishing，**真发布静默回落到 token 与成功在日志上长得一样**。
+- 发布后验证程序移进仓库 [`scripts/release-verification/`](./scripts/release-verification/)——此前它只活在临时目录里。它是本项目的**主检测器**：0.1.0 之后查出 5 个缺陷、0.2.0 之后 1 个，全都是 CI 看不见的。
+- M1 的全部管理命令在 Windows 原生与 WSL2 Ubuntu 上各跑了一遍完整生命周期，8 步全过；跨平台摘要逐字节一致。
+
 ## 0.2.1
 
 0.2.0 的 CI 是绿的，发布也是绿的。**然后我们把它从 npm 装回来，用装出来的二进制跑第一条命令——炸了。**
