@@ -1,3 +1,5 @@
+export type { ComposeManifest } from './compose.js';
+export { ComposeManifestSchema, parseCompose, validateComposeValue } from './compose.js';
 export type {
   Diagnostic,
   LockedPlugin,

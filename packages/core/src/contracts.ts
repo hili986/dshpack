@@ -88,6 +88,13 @@ const SettingsSchema = strictObject({
   }),
 });
 
+const ProvenanceSchema = strictObject({
+  id: Type.String({ pattern: kebabCase }),
+  from: Type.String({ minLength: 1 }),
+  originalId: Type.String({ pattern: kebabCase }),
+  license: Type.String({ minLength: 1 }),
+});
+
 /** §3.4 pack.yml single source of truth; generated JSON schema is a build artifact. */
 export const PackManifestSchema = Type.Object(
   {
@@ -104,6 +111,7 @@ export const PackManifestSchema = Type.Object(
     mcp: Type.Array(McpSchema),
     defaults: DefaultsSchema,
     settings: Type.Optional(SettingsSchema),
+    provenance: Type.Optional(Type.Array(ProvenanceSchema)),
   },
   {
     $id: 'https://dshpack.dev/schema/pack-v0.json',

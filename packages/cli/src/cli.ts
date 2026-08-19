@@ -1,4 +1,5 @@
 import { Command, CommanderError } from 'commander';
+import { composeCommand, registerComposeCommand } from './commands/compose.js';
 import { diffCommand, registerDiffCommand } from './commands/diff.js';
 import { doctorCommand, registerDoctorCommand } from './commands/doctor.js';
 import { exportCommand, registerExportCommand } from './commands/export.js';
@@ -36,6 +37,7 @@ const commandDefinitions = [
   validateCommand,
   initCommand,
   packCommand,
+  composeCommand,
 ] as const;
 
 export const COMMAND_NAMES = commandDefinitions.map(({ name }) => name);
@@ -66,6 +68,7 @@ export function createProgram(): Command {
   registerStatusCommand(program);
   registerInitCommand(program);
   registerPackCommand(program);
+  registerComposeCommand(program);
 
   return program;
 }

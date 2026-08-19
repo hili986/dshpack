@@ -26,6 +26,11 @@ export {
 export type { SourceAdapter } from './adapters/source.js';
 export { COMMAND_NAMES, createProgram, runCli } from './cli.js';
 export {
+  type ComposeRunner,
+  composeCommand,
+  registerComposeCommand,
+} from './commands/compose.js';
+export {
   type DiffRunner,
   type DiffRuntimeFactory,
   diffCommand,
@@ -58,6 +63,14 @@ export {
   type UpdateRuntimeFactory,
   updateCommand,
 } from './commands/update.js';
+export {
+  type ComposeDependencies,
+  type ComposeInput,
+  type ComposeMaterializedSource,
+  type ComposeMetadata,
+  type ComposeReport,
+  composePack,
+} from './compose/engine.js';
 export {
   type DiffInput,
   type DiffItem,

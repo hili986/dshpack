@@ -225,6 +225,32 @@
           }
         }
       }
+    },
+    "provenance": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "from", "originalId", "license"],
+        "properties": {
+          "id": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "from": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "originalId": {
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "license": {
+            "minLength": 1,
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }
