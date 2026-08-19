@@ -1,5 +1,53 @@
 # dshpack
 
+## 0.3.0
+
+### Minor Changes
+
+- 8d61d23: **新增 `dshpack compose [compose.yml]`：按一份声明式清单，把多个来源的 skill 组装成一个新 pack。**
+  
+  这是"自由组装"的主入口，补齐了做 pack 的第三条路——此前只能从自己的 profile 导出（`export`）
+  或从零手写（`init`），没法从别人的 pack 取材。
+  
+  三条来源可以混用：`profile:<name>` 读本机 profile（内部走 `export`）、
+  `github:<owner>/<repo>#<40 位 SHA>` 与 `file:`/`tarball:`（走 `install` 同一套获取链，
+  **SHA 与 SRI 同样强制**）、以及本地目录。
+  
+  **冲突必须显式解决，绝不静默**。同一个 skill id 来自多个来源时 `exit 30`，并**列出全部冲突**
+  而不是只报第一个；在 `resolve` 里用 `rename` 改名或 `prefer` 指定来源。
+  "后来的覆盖先来的"是最容易写出来的行为，也是这里明确不做的。
+  
+  **取不到就失败**。显式点名的 skill 在来源里不存在时报错并列出该来源可选的 id，不静默跳过。
+  `skills: ["*"]` 展开为该来源全部。
+  
+  **每个素材都记 provenance**：`from` / `originalId` / `license` 写进产出的 `pack.yml`，
+  `github:` 来源记的是完整 40 位 SHA。来源 license 不明时需要显式 `--allow-unknown-license`；
+  与新 pack 声明冲突时如实列出，**绝不自动改写别人的许可声明**。
+  
+  组装后的全部内容过凭据扫描，命中即 `exit 31` 且**零产出**；收尾自动跑 `lock` 与 `validate`，
+  任一道不过就整体回滚。`--dry-run` 只报告将取什么、有哪些冲突，不创建输出目录。
+  
+  来源失败会**保留 adapter 自己的分类**：篡改的 tarball 是 `SOURCE_INTEGRITY` / exit 20，
+  不会被折叠成"你的 compose.yml 写错了"——自动化据退出码判断时，那个区别决定它该不该重试。
+  凭据命中仍然压过一切，安全永不被降级为契约噪音。
+  
+  `--dsh-home` 与 `DSH_HOME` 与其余命令一致：**只有 `profile:` 来源才需要 home**，
+  但只要提供了就在任何 I/O 之前校验（相对路径与控制字符一律 `exit 31`）。
+
+### Patch Changes
+
+- edabbdc: 修正发布到 npm 上的 README：它仍称 `init` / `pack` 未实现，且只列了 17 个命令中的 7 个
+  
+  仓库根 README 早已更新，但 npmjs.com 上展示的是 `packages/*/README.md`，两者之间没有任何东西连着——于是"工具是对的、对工具的描述是错的"这类缺陷不会被任何行为测试抓到。同时把根 README 里另外两处同样过期的断言（开篇横幅、故障排查条目）一并修掉。
+  
+  新增 `verify:readme-commands` 门禁：CLI 注册的每个命令必须在两份 README 里各被提及一次、任一 README 不得称已发布命令未实现、预发布说明必须写当前版本序列。
+- edabbdc: `status` 的 `shared` 改为按 profile 去重计数
+  
+  此前按资产出现次数累加，因此同一个 profile 里两份内容相同的资产会把自己标成 shared。这个数存在的意义是回答"卸掉这个 profile 会不会动到别的 profile 还需要的字节"，而自己的两份副本会随它一起被删——旧算法恰好在它要提示的那个动作上给出相反的答案。引用计数意义上的共享属于 `gc` 的账，不是 `status` 的。
+- Updated dependencies [edabbdc]
+- Updated dependencies [edabbdc]
+  - @dshpack/core@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes

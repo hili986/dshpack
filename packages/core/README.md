@@ -4,7 +4,7 @@ dshpack 的无副作用内核：pack / pack-lock 的契约定义、YAML 规范�
 
 这是 [`dshpack`](https://www.npmjs.com/package/dshpack) CLI 的依赖包。除非你要自己读写 pack 格式，否则直接用 CLI 即可。
 
-> **0.2.x 仍为预发布**，pack 格式尚未稳定。
+> **0.3.x 仍为预发布**，pack 格式尚未稳定。
 
 ## 契约来源
 
