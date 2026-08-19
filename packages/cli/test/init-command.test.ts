@@ -29,6 +29,12 @@ afterEach(() => {
 });
 
 describe('init command', () => {
+  // Every test here builds a bare program that registers only the options it needs. The real
+  // program also registers `-V, --version` and `--dsh-home`, so option-name collisions with the
+  // program level are structurally invisible from in here — that is how 0.2.0 shipped a hint
+  // telling users to type `--version "0.1.0"`, which Commander routed to the program and turned
+  // into a silent exit 0. Asserting on the hint's text proves the wording, not that the command
+  // runs; `cli-boundary.e2e.test.ts` runs the printed command through the real binary.
   it('never prompts outside a TTY and gives a complete copyable --yes command', async () => {
     const program = new Command().option('--json');
     const run = vi.fn();
@@ -41,7 +47,7 @@ describe('init command', () => {
     expect(result.stderr).toContain('E_INIT_REQUIRED');
     expect(result.stderr).toContain('dshpack init "starter"');
     expect(result.stderr).toContain('--name "my-pack"');
-    expect(result.stderr).toContain('--version "0.1.0"');
+    expect(result.stderr).toContain('--pack-version "0.1.0"');
     expect(result.stderr).toContain('--description "Describe this pack"');
     expect(result.stderr).toContain('--author "Your Name"');
     expect(result.stderr).toContain('--license "MIT"');

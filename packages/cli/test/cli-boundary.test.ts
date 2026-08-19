@@ -267,6 +267,43 @@ describe('JSON mode closure', () => {
     expect(report).toMatchObject({ diagnostics: [], version: DSHPACK_VERSION });
     expect(report).not.toHaveProperty('help');
   });
+
+  // Commander recognises program options after a subcommand too, so before 0.2.1 every one of
+  // these printed dshpack's version and exited 0 having done nothing. Exit 0 is the whole problem:
+  // a misspelling that errors is survivable, one that reports success is not.
+  it.each([
+    ['init', ['init', 'starter', '--version', '9.9.9'], '--pack-version'],
+    ['init via -V', ['init', 'starter', '-V'], '--pack-version'],
+    ['list', ['list', '--version'], '放在子命令之前'],
+  ] as const)('refuses a version flag placed after %s', async (_case, args, expectedHint) => {
+    const result = await capture(args);
+
+    expect(result).toMatchObject({ exitCode: 2, stdout: '' });
+    expect(result.stderr).toContain('E_USAGE');
+    expect(result.stderr).toContain('放在子命令之后不会生效');
+    expect(result.stderr).toContain(expectedHint);
+    expect(result.stderr).not.toContain(DSHPACK_VERSION);
+  });
+
+  it('keeps the refusal to one JSON object on stdout', async () => {
+    const result = await capture(['--json', 'init', 'starter', '--version', '9.9.9']);
+
+    expect(result).toMatchObject({ exitCode: 2, stderr: '' });
+    expect(result.stdout.trim().split('\n')).toHaveLength(1);
+    expect(JSON.parse(result.stdout)).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'E_USAGE', hint: expect.any(String) })],
+    });
+  });
+
+  it('leaves a version flag after `--` to the parser, since it is an operand there', async () => {
+    // The guard scans argv itself, so it has to honour the terminator the way Commander does —
+    // otherwise `install <src> -- --version` would be refused for a flag that is just data.
+    const result = await capture(['init', 'starter', '--', '--version']);
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).not.toContain('放在子命令之后不会生效');
+    expect(result.stderr).toContain('too many arguments');
+  });
 });
 
 describe('stable exit classification', () => {

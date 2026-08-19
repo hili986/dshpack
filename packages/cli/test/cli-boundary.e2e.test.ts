@@ -173,4 +173,43 @@ describe('built CLI boundary', () => {
       diagnostics: [expect.objectContaining({ code: 'E_INTERNAL' })],
     });
   });
+
+  it('runs its own copyable init command successfully, exactly as printed', async () => {
+    // 0.2.0 shipped this broken and every unit test stayed green, because they all call the
+    // command's action with an options object and never cross the argv parser. The program
+    // registers `-V, --version`, Commander lets the program consume it wherever it appears,
+    // and the hint told users to type `--version "0.1.0"` — so copying the tool's own advice
+    // printed the tool version and exited 0 having created nothing.
+    //
+    // The assertion deliberately does not name any flag: it takes whatever the tool prints and
+    // runs that. If the spelling changes again, this still checks the only thing that matters —
+    // the command we hand the user works.
+    const fixture = await boundaryFixture();
+    const target = join(fixture.cwd, 'copyable');
+
+    const refused = spawnSync(process.execPath, [binPath, '--json', 'init', target], {
+      cwd: fixture.cwd,
+      encoding: 'utf8',
+      env: fixture.env,
+    });
+    expect(refused.status).toBe(21);
+    const hint = JSON.parse(refused.stdout).diagnostics[0].hint as string;
+    const printed = hint.slice(hint.indexOf('dshpack init'));
+
+    // Split on spaces outside double quotes, then unquote — the hint JSON-quotes every value.
+    // Drop only the `dshpack` argv[0]; everything after it, subcommand included, is run verbatim.
+    const argv = (printed.match(/"[^"]*"|\S+/gu) ?? [])
+      .slice(1)
+      .map((token) => (token.startsWith('"') ? (JSON.parse(token) as string) : token));
+
+    const copied = spawnSync(process.execPath, [binPath, ...argv], {
+      cwd: fixture.cwd,
+      encoding: 'utf8',
+      env: fixture.env,
+    });
+
+    expect({ status: copied.status, stderr: copied.stderr }).toEqual({ status: 0, stderr: '' });
+    await expect(access(join(target, 'pack.yml'))).resolves.toBeUndefined();
+    await expect(access(join(target, 'pack.lock.yml'))).resolves.toBeUndefined();
+  });
 });

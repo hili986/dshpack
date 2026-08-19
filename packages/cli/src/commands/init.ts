@@ -22,8 +22,8 @@ interface InitOptions {
   json?: boolean;
   license?: string;
   name?: string;
+  packVersion: string;
   template: InitTemplate;
-  version: string;
   yes?: boolean;
 }
 
@@ -46,7 +46,7 @@ function requiredInput(
       'dshpack init',
       JSON.stringify(directory),
       `--name ${JSON.stringify(options.name ?? 'my-pack')}`,
-      `--version ${JSON.stringify(options.version)}`,
+      `--pack-version ${JSON.stringify(options.packVersion)}`,
       `--description ${JSON.stringify(options.description ?? 'Describe this pack')}`,
       `--author ${JSON.stringify(options.author ?? 'Your Name')}`,
       `--license ${JSON.stringify(options.license ?? 'MIT')}`,
@@ -72,7 +72,7 @@ function requiredInput(
       license: options.license as string,
       name: options.name as string,
       template: options.template,
-      version: options.version,
+      version: options.packVersion,
     },
   };
 }
@@ -106,7 +106,11 @@ export function registerInitCommand(
     .command('init [directory]')
     .description(initCommand.description)
     .option('--name <name>', 'pack 名称')
-    .option('--version <semver>', '版本号', '0.1.0')
+    // Not `--version`: the program registers `-V, --version` for the tool's own version, and
+    // Commander lets the program consume it wherever it appears. `dshpack init --version 0.1.0`
+    // therefore printed the tool version and exited 0 without creating anything — and that was
+    // the exact spelling this command told users to copy, so its own advice was a silent no-op.
+    .option('--pack-version <semver>', 'pack 版本号', '0.1.0')
     .option('--description <text>', 'pack 描述')
     .option('--author <author>', '作者')
     .option('--license <license>', '许可证')

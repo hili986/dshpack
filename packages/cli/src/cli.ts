@@ -81,8 +81,59 @@ function configureErrorBoundary(command: Command, json: boolean, helpOutput: str
   for (const child of command.commands) configureErrorBoundary(child, json, helpOutput);
 }
 
+/**
+ * Commander recognises program options *after* a subcommand name too, so `dshpack init x --version
+ * 0.1.0` hands `--version` to the program: it prints dshpack's own version and exits 0 having
+ * created nothing. Exit 0 is what makes this worth its own guard — every other misspelling exits 2
+ * with `unknown option`, so this is the single wrong guess that a wrapping script reads as success.
+ *
+ * `enablePositionalOptions()` is Commander's official fix, and it is not usable here: it would stop
+ * recognising `--dsh-home` after a subcommand, which is the form README's quickstart and the machine
+ * argv built in `install/policy.ts` both emit. So refuse this one shape rather than move every
+ * program option. Returns the offending subcommand name, or undefined when the argv is fine.
+ *
+ * This scans raw argv without knowing any option's arity — reimplementing Commander's parser to
+ * tell a flag from an option value would be the more fragile choice. The residual imprecision is
+ * that an option *value* spelled exactly like a subcommand (`--dsh-home list --version`) starts
+ * the scan early. That errs toward refusing with a clear message, never toward the silent exit 0
+ * this exists to prevent, so leave it alone.
+ */
+function versionFlagAfterSubcommand(argv: readonly string[]): string | undefined {
+  const args = argv.slice(2);
+  const terminator = args.indexOf('--');
+  const scanned = terminator === -1 ? args : args.slice(0, terminator);
+  const names: readonly string[] = COMMAND_NAMES;
+  const subcommand = scanned.findIndex((arg) => names.includes(arg));
+  if (subcommand === -1) return undefined;
+  const misplaced = scanned
+    .slice(subcommand + 1)
+    .some((arg) => arg === '--version' || arg === '-V');
+  return misplaced ? scanned[subcommand] : undefined;
+}
+
 export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
   const json = argv.includes('--json');
+  const misplacedVersion = versionFlagAfterSubcommand(argv);
+  if (misplacedVersion !== undefined) {
+    writeReport(
+      {
+        diagnostics: [
+          diagnostic(
+            'E_USAGE',
+            'error',
+            '--version 是 dshpack 自身的版本选项，放在子命令之后不会生效。',
+            misplacedVersion === 'init'
+              ? '设置 pack 版本请用 --pack-version；查询 dshpack 版本请运行 dshpack --version。'
+              : '查询 dshpack 版本请把 --version 放在子命令之前：dshpack --version。',
+          ),
+        ],
+        exitCode: EXIT_CODES.USAGE,
+        metadata: {},
+      },
+      json,
+    );
+    return;
+  }
   const program = createProgram();
   const helpOutput: string[] = [];
   configureErrorBoundary(program, json, helpOutput);
