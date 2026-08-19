@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -320,6 +320,204 @@ describe('composePack', () => {
     );
 
     expect(report.exitCode).toBe(EXIT_CODES.CONTRACT);
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(root)).filter((name) => name.includes('dshpack-compose-'))).toEqual([]);
+  });
+
+  it('defaults the target to the pack name beside compose.yml, with resolve and mcp omitted', async () => {
+    // The fixture writer always emits `output`, `resolve: []` and `mcp: []`. A hand-written
+    // minimal compose.yml has none of them, and that is the shape a first-time user produces.
+    const root = await temporary();
+    const source = join(root, 'compose.yml');
+    await writeFile(
+      source,
+      stringify({
+        composeVersion: 0,
+        name: 'research-kit',
+        version: '0.1.0',
+        description: 'A composed research pack.',
+        author: 'dsh-packs',
+        license: 'MIT',
+        include: [{ from: './local-pack', skills: ['citation'] }],
+        defaults: { permissionPreset: 'workspace-write' },
+      }),
+      'utf8',
+    );
+
+    const report = await composePack(
+      { composeFile: source },
+      dependencies({ './local-pack': material('citation', './local-pack') }),
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SUCCESS);
+    expect(report.metadata.directory).toBe(join(root, 'research-kit'));
+    await expect(readFile(join(root, 'research-kit', 'pack.yml'), 'utf8')).resolves.toContain(
+      'name: research-kit',
+    );
+  });
+
+  it('refuses an unparseable compose.yml without creating anything', async () => {
+    const root = await temporary();
+    const source = join(root, 'compose.yml');
+    await writeFile(source, 'include: [\n', 'utf8');
+
+    const report = await composePack({ composeFile: source }, dependencies({}));
+
+    expect(report.exitCode).toBe(EXIT_CODES.CONTRACT);
+    expect(report.diagnostics.length).toBeGreaterThan(0);
+    expect((await readdir(root)).sort()).toEqual(['compose.yml']);
+  });
+
+  it('refuses to publish over a target that already exists', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    await mkdir(output, { recursive: true });
+
+    const report = await composePack(
+      { composeFile: source, output },
+      dependencies({ './local-pack': material('citation', './local-pack') }),
+    );
+
+    expect(report.exitCode).not.toBe(EXIT_CODES.SUCCESS);
+    // The pre-existing directory must be left exactly as it was, not merged into or replaced.
+    expect(await readdir(output)).toEqual([]);
+  });
+
+  it('carries a flat skills/<id>.md source through, and marks an unlicensed one in provenance', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const flat = material('citation', './local-pack');
+    const body = '---\nname: citation\ndescription: Flat skill.\n---\n\n# citation\n';
+    const { license: _dropped, ...withoutLicense } = flat;
+    const unlicensed: ComposeMaterializedSource = {
+      ...withoutLicense,
+      material: {
+        ...flat.material,
+        manifest: { ...flat.material.manifest, license: 'UNLICENSED' },
+        paths: ['skills/citation.md'],
+        files: [
+          {
+            path: 'skills/citation.md',
+            sha512: 'sha512-AQID',
+            contentBase64: Buffer.from(body).toString('base64'),
+          },
+        ],
+      },
+    };
+
+    const report = await composePack(
+      { composeFile: source, output, allowUnknownLicense: true },
+      dependencies({ './local-pack': unlicensed }),
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SUCCESS);
+    await expect(readFile(join(output, 'skills', 'citation.md'), 'utf8')).resolves.toBe(body);
+    const pack = parsePack(await readFile(join(output, 'pack.yml'), 'utf8')).value;
+    expect(pack?.provenance).toEqual([
+      expect.objectContaining({ id: 'citation', originalId: 'citation', license: 'UNLICENSED' }),
+    ]);
+  });
+
+  it('uses the real source materializer when none is injected', async () => {
+    // Every other engine test injects `materializeSource`, so the wiring to the shipped
+    // implementation is never exercised. A source that cannot exist proves the default is reached
+    // without needing the network.
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './definitely-not-here', skills: ['*'] }]);
+    const output = join(root, 'output');
+
+    const report = await composePack({ composeFile: source, output });
+
+    expect(report.exitCode).not.toBe(EXIT_CODES.SUCCESS);
+    expect(report.diagnostics[0]?.path).toBe('./definitely-not-here');
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('catches a credential that only lock generation introduced, on the third scan', async () => {
+    // The materials pass the first scan, so this can only be caught after the lock is written.
+    // Without that third pass the pack ships with the token inside pack.lock.yml — and the lock is
+    // exactly where a generator is most likely to echo something it read.
+    //
+    // `validate` is stubbed to succeed on purpose: the real one runs its own credential scan and
+    // catches this token too, so leaving it in place made this test pass with the third scan
+    // deleted. It was measuring the validator, not the scan it names.
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const report = await composePack(
+      { composeFile: source, output },
+      {
+        ...dependencies({ './local-pack': material('citation', './local-pack') }),
+        generateLock: vi.fn(async (staging: string) => {
+          await writeFile(
+            join(staging, 'pack.lock.yml'),
+            'generatedBy: test\ntoken: ghp_1234567890abcdefghijklmnop\n',
+          );
+          return { diagnostics: [], exitCode: EXIT_CODES.SUCCESS, metadata: {} };
+        }) as never,
+        validate: vi
+          .fn()
+          .mockResolvedValue({ diagnostics: [], exitCode: EXIT_CODES.SUCCESS, metadata: {} }),
+      },
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SECURITY);
+    expect(report.diagnostics.some(({ code }) => code.startsWith('E_SECRET'))).toBe(true);
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(root)).filter((name) => name.includes('dshpack-compose-'))).toEqual([]);
+  });
+
+  it('publishes nothing when the composed pack fails its own strict validation', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const report = await composePack(
+      { composeFile: source, output },
+      {
+        ...dependencies({ './local-pack': material('citation', './local-pack') }),
+        validate: vi.fn().mockResolvedValue({
+          diagnostics: [
+            {
+              code: 'E_PACK_STRICT',
+              severity: 'error',
+              message: 'strict validation failed',
+              hint: 'test',
+              evidence: 'local',
+            },
+          ],
+          exitCode: EXIT_CODES.CONTRACT,
+          metadata: {},
+        }),
+      },
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.CONTRACT);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'E_PACK_STRICT' })]),
+    );
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reports an unexpected write failure without leaving a half-published target', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const report = await composePack(
+      { composeFile: source, output },
+      {
+        ...dependencies({ './local-pack': material('citation', './local-pack') }),
+        generateLock: vi.fn().mockRejectedValue(new Error('the volume disappeared')),
+      },
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.CONTRACT);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'E_COMPOSE_WRITE' })]),
+    );
+    // The raw error must not reach the report — it can carry paths the caller never provided.
+    expect(JSON.stringify(report.diagnostics)).not.toContain('the volume disappeared');
     await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await readdir(root)).filter((name) => name.includes('dshpack-compose-'))).toEqual([]);
   });

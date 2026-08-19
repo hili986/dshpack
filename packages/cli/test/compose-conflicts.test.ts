@@ -80,4 +80,49 @@ describe('compose conflict resolution', () => {
       }),
     ]);
   });
+
+  // A `resolve` entry that no longer matches the sources is the shape a stale compose.yml takes:
+  // the pack it points at moved, or the id was never there. Accepting it silently would drop the
+  // resolution and fall back to whatever the sources happen to contain.
+  it.each([
+    [
+      'a skill that has no competing source',
+      [item('commit-convention', './local-pack')],
+      [
+        {
+          id: 'commit-convention',
+          prefer: 'github:team/a#0123456789abcdef0123456789abcdef01234567',
+        },
+      ],
+    ],
+    [
+      'a genuine conflict',
+      [item('citation', 'profile:research'), item('citation', './local-pack')],
+      [{ id: 'citation', prefer: './moved-away' }],
+    ],
+  ])('rejects a prefer naming a source that is not there, for %s', (_case, items, resolutions) => {
+    const report = resolveComposeConflicts(items, resolutions);
+
+    expect(report.items).toEqual([]);
+    expect(report.diagnostics).toEqual([
+      expect.objectContaining({ code: 'E_COMPOSE_RESOLVE_SOURCE' }),
+    ]);
+  });
+
+  it('reports a rename that lands on an id another source already owns', () => {
+    // Renaming is the escape hatch for a conflict, so it must not be able to create one. Without
+    // the post-rename pass this returns two different skills both called `outline`, and whichever
+    // is written last wins — exactly the silent overwrite compose exists to prevent.
+    const report = resolveComposeConflicts(
+      [item('citation', 'profile:research'), item('outline', './local-pack')],
+      [{ id: 'citation', rename: 'outline' }],
+    );
+
+    expect(report.items).toEqual([]);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'E_COMPOSE_CONFLICT', path: 'outline' }),
+      ]),
+    );
+  });
 });
