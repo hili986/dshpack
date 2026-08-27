@@ -89,6 +89,35 @@ describe('compose source materialization', () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
+  it('replaces a bare GitHub convenience input with the materialized pinned reference', async () => {
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+    const commit = '0123456789abcdef0123456789abcdef01234567';
+    const result = await materializeComposeSource(
+      { from: 'https://github.com/owner/repo', skills: ['citation'] },
+      'C:/workspace/compose.yml',
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({
+          directory: 'C:/tmp/extracted',
+          provenance: {
+            kind: 'github',
+            owner: 'owner',
+            repo: 'repo',
+            commit,
+            url: `https://codeload.github.com/owner/repo/tar.gz/${commit}`,
+          },
+          cleanup,
+        }),
+        readPack: vi.fn().mockResolvedValue({ material: material(), diagnostics: [], exitCode: 0 }),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(true);
+    if (!isComposeMaterializedSource(result)) throw new Error('expected materialized source');
+    expect(result.from).toBe(`github:owner/repo#${commit}`);
+    await result.cleanup();
+  });
+
   it('expands star, preserves immutable source bytes, and reports every explicit missing skill with choices', () => {
     const source = {
       from: 'github:dsh-packs/web-dev#3414f1af3fd674998cea81716586f4716a538f50',

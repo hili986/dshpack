@@ -22,7 +22,7 @@ import {
   isAddressableProfileName,
   isCanonicalSha256Sri,
   isCanonicalSha512Sri,
-  isInstallableProfileName,
+  isPackIdentityName,
   isValidSettingsContribution,
   parseInstalledMetadata,
 } from '../metadata/contracts.js';
@@ -148,7 +148,7 @@ function validGenerationPack(value: unknown): value is GenerationDocument['pack'
     isRecord(value) &&
     exactKeys(value, ['name', 'version', 'manifestDigest']) &&
     typeof value.name === 'string' &&
-    isInstallableProfileName(value.name) &&
+    isPackIdentityName(value.name) &&
     typeof value.version === 'string' &&
     valid(value.version) === value.version &&
     typeof value.manifestDigest === 'string' &&

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 import type {
+  UiComposeSpec,
   UiDangerousPermission,
   UiRequest,
   UiResponse,
@@ -21,7 +22,23 @@ const writeInputs = {
   update: { profile: 'example' },
   restore: { profile: 'example' },
   gc: {},
+  compose: {
+    profile: 'combined-notes',
+    spec: {
+      composeVersion: 0,
+      name: 'combined-notes',
+      version: '1.0.0',
+      description: 'Combined notes skills.',
+      author: 'dshpack test',
+      license: 'MIT',
+      include: [{ from: './source', skills: ['notes'] }],
+      defaults: { permissionPreset: 'workspace-write' },
+    },
+  },
+  editSkill: { profile: 'combined-notes', skillId: 'notes', content: '# Notes\n' },
 } as const;
+
+const composeSpec = writeInputs.compose.spec satisfies UiComposeSpec;
 
 describe('UI wire contract', () => {
   it('represents every write as an itemized plan or digest-bound apply request', () => {
@@ -43,12 +60,21 @@ describe('UI wire contract', () => {
     }
 
     const roundTripped = JSON.parse(JSON.stringify(requests)) as Record<string, unknown>[];
-    expect(roundTripped).toHaveLength(10);
+    expect(roundTripped).toHaveLength(14);
     for (const request of roundTripped) {
       expect(request.authorizedDangerousPermissions).toEqual([permission]);
       if (request.phase === 'apply') expect(request.planDigest).toBe('sha256-cGxhbg');
       else expect(request).not.toHaveProperty('planDigest');
     }
+  });
+
+  it('keeps compose preview and skill content as path-free read contracts', () => {
+    const requests: UiRequest[] = [
+      { operation: 'composePreview', input: { spec: composeSpec } },
+      { operation: 'skillContent', input: { profile: 'combined-notes', skillId: 'notes' } },
+    ];
+
+    expect(JSON.parse(JSON.stringify(requests))).toEqual(requests);
   });
 
   it('is compatible with the existing report envelope and explicit authorization metadata', () => {
@@ -86,6 +112,11 @@ acceptRequest({
   authorizedDangerousPermissions: [],
   // @ts-expect-error blanket consent is not part of the request contract
   yes: true,
+});
+acceptRequest({
+  operation: 'skillContent',
+  // @ts-expect-error clients submit an id, never a filesystem path
+  input: { profile: 'combined-notes', path: 'skills/notes/SKILL.md' },
 });
 // @ts-expect-error apply must bind the reviewed plan digest
 acceptRequest({ operation: 'gc', phase: 'apply', input: {}, authorizedDangerousPermissions: [] });

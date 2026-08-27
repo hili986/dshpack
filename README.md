@@ -111,9 +111,15 @@ node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目�
 | `gc` | 回收无引用的 CAS block 与过期代际 | 只删确认无人引用的块 |
 | `migrate` | 把 legacy metadata 重建为 v1 | 就地升级元数据 |
 | `doctor` | 诊断 dsh 环境与配置边界 | **会写**，见下 |
-| `ui` | 启动本机 Pack 管理服务（浏览器界面：总览 / diff / 诊断 / pack 详情 + 逐项授权的写操作） | 仅监听 `127.0.0.1`；stdout URL 含本次启动 token，默认随机端口 |
+| `ui` | 启动本机 Pack 管理服务（总览 / diff / 诊断 / pack 详情 / 自由组合 / Skill 编辑） | 仅监听 `127.0.0.1`；stdout URL 含本次启动 token，默认随机端口 |
 
 `status` 每行给三个数，含义是钉死的：`drift` 是这个 profile 里被本地改过的资产数；`update` 只有加了 `--check-updates` 才不是 `not-checked`；**`shared` 是"有多少资产还被别的 profile 用着"**——按 profile 去重计数，同一个 profile 里两份内容相同的资产**不算**共享。这条区分是有意义的：`shared` 存在的意义就是回答"卸掉它会不会动到别人还要的字节"，而自己的两份副本会随它一起被删。想看引用计数意义上的共享看 `gc`，那是另一个问题。任一项无法计算时输出 `"unavailable"` 而不是 `0`——读不出来和真的是零，对自动化不是一回事。
+
+### 本机 UI：自由组合与 Skill 编辑
+
+「自由组合」页可添加多个本地目录、`github:` 或 `tarball:` 来源；先预览每个来源可选的 skill、provenance 与冲突，再对每个冲突明确选择 `prefer` 或 `rename`。预览不会写入 `DSH_HOME`；「组装并安装」仍走既有的 **plan → 逐项授权 → apply** 和 install 事务，未预览或尚有未决冲突时不能执行。
+
+「Skill 内容编辑器」从 profile 的 skill 列表进入，并标出已有本地 drift。浏览器只提交 `profile`、`skillId` 与文本，绝不提交文件路径；服务端将 id 限为安全字符并自行闭合到 `skills/<skillId>/SKILL.md`。单次内容上限为 256 KiB。保存是用户本地改动，不会重写该 profile 的 pack 基线，因此保存后 diff 会立即显示 drift。
 
 **做一个 pack 出来**
 
@@ -210,6 +216,23 @@ import schema from '@dshpack/core/schemas/pack.schema.json' with { type: 'json' 
 ```
 
 它由 TypeBox 真源生成，发布前会解包 tarball 逐字节比对——**schema 必须在包里，且必须与真源一致**，两个方向都有断言。
+
+## GitHub 仓库网址与 fake-IP 代理
+
+`install` 和 `compose` 的来源可以直接写 `github:owner/repo` 或
+`https://github.com/owner/repo`（可带尾随 `/` 或 `.git`）。dshpack 会先查询该仓库的默认
+分支 HEAD，再把它转换为 `github:owner/repo#<40位小写SHA>`；计划、lock 和 provenance
+只记录这个固定 SHA，不会把裸网址作为可落盘来源。
+
+若你的代理使用 fake-IP 或透明代理，让 `codeload.github.com` 等主机在本地 DNS 中解析为保留
+地址，请显式设置 `DSHPACK_TRUST_LOCAL_DNS=1`：
+
+```sh
+DSHPACK_TRUST_LOCAL_DNS=1 dshpack install --dry-run --as demo --dsh-home <isolated-home> -- https://github.com/owner/repo
+```
+
+该开关只信任用户自己的 DNS/路由对**主机名**给出的地址；`localhost`、`*.localhost` 和 IP
+字面量仍然被拒绝。未设置时保留默认 SSRF DNS 预检。
 
 ## Starter packs
 

@@ -562,6 +562,11 @@ describe('tracked management state', () => {
         (document.pack = { name: '', version: '1.2.3', manifestDigest: markerDigest }),
     ],
     [
+      'a one-character pack identity',
+      (document: Record<string, unknown>) =>
+        (document.pack = { name: 'x', version: '1.2.3', manifestDigest: markerDigest }),
+    ],
+    [
       'a non-semver pack version',
       (document: Record<string, unknown>) =>
         (document.pack = { name: 'demo-pack', version: 'latest', manifestDigest: markerDigest }),

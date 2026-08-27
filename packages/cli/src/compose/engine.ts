@@ -32,6 +32,8 @@ export interface ComposeMetadata {
   directory: string;
   dryRun: boolean;
   selected: readonly { from: string; id: string; originalId: string }[];
+  /** Canonical source reference for each include entry, in manifest order. */
+  sources?: readonly string[];
 }
 
 export type ComposeReport = CommandReport<ComposeMetadata>;
@@ -53,8 +55,9 @@ function result(
   selected: ComposeMetadata['selected'],
   diagnostics: readonly Diagnostic[],
   exitCode: ComposeReport['exitCode'],
+  sources: ComposeMetadata['sources'] = [],
 ): ComposeReport {
-  return { diagnostics, exitCode, metadata: { directory, dryRun, selected } };
+  return { diagnostics, exitCode, metadata: { directory, dryRun, selected, sources } };
 }
 
 function hasErrors(diagnostics: readonly Diagnostic[]): boolean {
@@ -243,7 +246,18 @@ export async function composePack(
     if (hasErrors(diagnostics))
       return result(output, input.dryRun === true, [], diagnostics, failureExit(diagnostics));
 
-    const conflicts = resolveComposeConflicts(selectedItems, compose.resolve ?? []);
+    const resolvedFrom = new Map(
+      compose.include.map((selection, index) => [
+        selection.from,
+        sources[index]?.from ?? selection.from,
+      ]),
+    );
+    const resolutions = (compose.resolve ?? []).map((resolution) =>
+      resolution.prefer === undefined
+        ? resolution
+        : { ...resolution, prefer: resolvedFrom.get(resolution.prefer) ?? resolution.prefer },
+    );
+    const conflicts = resolveComposeConflicts(selectedItems, resolutions);
     diagnostics.push(...conflicts.diagnostics);
     if (hasErrors(diagnostics))
       return result(output, input.dryRun === true, [], diagnostics, EXIT_CODES.CONTRACT);
@@ -267,7 +281,14 @@ export async function composePack(
     }
 
     if (input.dryRun === true)
-      return result(output, true, selected, diagnostics, EXIT_CODES.SUCCESS);
+      return result(
+        output,
+        true,
+        selected,
+        diagnostics,
+        EXIT_CODES.SUCCESS,
+        sources.map((source) => source.from),
+      );
     if (!(await outputAvailable(output))) {
       diagnostics.push(
         diagnostic(
@@ -349,7 +370,14 @@ export async function composePack(
           validated.exitCode,
         );
       await rename(staging, output);
-      return result(output, false, selected, diagnostics, EXIT_CODES.SUCCESS);
+      return result(
+        output,
+        false,
+        selected,
+        diagnostics,
+        EXIT_CODES.SUCCESS,
+        sources.map((source) => source.from),
+      );
     } catch {
       diagnostics.push(
         diagnostic(

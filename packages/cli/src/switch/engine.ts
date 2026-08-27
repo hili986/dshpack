@@ -292,7 +292,7 @@ export async function switchProfile(
       input,
       unsafe ? 'E_PATH_PROFILE' : 'E_SWITCH_PROFILE_NAME',
       'profile 名称不符合安全规则。',
-      '使用 3–64 字符的 kebab-case profile 名称。',
+      '使用 1–64 字符的 kebab-case profile 名称。',
       unsafe ? EXIT_CODES.SECURITY : EXIT_CODES.CONTRACT,
     );
   }

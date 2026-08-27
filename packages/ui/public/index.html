@@ -47,11 +47,12 @@
         border-top: 1px solid #e4eaf2;
       }
       #app > section:first-child > p { grid-column: 1 / -1; min-height: 1.25rem; margin: 0; color: #b42318; font-size: .875rem; }
-      button, input, select { min-height: 2.5rem; border-radius: .5rem; font: inherit; }
-      input, select { width: 100%; border: 1px solid #b9c6d8; background: #ffffff; color: inherit; padding: .5rem .625rem; }
+      button, input, select, textarea { min-height: 2.5rem; border-radius: .5rem; font: inherit; }
+      input, select, textarea { width: 100%; border: 1px solid #b9c6d8; background: #ffffff; color: inherit; padding: .5rem .625rem; }
+      textarea { min-height: 18rem; resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
       button { border: 1px solid #175cd3; background: #175cd3; color: #ffffff; padding: .5rem .875rem; font-weight: 650; cursor: pointer; }
       button:hover { background: #1849a9; border-color: #1849a9; }
-      button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid rgb(43 127 255 / 35%); outline-offset: 2px; }
+      button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid rgb(43 127 255 / 35%); outline-offset: 2px; }
       button:disabled { cursor: not-allowed; opacity: .55; }
       nav button { min-height: 2.125rem; border-color: transparent; background: #edf2f7; color: #344054; padding: .375rem .65rem; font-size: .875rem; }
       nav button:hover { background: #dbe8fb; color: #0b4eb4; }
@@ -104,7 +105,7 @@
         #app > section:first-child label, dt, .data-table th { color: #a8b6c9; }
         #app > section:nth-child(2) .page-header p { color: #a8b6c9; }
         #app > section:first-child nav { border-color: #344054; }
-        input, select { border-color: #475467; background: #101828; color: #f0f4fa; }
+        input, select, textarea { border-color: #475467; background: #101828; color: #f0f4fa; }
         nav button, .data-table th { background: #243244; color: #d0d9e8; }
         nav button:hover { background: #30415a; color: #ffffff; }
         .data-table th, .data-table td { border-color: #344054; }

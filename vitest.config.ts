@@ -156,6 +156,8 @@ export default defineConfig({
         'packages/cli/src/validation/validate-pack.ts': { branches: 90 },
         'packages/cli/src/commands/ui.ts': { branches: 90 },
         'packages/cli/src/ui/server.ts': { branches: 90 },
+        'packages/cli/src/ui/compose.ts': { branches: 90 },
+        'packages/cli/src/ui/skills.ts': { branches: 90 },
         'packages/cli/src/ui/wire.ts': { branches: 90 },
         'packages/ui/src/state.ts': { branches: 90 },
         'packages/ui/src/view.ts': { branches: 90 },

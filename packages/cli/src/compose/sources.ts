@@ -3,7 +3,11 @@ import { dirname, join, resolve, sep } from 'node:path';
 
 import type { Diagnostic } from '@dshpack/core';
 
-import { materializeSource, SourceError } from '../adapters/source.js';
+import {
+  materializeSource,
+  SourceError,
+  sourceReferenceFromProvenance,
+} from '../adapters/source.js';
 import { diagnostic } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import { exportProfile } from '../export/engine.js';
@@ -117,9 +121,13 @@ export async function materializeComposeSource(
     const materialized = await (dependencies.materialize ?? materializeSource)(
       normalizeReference(selection.from, composeFile),
     );
+    const from =
+      materialized.provenance?.kind === 'github'
+        ? sourceReferenceFromProvenance(materialized.provenance)
+        : selection.from;
     return validated(
       materialized.directory,
-      selection.from,
+      from,
       materialized.cleanup,
       dependencies.readPack ?? readValidatedPack,
     );

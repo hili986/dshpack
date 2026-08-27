@@ -53,6 +53,7 @@ export class FakeElement {
 }
 
 export class FakeInputElement extends FakeElement {}
+export class FakeTextAreaElement extends FakeElement {}
 
 export class FakeDocument {
   readonly body: FakeElement;
@@ -64,7 +65,9 @@ export class FakeDocument {
   }
 
   createElement(tag: string): FakeElement {
-    return tag === 'input' ? new FakeInputElement(this, tag) : new FakeElement(this, tag);
+    if (tag === 'input') return new FakeInputElement(this, tag);
+    if (tag === 'textarea') return new FakeTextAreaElement(this, tag);
+    return new FakeElement(this, tag);
   }
 
   getElementById(_id: string): FakeElement | null {

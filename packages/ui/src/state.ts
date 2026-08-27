@@ -261,6 +261,8 @@ function isWriteRequest(value: UiRequest): value is UiWriteRequest {
     value.operation !== 'status' &&
     value.operation !== 'diff' &&
     value.operation !== 'doctor' &&
+    value.operation !== 'composePreview' &&
+    value.operation !== 'skillContent' &&
     (value as Record<string, unknown>).phase === 'plan'
   );
 }

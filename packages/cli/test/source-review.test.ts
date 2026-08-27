@@ -78,7 +78,11 @@ describe('source review regressions', () => {
     const agent = undiciState.agents[0];
     expect(request).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ dispatcher: agent, maxRedirections: 0 }),
+      expect.objectContaining({
+        dispatcher: agent,
+        headers: { 'user-agent': 'dshpack' },
+        maxRedirections: 0,
+      }),
     );
     const options = undiciState.options[0] as {
       connect: {

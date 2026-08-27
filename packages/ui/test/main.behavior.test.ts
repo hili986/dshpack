@@ -5,8 +5,9 @@ import {
   descendants,
   elementWithText,
   FakeDocument,
-  type FakeElement,
+  FakeElement,
   FakeInputElement,
+  FakeTextAreaElement,
   FakeWindow,
   visibleText,
 } from './fake-dom.js';
@@ -99,8 +100,25 @@ function inputs(root: FakeElement): readonly FakeInputElement[] {
   );
 }
 
+function textareas(root: FakeElement): readonly FakeTextAreaElement[] {
+  return descendants(root).filter(
+    (element): element is FakeTextAreaElement => element instanceof FakeTextAreaElement,
+  );
+}
+
 async function settle(): Promise<void> {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+function deferredResponse(): {
+  readonly promise: Promise<Response>;
+  readonly resolve: (response: Response) => void;
+} {
+  let resolve: (response: Response) => void;
+  const promise = new Promise<Response>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve: (response) => resolve(response) };
 }
 
 function requestBodies(
@@ -138,6 +156,8 @@ function installBrowserFakes(
   vi.stubGlobal('window', window);
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('HTMLInputElement', FakeInputElement);
+  vi.stubGlobal('HTMLSelectElement', FakeElement);
+  vi.stubGlobal('HTMLTextAreaElement', FakeTextAreaElement);
   return { document, window, calls };
 }
 
@@ -146,6 +166,212 @@ afterEach(() => {
 });
 
 describe('browser main shell behavior', () => {
+  it('walks the Chinese compose flow through preview, selected skills, and the existing plan review', async () => {
+    const pinned = 'github:dsh-packs/web-dev#0123456789abcdef0123456789abcdef01234567';
+    const previewBody = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: {
+        phase: 'preview',
+        sourceSkills: [{ from: 'https://github.com/dsh-packs/web-dev', skills: ['notes'] }],
+        selected: [{ from: pinned, id: 'notes', originalId: 'notes' }],
+        conflicts: [],
+      },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: previewBody },
+      { status: 200, body: previewBody },
+      { status: 200, body: previewBody },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#compose';
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'x';
+    profile.fire('input');
+    expect(source.placeholder).toContain('github.com');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+    expect(visibleText(root)).toContain(pinned);
+
+    const skill = inputs(root).find((input) => input.type === 'checkbox');
+    if (skill === undefined) throw new Error('expected preview skill checkbox');
+    skill.checked = true;
+    skill.fire('change');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+    const install = elementWithText(root, '组装并安装');
+    expect(install?.disabled).toBe(false);
+    source.value = 'https://github.com/dsh-packs/research-writing';
+    source.fire('input');
+    expect(install?.disabled).toBe(true);
+    install?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls)).toHaveLength(3);
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+    const renewedInstall = elementWithText(root, '组装并安装');
+    expect(renewedInstall?.disabled).toBe(false);
+    renewedInstall?.fire('click');
+    await settle();
+
+    const requests = requestBodies(fakes.calls);
+    expect(requests.slice(-4)).toMatchObject([
+      {
+        operation: 'composePreview',
+        input: {
+          spec: {
+            name: 'x-ui',
+            include: [{ from: 'https://github.com/dsh-packs/web-dev', skills: ['*'] }],
+          },
+        },
+      },
+      {
+        operation: 'composePreview',
+        input: {
+          spec: { include: [{ from: 'https://github.com/dsh-packs/web-dev', skills: ['notes'] }] },
+        },
+      },
+      {
+        operation: 'composePreview',
+        input: {
+          spec: { include: [{ from: 'https://github.com/dsh-packs/web-dev', skills: ['*'] }] },
+        },
+      },
+      { operation: 'compose', phase: 'plan', input: { profile: 'x' } },
+    ]);
+    expect(fakes.window.location.hash).toBe('#write-review');
+  });
+
+  it('does not restore a stale compose preview after its source changes', async () => {
+    const pinned = 'github:dsh-packs/web-dev#0123456789abcdef0123456789abcdef01234567';
+    const preview = deferredResponse();
+    const document = new FakeDocument();
+    const window = new FakeWindow('http://127.0.0.1/?token=memory-token#overview');
+    const calls: Array<{ readonly input: unknown; readonly init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+      calls.push(init === undefined ? { input } : { input, init });
+      if (calls.length === 1)
+        return {
+          status: 200,
+          json: async () => statusBody,
+        } as Response;
+      return preview.promise;
+    });
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('HTMLInputElement', FakeInputElement);
+    vi.stubGlobal('HTMLSelectElement', FakeElement);
+    vi.stubGlobal('HTMLTextAreaElement', FakeTextAreaElement);
+    const root = document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    window.location.hash = '#compose';
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'x';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(calls).toHaveLength(2);
+
+    source.value = 'https://github.com/dsh-packs/research-writing';
+    source.fire('input');
+    preview.resolve({
+      status: 200,
+      json: async () => ({
+        diagnostics: [],
+        exitCode: 0,
+        metadata: {
+          phase: 'preview',
+          sourceSkills: [{ from: 'https://github.com/dsh-packs/web-dev', skills: ['notes'] }],
+          selected: [{ from: pinned, id: 'notes', originalId: 'notes' }],
+          conflicts: [],
+        },
+      }),
+    } as Response);
+    await settle();
+
+    expect(visibleText(root)).not.toContain(pinned);
+    const install = elementWithText(root, 'Compose and install');
+    expect(install?.disabled).toBe(true);
+    install?.fire('click');
+    await settle();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('walks the English skill editor flow and loads external content through textarea.value', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            assetDigests: [{ target: 'skills/notes', digest: 'sha256-notes' }],
+            localDrift: [{ kind: 'skill', target: 'skills/notes' }],
+          },
+        },
+      },
+      {
+        status: 200,
+        body: { diagnostics: [], exitCode: 0, metadata: { content: '# outside <tag>\n' } },
+      },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#skill-editor';
+    const selects = descendants(root).filter((element) => element.tagName === 'select');
+    const profile = selects[1];
+    if (profile === undefined) throw new Error('expected editor profile select');
+    profile.value = 'alpha';
+    profile.fire('change');
+    await settle();
+    expect(visibleText(root)).toContain('notes (Drifted)');
+    elementWithText(root, 'notes (Drifted)')?.fire('click');
+    await settle();
+
+    const editor = textareas(root)[0];
+    if (editor === undefined) throw new Error('expected skill textarea');
+    expect(editor.value).toBe('# outside <tag>\n');
+    editor.value = '# user-owned notes\n';
+    editor.fire('input');
+    elementWithText(root, 'Save and review plan')?.fire('click');
+    await settle();
+
+    expect(requestBodies(fakes.calls).slice(-3)).toMatchObject([
+      { operation: 'diff', input: { profile: 'alpha' } },
+      { operation: 'skillContent', input: { profile: 'alpha', skillId: 'notes' } },
+      {
+        operation: 'editSkill',
+        phase: 'plan',
+        input: { profile: 'alpha', skillId: 'notes', content: '# user-owned notes\n' },
+      },
+    ]);
+  });
+
   it('re-renders all chrome from the runtime locale switch without translating server diagnostics', async () => {
     const serverDiagnostic = 'server diagnostic remains verbatim';
     const serverPath = 'profiles/alpha.yml:4:7';
@@ -517,7 +743,7 @@ describe('browser main shell behavior', () => {
     if (select === undefined || source === undefined) throw new Error('expected write form');
 
     expect(visibleText(root)).toContain('安装来源');
-    expect(source.placeholder).toContain('github:owner/repo#40位sha');
+    expect(source.placeholder).toContain('github.com');
     source.value = 'personal-notes';
     elementWithText(root, '预览计划')?.fire('click');
     expect(visibleText(root)).toContain('install 需要来源而非 profile 名');
@@ -532,6 +758,15 @@ describe('browser main shell behavior', () => {
       input: { source: './examples/compose/sources/personal-notes' },
     });
     expect(visibleText(root)).not.toContain('install 需要来源而非 profile 名');
+
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    elementWithText(root, '预览计划')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'install',
+      phase: 'plan',
+      input: { source: 'https://github.com/dsh-packs/web-dev' },
+    });
 
     select.value = 'update';
     select.fire('change');

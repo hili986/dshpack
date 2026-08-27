@@ -10,12 +10,16 @@ import {
   type DownloadResponse,
   defaultDownload,
   type NetworkDependencies,
+  type ResolvedAddress,
   resolvePublicTarget,
 } from './source-network.js';
 
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
+const MAX_GITHUB_API_BYTES = 1024 * 1024;
 const GITHUB_HINT = '请先运行 git clone，再从本地普通目录安装。';
+const GITHUB_OWNER = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})';
+const GITHUB_REPO = '[A-Za-z0-9._-]+';
 
 export interface SourceDependencies extends NetworkDependencies {
   makeTempDirectory?: () => Promise<string>;
@@ -183,16 +187,42 @@ function parseFileSource(reference: string): { integrity: string; path: string }
   return { integrity, path: resolve(path) };
 }
 
-function githubSource(reference: string): {
+interface GitHubRepository {
+  owner: string;
+  repo: string;
+}
+
+interface GitHubSource extends GitHubRepository {
   owner: string;
   repo: string;
   commit: string;
   requestUrl: URL;
-} {
-  const match =
-    /^github:([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]+)#([0-9a-f]{40})$/u.exec(
-      reference,
-    );
+}
+
+function validGitHubRepository(owner: string, repo: string): GitHubRepository | undefined {
+  if (
+    !new RegExp(`^${GITHUB_OWNER}$`, 'u').test(owner) ||
+    !new RegExp(`^${GITHUB_REPO}$`, 'u').test(repo) ||
+    repo === '.' ||
+    repo === '..'
+  )
+    return undefined;
+  return { owner, repo };
+}
+
+function pinnedGitHubSource(owner: string, repo: string, commit: string): GitHubSource {
+  return {
+    owner,
+    repo,
+    commit,
+    requestUrl: new URL(`https://codeload.github.com/${owner}/${repo}/tar.gz/${commit}`),
+  };
+}
+
+function githubSource(reference: string): GitHubSource {
+  const match = new RegExp(`^github:(${GITHUB_OWNER})/(${GITHUB_REPO})#([0-9a-f]{40})$`, 'u').exec(
+    reference,
+  );
   if (
     match === null ||
     match[1] === undefined ||
@@ -208,12 +238,109 @@ function githubSource(reference: string): {
     );
   }
   const [, owner, repo, commit] = match;
-  return {
-    owner,
-    repo,
-    commit,
-    requestUrl: new URL(`https://codeload.github.com/${owner}/${repo}/tar.gz/${commit}`),
-  };
+  return pinnedGitHubSource(owner, repo, commit);
+}
+
+function bareGitHubRepository(reference: string): GitHubRepository | undefined {
+  const shorthand = new RegExp(`^github:(${GITHUB_OWNER})/(${GITHUB_REPO})$`, 'u').exec(reference);
+  if (shorthand?.[1] !== undefined && shorthand[2] !== undefined)
+    return validGitHubRepository(shorthand[1], shorthand[2]);
+  const url = new RegExp(`^https://github\\.com/(${GITHUB_OWNER})/(${GITHUB_REPO})/?$`, 'iu').exec(
+    reference,
+  );
+  if (url?.[1] === undefined || url[2] === undefined) return undefined;
+  const repo = url[2].toLowerCase().endsWith('.git') ? url[2].slice(0, -'.git'.length) : url[2];
+  return validGitHubRepository(url[1], repo);
+}
+
+function githubResolveFailure(code: string, stage: string): SourceError {
+  return sourceFailure(code, `GitHub source 解析在${stage}失败。`, GITHUB_HINT);
+}
+
+function jsonObject(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+async function githubApiObject(
+  url: URL,
+  stage: string,
+  dependencies: SourceDependencies,
+): Promise<Record<string, unknown>> {
+  const failure = (code: string, _message: string): SourceError =>
+    githubResolveFailure(code, stage);
+  let target: ResolvedAddress;
+  try {
+    target = await resolvePublicTarget(url, dependencies, failure);
+  } catch (error) {
+    if (error instanceof SourceError && error.code === 'SOURCE_HOST_REJECTED')
+      throw githubResolveFailure(error.code, stage);
+    throw error;
+  }
+  let response: DownloadResponse;
+  try {
+    response = await (dependencies.download ?? defaultDownload)(url, target);
+  } catch {
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_NETWORK', stage);
+  }
+  if (response.statusCode === 404) {
+    await cancelResponse(response);
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_NOT_FOUND', stage);
+  }
+  if (response.statusCode === 403 || response.statusCode === 429) {
+    await cancelResponse(response);
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_RATE_LIMIT', stage);
+  }
+  if (response.statusCode < 200 || response.statusCode >= 300 || response.body === undefined) {
+    await cancelResponse(response);
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_NETWORK', stage);
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for await (const chunk of response.body) {
+      total += chunk.byteLength;
+      if (total > MAX_GITHUB_API_BYTES)
+        throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_INVALID', stage);
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    if (error instanceof SourceError) throw error;
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_NETWORK', stage);
+  }
+  try {
+    const value = jsonObject(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    if (value === undefined) throw new Error('GitHub API did not return an object.');
+    return value;
+  } catch {
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_INVALID', stage);
+  }
+}
+
+async function resolveBareGitHubSource(
+  repository: GitHubRepository,
+  dependencies: SourceDependencies,
+): Promise<GitHubSource> {
+  const metadata = await githubApiObject(
+    new URL(`https://api.github.com/repos/${repository.owner}/${repository.repo}`),
+    '仓库默认分支',
+    dependencies,
+  );
+  const branch = metadata.default_branch;
+  if (typeof branch !== 'string' || branch.length === 0)
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_INVALID', '仓库默认分支');
+  const head = await githubApiObject(
+    new URL(
+      `https://api.github.com/repos/${repository.owner}/${repository.repo}/commits/${encodeURIComponent(branch)}`,
+    ),
+    '默认分支 HEAD',
+    dependencies,
+  );
+  const commit = head.sha;
+  if (typeof commit !== 'string' || !/^[0-9a-f]{40}$/u.test(commit))
+    throw githubResolveFailure('SOURCE_GITHUB_RESOLVE_INVALID', '默认分支 HEAD');
+  return pinnedGitHubSource(repository.owner, repository.repo, commit);
 }
 
 async function cancelResponse(response: DownloadResponse): Promise<void> {
@@ -394,8 +521,12 @@ export async function materializeSource(
   dependencies: SourceDependencies = {},
 ): Promise<MaterializedSource> {
   if (reference === '') throw sourceFailure('SOURCE_INVALID', 'source 引用不能为空。');
-  if (reference.startsWith('github:')) {
-    const parsed = githubSource(reference);
+  const bareGitHub = bareGitHubRepository(reference);
+  if (reference.startsWith('github:') || bareGitHub !== undefined) {
+    const parsed =
+      bareGitHub === undefined
+        ? githubSource(reference)
+        : await resolveBareGitHubSource(bareGitHub, dependencies);
     const provenance: SourceProvenance = {
       kind: 'github',
       owner: parsed.owner,

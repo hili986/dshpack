@@ -336,10 +336,11 @@ describe('listProfiles', () => {
 });
 
 describe('profile and metadata contracts', () => {
-  it('owns only non-reserved 3–64 character kebab-case profile names', () => {
+  it('owns only non-reserved 1–64 character kebab-case profile names', () => {
     expect(isInstallableProfileName('demo-profile')).toBe(true);
+    expect(isInstallableProfileName('x')).toBe(true);
     for (const name of [
-      'ab',
+      '',
       `${'a'.repeat(64)}b`,
       'Bad',
       'bad--name',
@@ -355,7 +356,7 @@ describe('profile and metadata contracts', () => {
 
   it('separates a name dshpack may own from a name that merely addresses a directory', () => {
     // web is dsh's own profile: unownable, but a perfectly ordinary directory name.
-    for (const name of ['web', 'headless', 'node_modules', 'Bad', 'ab']) {
+    for (const name of ['web', 'headless', 'node_modules', 'Bad']) {
       expect(isInstallableProfileName(name)).toBe(false);
       expect(isAddressableProfileName(name)).toBe(true);
     }

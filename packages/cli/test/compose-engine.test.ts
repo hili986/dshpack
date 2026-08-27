@@ -100,6 +100,33 @@ afterEach(async () => {
 });
 
 describe('composePack', () => {
+  it('writes the resolved GitHub SHA to provenance and accepts a raw prefer directive', async () => {
+    const root = await temporary();
+    const bare = 'https://github.com/owner/repo';
+    const commit = '0123456789abcdef0123456789abcdef01234567';
+    const pinned = `github:owner/repo#${commit}`;
+    const source = await composeFile(
+      root,
+      [{ from: bare, skills: ['citation'] }],
+      [{ id: 'citation', prefer: bare }],
+    );
+    const output = join(root, 'output');
+    const report = await composePack(
+      { composeFile: source, output },
+      dependencies({ [bare]: material('citation', pinned) }),
+    );
+
+    expect(report).toMatchObject({
+      exitCode: EXIT_CODES.SUCCESS,
+      metadata: {
+        selected: [expect.objectContaining({ from: pinned })],
+        sources: [pinned],
+      },
+    });
+    const pack = parsePack(await readFile(join(output, 'pack.yml'), 'utf8')).value;
+    expect(pack?.provenance).toEqual([expect.objectContaining({ from: pinned })]);
+  });
+
   it('assembles profile, pinned GitHub, and local sources into a locked valid pack with full provenance', async () => {
     const root = await temporary();
     const source = await composeFile(root, [

@@ -1,4 +1,10 @@
-import type { UiRequest, UiResponse, UiWriteOperation, UiWriteRequest } from 'dshpack';
+import type {
+  UiComposeSpec,
+  UiRequest,
+  UiResponse,
+  UiWriteOperation,
+  UiWriteRequest,
+} from 'dshpack';
 
 import { mountBrowserView } from './dom.js';
 import { type Locale, type MessageKey, message } from './messages.js';
@@ -15,7 +21,30 @@ type ApiResult = {
   readonly response: UiResponse;
 };
 
-type BrowserScreen = 'overview' | 'profile-diff' | 'doctor' | 'pack' | 'write-review';
+type BrowserScreen =
+  | 'overview'
+  | 'profile-diff'
+  | 'doctor'
+  | 'pack'
+  | 'write-review'
+  | 'compose'
+  | 'skill-editor';
+
+interface ComposeSourceForm {
+  readonly from: string;
+  readonly skills: readonly string[];
+}
+
+interface ComposeResolutionForm {
+  readonly id: string;
+  readonly mode: 'prefer' | 'rename';
+  readonly prefer?: string;
+}
+
+interface EditorSkill {
+  readonly drift: boolean;
+  readonly id: string;
+}
 
 export interface BrowserUiController {
   readonly refreshOverview: () => Promise<void>;
@@ -25,6 +54,102 @@ export interface BrowserUiController {
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function strings(value: unknown): readonly string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function composePackName(profile: string): string {
+  return profile.length >= 3 ? profile : `${profile}-ui`;
+}
+
+function composeSpec(
+  profile: string,
+  sources: readonly ComposeSourceForm[],
+  resolutions: readonly ComposeResolutionForm[],
+): UiComposeSpec {
+  return {
+    composeVersion: 0,
+    name: composePackName(profile),
+    version: '0.1.0',
+    description: `Composed profile ${profile}.`,
+    author: 'dshpack UI',
+    license: 'MIT',
+    include: sources.map((source) => ({
+      from: source.from,
+      skills: source.skills.length === 0 ? ['*'] : [...source.skills],
+    })),
+    resolve: resolutions.map((resolution) =>
+      resolution.mode === 'prefer'
+        ? { id: resolution.id, prefer: resolution.prefer ?? sources[0]?.from ?? '' }
+        : { id: resolution.id, rename: `${resolution.id}-renamed` },
+    ),
+    defaults: { permissionPreset: 'workspace-write' },
+  };
+}
+
+function previewMetadata(response: UiResponse | undefined): Record<string, unknown> {
+  return response !== undefined && record(response.metadata) ? response.metadata : {};
+}
+
+function previewSkills(response: UiResponse | undefined, index: number): readonly string[] {
+  const value = previewMetadata(response).sourceSkills;
+  if (!Array.isArray(value)) return [];
+  const source = value[index];
+  return record(source) ? strings(source.skills) : [];
+}
+
+function previewConflictIds(response: UiResponse | undefined): readonly string[] {
+  const value = previewMetadata(response).conflicts;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) =>
+    record(item) && typeof item.path === 'string' ? [item.path] : [],
+  );
+}
+
+function previewResolvedSources(response: UiResponse | undefined): readonly string[] {
+  const selected = previewMetadata(response).selected;
+  if (!Array.isArray(selected)) return [];
+  return [
+    ...new Set(
+      selected.flatMap((item) =>
+        record(item) && typeof item.from === 'string' ? [item.from] : [],
+      ),
+    ),
+  ];
+}
+
+function editorSkillsFromDiff(value: unknown): readonly EditorSkill[] {
+  if (!record(value)) return [];
+  const drift = new Set(
+    (Array.isArray(value.localDrift) ? value.localDrift : []).flatMap((item) =>
+      record(item) && item.kind === 'skill' && typeof item.target === 'string'
+        ? [item.target.replace(/^skills\//u, '')]
+        : [],
+    ),
+  );
+  const ids = new Set(
+    (Array.isArray(value.assetDigests) ? value.assetDigests : []).flatMap((item) =>
+      record(item) && typeof item.target === 'string' && item.target.startsWith('skills/')
+        ? [item.target.slice('skills/'.length)]
+        : [],
+    ),
+  );
+  for (const id of drift) ids.add(id);
+  return [...ids]
+    .sort((left, right) => left.localeCompare(right, 'en'))
+    .map((id) => ({ id, drift: drift.has(id) }));
+}
+
+function safeProfile(value: string): boolean {
+  return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value) && value.length >= 1 && value.length <= 64;
+}
+
+function safeSkillId(value: string): boolean {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(value);
 }
 
 function failureResponse(locale: Locale, code: string, messageKey: MessageKey): UiResponse {
@@ -113,6 +238,10 @@ function operationLabel(operation: UiWriteOperation, locale: Locale): string {
       return message(locale, 'operationRestore');
     case 'gc':
       return message(locale, 'operationGc');
+    case 'compose':
+      return message(locale, 'composeInstall');
+    case 'editSkill':
+      return message(locale, 'editorSave');
   }
 }
 
@@ -159,6 +288,7 @@ function installSourceLooksLikeSource(value: string): boolean {
   return (
     value.startsWith('github:') ||
     value.startsWith('tarball:') ||
+    /^https:\/\/github\.com\//iu.test(value) ||
     /^(?:[A-Za-z]:[\\/]|[./][\\/]|\\\\|\/)/u.test(value)
   );
 }
@@ -220,6 +350,10 @@ function screenFromHash(hash: string): BrowserScreen {
       return 'pack';
     case 'write-review':
       return 'write-review';
+    case 'compose':
+      return 'compose';
+    case 'skill-editor':
+      return 'skill-editor';
     default:
       return 'overview';
   }
@@ -237,6 +371,8 @@ function navigationButton(
     doctor: message(locale, 'navDoctor'),
     pack: message(locale, 'navPack'),
     'write-review': message(locale, 'navWriteReview'),
+    compose: message(locale, 'navCompose'),
+    'skill-editor': message(locale, 'navSkillEditor'),
   };
   const button = document.createElement('button');
   button.type = 'button';
@@ -257,6 +393,17 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let diffData: unknown;
   let doctorData: unknown;
   let packData: unknown;
+  let composeSources: readonly ComposeSourceForm[] = [{ from: '', skills: [] }];
+  let composeProfile = '';
+  let composePreview: UiResponse | undefined;
+  let composePreviewRevision = 0;
+  let composePreviewRequest = 0;
+  let composeResolutions: readonly ComposeResolutionForm[] = [];
+  let composeInstallButton: HTMLButtonElement | undefined;
+  let editorProfile = '';
+  let editorSkills: readonly EditorSkill[] = [];
+  let editorSkillId = '';
+  let editorContent = '';
 
   root.textContent = '';
   const controls = document.createElement('section');
@@ -315,7 +462,15 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     resetButton.textContent = message(state.locale, 'resetReview');
     diffButton.textContent = message(state.locale, 'loadDiff');
     navigation.textContent = '';
-    for (const screen of ['overview', 'profile-diff', 'doctor', 'pack', 'write-review'] as const)
+    for (const screen of [
+      'overview',
+      'profile-diff',
+      'doctor',
+      'pack',
+      'compose',
+      'skill-editor',
+      'write-review',
+    ] as const)
       navigation.append(navigationButton(document, screen, state.locale, selectScreen));
     refreshTargetCopy();
     if (clientMessageKey !== undefined)
@@ -365,6 +520,309 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     if (activeScreen === screen) renderActiveScreen();
   }
 
+  function composeSourceUpdate(index: number, source: ComposeSourceForm): void {
+    composeSources = composeSources.map((current, currentIndex) =>
+      currentIndex === index ? source : current,
+    );
+    composeResolutions = [];
+    invalidateComposePreview();
+  }
+
+  function invalidateComposePreview(): void {
+    composePreviewRevision += 1;
+    composePreview = undefined;
+    if (composeInstallButton !== undefined) composeInstallButton.disabled = true;
+  }
+
+  function composeInstallReady(): boolean {
+    return (
+      composePreview?.exitCode === 0 &&
+      previewMetadata(composePreview).phase === 'preview' &&
+      !previewConflictIds(composePreview).some(
+        (id) => !composeResolutions.some((item) => item.id === id),
+      )
+    );
+  }
+
+  function renderComposeScreen(): void {
+    activeMount.textContent = '';
+    const panel = document.createElement('section');
+    const heading = document.createElement('h2');
+    const profileLabel = document.createElement('label');
+    const profile = document.createElement('input');
+    const preview = document.createElement('button');
+    const install = document.createElement('button');
+    const addSource = document.createElement('button');
+    const sources = document.createElement('section');
+    const resolvedSources = document.createElement('section');
+    const conflicts = document.createElement('section');
+
+    heading.textContent = message(state.locale, 'composeHeading');
+    profileLabel.textContent = message(state.locale, 'composeProfile');
+    profile.type = 'text';
+    profile.value = composeProfile;
+    profile.addEventListener('input', (event) => {
+      const current = event.currentTarget;
+      if (current instanceof HTMLInputElement) {
+        composeProfile = current.value.trim();
+        invalidateComposePreview();
+      }
+    });
+    profileLabel.append(profile);
+
+    sources.textContent = message(state.locale, 'composeSource');
+    for (const [index, source] of composeSources.entries()) {
+      const card = document.createElement('section');
+      const sourceLabel = document.createElement('label');
+      const sourceInput = document.createElement('input');
+      const remove = document.createElement('button');
+      const skillsHeading = document.createElement('h3');
+      sourceInput.type = 'text';
+      sourceInput.placeholder = message(state.locale, 'placeholderComposeSource');
+      sourceInput.value = source.from;
+      sourceLabel.textContent = `${message(state.locale, 'composeSource')} ${String(index + 1)}`;
+      sourceInput.addEventListener('input', (event) => {
+        const current = event.currentTarget;
+        if (current instanceof HTMLInputElement)
+          composeSourceUpdate(index, { ...source, from: current.value.trim() });
+      });
+      sourceLabel.append(sourceInput);
+      remove.type = 'button';
+      remove.textContent = message(state.locale, 'composeRemoveSource');
+      remove.disabled = composeSources.length === 1;
+      remove.addEventListener('click', () => {
+        composeSources = composeSources.filter((_, currentIndex) => currentIndex !== index);
+        composeResolutions = [];
+        invalidateComposePreview();
+        renderComposeScreen();
+      });
+      skillsHeading.textContent = message(state.locale, 'composeSourceSkills');
+      card.append(sourceLabel, remove, skillsHeading);
+      for (const skill of previewSkills(composePreview, index)) {
+        const skillLabel = document.createElement('label');
+        const checked = document.createElement('input');
+        const skillText = document.createElement('span');
+        checked.type = 'checkbox';
+        checked.checked = source.skills.includes(skill);
+        checked.addEventListener('change', (event) => {
+          const current = event.currentTarget;
+          if (!(current instanceof HTMLInputElement)) return;
+          const skills = current.checked
+            ? [...new Set([...source.skills, skill])]
+            : source.skills.filter((id) => id !== skill);
+          composeSourceUpdate(index, { ...source, skills });
+        });
+        skillText.textContent = skill;
+        skillLabel.append(checked, skillText);
+        card.append(skillLabel);
+      }
+      sources.append(card);
+    }
+
+    for (const from of previewResolvedSources(composePreview)) {
+      const resolved = document.createElement('p');
+      resolved.textContent = from;
+      resolvedSources.append(resolved);
+    }
+
+    addSource.type = 'button';
+    addSource.textContent = message(state.locale, 'composeAddSource');
+    addSource.addEventListener('click', () => {
+      composeSources = [...composeSources, { from: '', skills: [] }];
+      composeResolutions = [];
+      invalidateComposePreview();
+      renderComposeScreen();
+    });
+
+    const conflictIds = previewConflictIds(composePreview);
+    conflicts.textContent = message(state.locale, 'composeConflicts');
+    for (const id of conflictIds) {
+      const card = document.createElement('section');
+      const label = document.createElement('p');
+      const prefer = document.createElement('input');
+      const rename = document.createElement('input');
+      const sourceSelect = document.createElement('select');
+      const sourceLabel = document.createElement('label');
+      const preferText = document.createElement('span');
+      const renameText = document.createElement('span');
+      const resolution = composeResolutions.find((item) => item.id === id);
+      label.textContent = id;
+      prefer.type = 'radio';
+      prefer.checked = resolution?.mode === 'prefer';
+      prefer.addEventListener('change', () => {
+        composeResolutions = [
+          ...composeResolutions.filter((item) => item.id !== id),
+          { id, mode: 'prefer', prefer: resolution?.prefer ?? composeSources[0]?.from ?? '' },
+        ];
+        renderComposeScreen();
+      });
+      rename.type = 'radio';
+      rename.checked = resolution?.mode === 'rename';
+      rename.addEventListener('change', () => {
+        composeResolutions = [
+          ...composeResolutions.filter((item) => item.id !== id),
+          { id, mode: 'rename' },
+        ];
+        renderComposeScreen();
+      });
+      preferText.textContent = message(state.locale, 'composeResolvePrefer');
+      renameText.textContent = message(state.locale, 'composeResolveRename');
+      sourceLabel.textContent = message(state.locale, 'composePreferSource');
+      for (const source of composeSources) {
+        const option = document.createElement('option');
+        option.value = source.from;
+        option.textContent = source.from;
+        option.selected = source.from === (resolution?.prefer ?? composeSources[0]?.from);
+        sourceSelect.append(option);
+      }
+      sourceSelect.disabled = resolution?.mode !== 'prefer';
+      sourceSelect.addEventListener('change', () => {
+        composeResolutions = [
+          ...composeResolutions.filter((item) => item.id !== id),
+          { id, mode: 'prefer', prefer: sourceSelect.value },
+        ];
+        renderComposeScreen();
+      });
+      card.append(label, prefer, preferText, rename, renameText);
+      card.append(sourceLabel, sourceSelect);
+      conflicts.append(card);
+    }
+
+    preview.type = 'button';
+    preview.textContent = message(state.locale, 'composePreview');
+    preview.addEventListener('click', () => void requestComposePreview());
+    install.type = 'button';
+    install.textContent = message(state.locale, 'composeInstall');
+    install.disabled = !composeInstallReady();
+    composeInstallButton = install;
+    install.addEventListener('click', () => {
+      if (install.disabled || !composeInstallReady()) {
+        setMessageKey('composePreviewRequired');
+        return;
+      }
+      void submitPlan(
+        freshPlanRequest('compose', {
+          profile: composeProfile,
+          spec: composeSpec(composeProfile, composeSources, composeResolutions),
+        }),
+      );
+    });
+    panel.append(
+      heading,
+      profileLabel,
+      sources,
+      resolvedSources,
+      addSource,
+      conflicts,
+      preview,
+      install,
+    );
+    activeMount.append(panel);
+  }
+
+  function trackedProfiles(): readonly string[] {
+    if (!record(overviewData) || !Array.isArray(overviewData.profiles)) return [];
+    return overviewData.profiles.flatMap((item) =>
+      record(item) && item.status === 'tracked' && typeof item.profile === 'string'
+        ? [item.profile]
+        : [],
+    );
+  }
+
+  function renderSkillEditor(): void {
+    activeMount.textContent = '';
+    const panel = document.createElement('section');
+    const heading = document.createElement('h2');
+    const profileLabel = document.createElement('label');
+    const profile = document.createElement('select');
+    const skills = document.createElement('section');
+    const skillLabel = document.createElement('label');
+    const skill = document.createElement('input');
+    const load = document.createElement('button');
+    const contentLabel = document.createElement('label');
+    const editor = document.createElement('textarea');
+    const save = document.createElement('button');
+
+    heading.textContent = message(state.locale, 'editorHeading');
+    profileLabel.textContent = message(state.locale, 'editorProfile');
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = message(state.locale, 'editorProfile');
+    profile.append(blank);
+    for (const name of trackedProfiles()) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      profile.append(option);
+    }
+    profile.value = editorProfile;
+    profile.addEventListener('change', (event) => {
+      const current = event.currentTarget;
+      if (!(current instanceof HTMLSelectElement)) return;
+      editorProfile = current.value;
+      editorSkills = [];
+      editorSkillId = '';
+      editorContent = '';
+      void loadEditorSkills();
+    });
+    profileLabel.append(profile);
+
+    skills.textContent = message(state.locale, 'editorSkills');
+    for (const entry of editorSkills) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.textContent = entry.drift
+        ? `${entry.id} (${message(state.locale, 'editorDrift')})`
+        : entry.id;
+      item.addEventListener('click', () => {
+        editorSkillId = entry.id;
+        void loadEditorContent();
+      });
+      skills.append(item);
+    }
+
+    skillLabel.textContent = message(state.locale, 'editorNewSkill');
+    skill.type = 'text';
+    skill.value = editorSkillId;
+    skill.addEventListener('input', (event) => {
+      const current = event.currentTarget;
+      if (current instanceof HTMLInputElement) editorSkillId = current.value.trim();
+    });
+    skillLabel.append(skill);
+    load.type = 'button';
+    load.textContent = message(state.locale, 'editorLoadSkill');
+    load.addEventListener('click', () => void loadEditorContent());
+
+    contentLabel.textContent = message(state.locale, 'editorContent');
+    editor.value = editorContent;
+    editor.addEventListener('input', (event) => {
+      const current = event.currentTarget;
+      if (current instanceof HTMLTextAreaElement) editorContent = current.value;
+    });
+    contentLabel.append(editor);
+    save.type = 'button';
+    save.textContent = message(state.locale, 'editorSave');
+    save.addEventListener('click', () => {
+      if (!safeProfile(editorProfile)) {
+        setMessageKey('validationEditorProfile');
+        return;
+      }
+      if (!safeSkillId(editorSkillId)) {
+        setMessageKey('validationEditorSkill');
+        return;
+      }
+      void submitPlan(
+        freshPlanRequest('editSkill', {
+          profile: editorProfile,
+          skillId: editorSkillId,
+          content: editorContent,
+        }),
+      );
+    });
+    panel.append(heading, profileLabel, skills, skillLabel, load, contentLabel, save);
+    activeMount.append(panel);
+  }
+
   function renderActiveScreen(): void {
     switch (activeScreen) {
       case 'overview':
@@ -402,12 +860,19 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
           handleReviewControl,
         );
         return;
+      case 'compose':
+        renderComposeScreen();
+        return;
+      case 'skill-editor':
+        renderSkillEditor();
+        return;
     }
   }
 
   function loadActiveScreen(): void {
     if (activeScreen === 'overview' && overviewData === undefined) void refreshOverview();
     if (activeScreen === 'doctor' && doctorData === undefined) void refreshDoctor();
+    if (activeScreen === 'skill-editor' && overviewData === undefined) void refreshOverview();
   }
 
   function showCurrentHash(): void {
@@ -472,6 +937,59 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     const result = await postApi(token, request, state.locale);
     diffData = result.response.metadata;
     renderIfActive('profile-diff');
+  }
+
+  async function requestComposePreview(): Promise<void> {
+    if (!safeProfile(composeProfile)) {
+      setMessageKey('validationComposeProfile');
+      return;
+    }
+    if (composeSources.length === 0 || composeSources.some((source) => source.from.length === 0)) {
+      setMessageKey('validationComposeSource');
+      return;
+    }
+    const request = {
+      operation: 'composePreview',
+      input: { spec: composeSpec(composeProfile, composeSources, composeResolutions) },
+    } as const satisfies UiRequest;
+    const revision = composePreviewRevision;
+    const requestId = ++composePreviewRequest;
+    const result = await postApi(token, request, state.locale);
+    if (revision !== composePreviewRevision || requestId !== composePreviewRequest) return;
+    composePreview = result.response;
+    const ids = new Set(previewConflictIds(composePreview));
+    composeResolutions = composeResolutions.filter((item) => ids.has(item.id));
+    renderIfActive('compose');
+  }
+
+  async function loadEditorSkills(): Promise<void> {
+    if (!safeProfile(editorProfile)) return;
+    const request = {
+      operation: 'diff',
+      input: { profile: editorProfile },
+    } as const satisfies UiRequest;
+    const result = await postApi(token, request, state.locale);
+    editorSkills = editorSkillsFromDiff(result.response.metadata);
+    renderIfActive('skill-editor');
+  }
+
+  async function loadEditorContent(): Promise<void> {
+    if (!safeProfile(editorProfile)) {
+      setMessageKey('validationEditorProfile');
+      return;
+    }
+    if (!safeSkillId(editorSkillId)) {
+      setMessageKey('validationEditorSkill');
+      return;
+    }
+    const request = {
+      operation: 'skillContent',
+      input: { profile: editorProfile, skillId: editorSkillId },
+    } as const satisfies UiRequest;
+    const result = await postApi(token, request, state.locale);
+    const metadata = previewMetadata(result.response);
+    editorContent = typeof metadata.content === 'string' ? metadata.content : '';
+    renderIfActive('skill-editor');
   }
 
   async function submitPlan(request: UiWriteRequest): Promise<void> {

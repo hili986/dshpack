@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### 新增
+
+- 本机 UI 支持自由组合：多来源逐项选择 skill，预览来源可得内容、provenance 与全量冲突；冲突必须明确 `prefer` 或 `rename` 后，才可经既有 plan → 逐项授权 → apply 流程组装并安装。
+- 本机 UI 支持 Skill 原文读取和编辑：profile 关联的 skill 列表显示 drift，编辑器以 textarea 属性装载文本；服务端限制为 `skills/<skillId>/SKILL.md`、256 KiB，并让保存结果保留为用户 drift。
+
+### 安全
+
+- 新增 composePreview 的零 `DSH_HOME` 写入快照、skillId/resolve 双层路径闭合、编辑大小上限和 pack 归属 drift 的回归与 mutant 证据；UI 中文/英文消息目录同步覆盖组合与编辑流程。
+
 ## 0.4.1
 
 **浏览器界面精修 + 中/英切换。** 0.4.0 发布后真实使用一轮的回收，六处缺陷修复（用户截图两处 + 自查四处），界面从"能用的线框"变成产品形态。

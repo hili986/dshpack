@@ -216,6 +216,15 @@ describe('installed metadata v1 contract', () => {
     });
   });
 
+  it('permits a one-character target profile without accepting a short pack identity', () => {
+    const metadata = v0('x');
+    metadata.pack.name = 'valid-pack';
+    expect(parseInstalledMetadata(metadata, 'x')).toMatchObject({ ok: true });
+
+    const invalidPack = { ...metadata, pack: { ...metadata.pack, name: 'x' } };
+    expect(parseInstalledMetadata(invalidPack, 'x')).toEqual({ ok: false });
+  });
+
   it('reads a fully specified v1 record in full mode', () => {
     const metadata = v1();
 

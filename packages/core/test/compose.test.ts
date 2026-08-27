@@ -96,10 +96,18 @@ describe('compose v0 contract', () => {
   });
 
   it.each([
+    'github:dsh-packs/web-dev',
+    'https://github.com/dsh-packs/web-dev',
+    'https://github.com/dsh-packs/web-dev/',
+    'https://github.com/dsh-packs/web-dev.git',
+  ])('accepts a GitHub repository pending HEAD resolution: %s', (from) => {
+    expect(validateComposeValue({ ...compose, include: [{ from, skills: ['*'] }] }).ok).toBe(true);
+  });
+
+  it.each([
     ['a short sha', 'github:dsh-packs/web-dev#3414f1a'],
     ['a branch name', 'github:dsh-packs/web-dev#main'],
     ['an uppercase sha', 'github:dsh-packs/web-dev#3414F1AF3FD674998CEA81716586F4716A538F50'],
-    ['no ref at all', 'github:dsh-packs/web-dev'],
     ['plain http', 'tarball:http://example.com/pack.tgz'],
   ])('refuses %s as a source, holding the same pinning rule install does', (_case, from) => {
     expect(validateComposeValue({ ...compose, include: [{ from, skills: ['*'] }] }).ok).toBe(false);

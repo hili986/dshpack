@@ -16,6 +16,7 @@ import {
   type UiServerEngineRegistry,
   type UiServerWriteInvocation,
 } from '../src/ui/server.js';
+import { enginePack } from './install-engine-fixture.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -669,6 +670,112 @@ describe('UI write plan/apply gateway', () => {
     }
   });
 
+  it('pins a re-planned bare GitHub install source before apply', async () => {
+    const dshHome = await temporaryHome();
+    const calls: UiServerWriteInvocation[] = [];
+    const pinned = 'github:owner/repo#0123456789abcdef0123456789abcdef01234567';
+    const engines = inertEngines({
+      runWrite: async (invocation) => {
+        calls.push(invocation);
+        return report({
+          plan: {
+            source: {
+              kind: 'github',
+              owner: 'owner',
+              repo: 'repo',
+              commit: '0123456789abcdef0123456789abcdef01234567',
+              url: 'https://codeload.github.com/owner/repo/tar.gz/0123456789abcdef0123456789abcdef01234567',
+            },
+          },
+        });
+      },
+    });
+    const handle = await startUiServer({ dshHome, engines });
+    try {
+      const input = { source: 'https://github.com/owner/repo', as: 'target-profile' };
+      const planned = await post(
+        origin(handle.url),
+        { operation: 'install', phase: 'plan', input, authorizedDangerousPermissions: [] },
+        handle.token,
+      );
+      const planDigest = (planned.body.metadata as JsonObject).planDigest as string;
+      const applied = await post(
+        origin(handle.url),
+        {
+          operation: 'install',
+          phase: 'apply',
+          input,
+          planDigest,
+          authorizedDangerousPermissions: [],
+        },
+        handle.token,
+      );
+
+      expect(applied.status).toBe(200);
+      expect(calls).toHaveLength(3);
+      expect(calls[2]).toMatchObject({ phase: 'apply', input: { source: pinned } });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('uses the compose plan canonical spec for apply', async () => {
+    const dshHome = await temporaryHome();
+    const calls: UiServerWriteInvocation[] = [];
+    const pinned = 'github:owner/repo#0123456789abcdef0123456789abcdef01234567';
+    const canonicalSpec = {
+      composeVersion: 0,
+      name: 'target-profile',
+      version: '1.0.0',
+      description: 'Pinned source.',
+      author: 'test',
+      license: 'MIT',
+      include: [{ from: pinned, skills: ['notes'] }],
+      defaults: { permissionPreset: 'workspace-write' },
+    };
+    const engines = inertEngines({
+      runWrite: async (invocation) => {
+        calls.push(invocation);
+        return report({ plan: { compose: { spec: canonicalSpec } } });
+      },
+    });
+    const handle = await startUiServer({ dshHome, engines });
+    try {
+      const input = {
+        profile: 'target-profile',
+        spec: {
+          ...canonicalSpec,
+          include: [{ from: 'https://github.com/owner/repo', skills: ['notes'] }],
+        },
+      };
+      const planned = await post(
+        origin(handle.url),
+        { operation: 'compose', phase: 'plan', input, authorizedDangerousPermissions: [] },
+        handle.token,
+      );
+      const planDigest = (planned.body.metadata as JsonObject).planDigest as string;
+      const applied = await post(
+        origin(handle.url),
+        {
+          operation: 'compose',
+          phase: 'apply',
+          input,
+          planDigest,
+          authorizedDangerousPermissions: [],
+        },
+        handle.token,
+      );
+
+      expect(applied.status).toBe(200);
+      expect(calls[2]).toMatchObject({
+        phase: 'apply',
+        input: { spec: { include: [{ from: pinned, skills: ['notes'] }] } },
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('derives structured update permissions from every valid authorization delta', async () => {
     const dshHome = await temporaryHome();
     const requiredUpdatePermissions = [
@@ -977,6 +1084,158 @@ describe('forbidden authority fields are refused per key, not just as a branch',
       }
     },
   );
+});
+
+describe('M3 UI compose and skill operations', () => {
+  const composeInput = {
+    profile: 'combined-notes',
+    spec: {
+      composeVersion: 0,
+      name: 'combined-notes',
+      version: '1.0.0',
+      description: 'A composed notes profile.',
+      author: 'dshpack test',
+      license: 'MIT',
+      include: [{ from: './source', skills: ['notes'] }],
+      defaults: { permissionPreset: 'workspace-write' },
+    },
+  } as const;
+  const editInput = {
+    profile: 'combined-notes',
+    skillId: 'notes',
+    content: '# User notes\n',
+  } as const;
+  const required = [{ kind: 'force', subject: 'combined-notes' }] as const;
+
+  it.each([
+    ['compose', composeInput],
+    ['editSkill', editInput],
+  ] as const)(
+    'keeps %s behind the existing missing-grant and digest gates',
+    async (operation, input) => {
+      const dshHome = await temporaryHome();
+      const calls: UiServerWriteInvocation[] = [];
+      const engines = inertEngines({
+        runWrite: async (invocation) => {
+          calls.push(invocation);
+          return report({
+            requiredDangerousPermissions: required,
+            plan: { operation: invocation.operation, input: invocation.input },
+          });
+        },
+      });
+      const handle = await startUiServer({ dshHome, engines });
+      try {
+        const missing = await post(
+          origin(handle.url),
+          { operation, phase: 'plan', input, authorizedDangerousPermissions: [] },
+          handle.token,
+        );
+        expect(missing).toMatchObject({
+          status: 200,
+          body: {
+            exitCode: EXIT_CODES.USER_DECLINED,
+            metadata: { missingDangerousPermissions: required },
+          },
+        });
+
+        const planned = await post(
+          origin(handle.url),
+          { operation, phase: 'plan', input, authorizedDangerousPermissions: required },
+          handle.token,
+        );
+        const planDigest = (planned.body.metadata as JsonObject).planDigest as string;
+        const changed = await post(
+          origin(handle.url),
+          {
+            operation,
+            phase: 'apply',
+            input,
+            authorizedDangerousPermissions: required,
+            planDigest: `${planDigest}-changed`,
+          },
+          handle.token,
+        );
+        expect(changed).toMatchObject({
+          status: 409,
+          body: { diagnostics: [expect.objectContaining({ code: 'E_UI_PLAN_CHANGED' })] },
+        });
+        expect(calls.filter((call) => call.phase === 'apply')).toHaveLength(0);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it('enforces closed ids, content size, and preview no-write behavior at the HTTP boundary', async () => {
+    const dshHome = await temporaryHome();
+    await mkdir(join(dshHome, 'skills', 'notes'), { recursive: true });
+    await writeFile(join(dshHome, 'skills', 'notes', 'SKILL.md'), '# Original notes\n');
+    const source = await enginePack({ assets: true });
+    const before = await byteSnapshot(dshHome);
+    const handle = await startUiServer({ dshHome });
+    try {
+      const preview = await post(
+        origin(handle.url),
+        {
+          operation: 'composePreview',
+          input: {
+            spec: {
+              ...composeInput.spec,
+              include: [{ from: source, skills: ['notes'] }],
+            },
+          },
+        },
+        handle.token,
+      );
+      expect(preview).toMatchObject({
+        status: 200,
+        body: {
+          exitCode: EXIT_CODES.SUCCESS,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [expect.objectContaining({ skills: ['notes'] })],
+          },
+        },
+      });
+      expect(await byteSnapshot(dshHome)).toBe(before);
+
+      for (const skillId of ['..', '../notes', 'notes/child', 'notes\\child']) {
+        const denied = await post(
+          origin(handle.url),
+          { operation: 'skillContent', input: { profile: 'combined-notes', skillId } },
+          handle.token,
+        );
+        expect(denied).toMatchObject({
+          status: 400,
+          body: { diagnostics: [expect.objectContaining({ code: 'E_UI_REQUEST' })] },
+        });
+      }
+
+      const tooLarge = await post(
+        origin(handle.url),
+        {
+          operation: 'editSkill',
+          phase: 'plan',
+          input: { ...editInput, content: 'x'.repeat(256 * 1024 + 1) },
+          authorizedDangerousPermissions: [],
+        },
+        handle.token,
+      );
+      expect(tooLarge).toMatchObject({
+        status: 200,
+        body: {
+          exitCode: EXIT_CODES.CONTRACT,
+          diagnostics: [expect.objectContaining({ code: 'E_UI_SKILL_CONTENT_TOO_LARGE' })],
+        },
+      });
+      expect(await readFile(join(dshHome, 'skills', 'notes', 'SKILL.md'), 'utf8')).toBe(
+        '# Original notes\n',
+      );
+    } finally {
+      await handle.close();
+    }
+  });
 });
 
 describe('itemized grants answer only the prompt they name', () => {

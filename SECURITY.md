@@ -71,6 +71,8 @@
 - **token 不离开本页。** 所有 UI 响应带 `Referrer-Policy: no-referrer`；pack 提供的 URL（homepage、仓库地址）渲染为纯文本，不是可点链接也不是图片地址；token 只存在于内存，不进 `localStorage` / `sessionStorage` / cookie。
 - **样式是完全静态的。** 唯一的 `<style>` 块随 `index.html` 内置，无外部资源；UI 源码不得出现 `.style` 属性写入或 `setAttribute('style', …)`——持有 token 的页面上，动态 CSS 是与外链同族的外泄通道。
 - **浏览器 bundle 是可审计的。** 零运行时依赖（不引 React / Vue / Vite），由仓内既有构建器打成约 36 kB 的单文件。这是刻意的设计约束：用户要审计"我点的那个授权开关到底做了什么"时，应该读得懂发给他的那份产物。
+- **`composePreview` 是真正的只读操作。** 它只在私有临时目录中校验和组装；UI 接受本地目录、裸或固定 SHA 的 `github:`、GitHub 仓库 URL，以及带完整性信息的 `tarball:` 来源；裸 GitHub 输入会先解析为固定 SHA，preview、plan 与 provenance 只展示或保存该 pin。可导出 profile 的 `profile:` 来源仍被拒绝。测试对 `DSH_HOME` 做字节快照，任何目标写入都会失败。真正的 compose 安装仍复用 install 的 journal 事务和原有两步确认。
+- **Skill 编辑没有浏览器可控路径。** 请求只能携带 `profile`、安全字符的 `skillId` 与内容；`/`、`\\`、`..` 一律拒绝，服务端自行 resolve `skills/<skillId>/SKILL.md`，并再次证明目录和文件仍在 skills 根内、且不是链接或特殊文件。内容超过 256 KiB 在 plan 前硬拒。编辑不会改写 pack 的 installed metadata，所以它永远是用户本地 drift，而不是伪造的 pack 归属。
 
 ## 失败后的机器状态
 
@@ -84,6 +86,17 @@
 ## 开发与测试边界
 
 自动化测试必须使用隔离的临时目录。除显式人工授权的合约 smoke test 外，不得启动 `dsh`，也不得读取或修改用户真实 `.dsh`、上游仓库或文档仓。
+
+## 已知且刻意接受：本地 DNS 信任 opt-in
+
+默认情况下，远程来源在连接前会拒绝 DNS 解析到私有或保留地址的主机名，以降低 SSRF 与 DNS
+重绑定风险。`DSHPACK_TRUST_LOCAL_DNS=1` 是一项刻意的 opt-in：它只跳过这一条**主机名 DNS
+结果**的地址分类预检，用于用户自己配置的 fake-IP 或透明代理——这些代理会把如
+`codeload.github.com` 的真实远端映射到本地保留地址后再按其路由转发。
+
+设置该变量即表示用户自行信任该 DNS 和代理路由；它不是对任意本地目标的放行。`localhost`、
+`*.localhost` 以及所有 IP 字面量仍在 DNS 信任决定之前被拒绝，默认未设置该变量时原有预检
+完全不变。
 
 ## GC managed-state boundary
 

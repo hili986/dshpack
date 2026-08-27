@@ -18,6 +18,8 @@ import { restoreProfile } from '../restore/engine.js';
 import { statusProfiles } from '../status/engine.js';
 import { uninstallProfile } from '../uninstall/engine.js';
 import { updateProfile } from '../update/engine.js';
+import { composeAndInstall, previewCompose } from './compose.js';
+import { editSkillContent, isSafeSkillId, readSkillContent } from './skills.js';
 import type {
   UiDangerousPermission,
   UiJsonObject,
@@ -29,8 +31,23 @@ import type {
 const HOST = '127.0.0.1';
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
 const UI_TOKEN_MARKER = '__DSHPACK_UI_TOKEN__';
-const READ_OPERATIONS = new Set(['list', 'status', 'diff', 'doctor']);
-const WRITE_OPERATIONS = new Set(['install', 'uninstall', 'update', 'restore', 'gc']);
+const READ_OPERATIONS = new Set([
+  'list',
+  'status',
+  'diff',
+  'doctor',
+  'composePreview',
+  'skillContent',
+]);
+const WRITE_OPERATIONS = new Set([
+  'install',
+  'uninstall',
+  'update',
+  'restore',
+  'gc',
+  'compose',
+  'editSkill',
+]);
 const FORBIDDEN_INPUT_KEYS = new Set([
   'allowBuilds',
   'allowDangerFullAccess',
@@ -49,7 +66,7 @@ type EngineMetadata = Record<string, unknown>;
 export type UiServerEngineReport = CommandReport<object>;
 
 export interface UiServerReadInvocation {
-  readonly operation: 'list' | 'status' | 'diff' | 'doctor';
+  readonly operation: 'list' | 'status' | 'diff' | 'doctor' | 'composePreview' | 'skillContent';
   readonly input: Record<string, unknown> & { readonly dshHome: string };
 }
 
@@ -143,6 +160,45 @@ function permission(value: unknown): value is UiDangerousPermission {
   }
 }
 
+function exactInputKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
+  const expected = [...keys].sort((left, right) => left.localeCompare(right, 'en'));
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validSkillInput(value: Record<string, unknown>): boolean {
+  return typeof value.profile === 'string' && isSafeSkillId(value.skillId);
+}
+
+function validComposeInput(value: Record<string, unknown>, profile: boolean): boolean {
+  return (
+    exactInputKeys(value, profile ? ['profile', 'spec'] : ['spec']) &&
+    typeof value.spec === 'object' &&
+    value.spec !== null &&
+    !Array.isArray(value.spec) &&
+    (!profile || typeof value.profile === 'string')
+  );
+}
+
+function validOperationInput(operation: string, value: Record<string, unknown>): boolean {
+  switch (operation) {
+    case 'composePreview':
+      return validComposeInput(value, false);
+    case 'compose':
+      return validComposeInput(value, true);
+    case 'skillContent':
+      return exactInputKeys(value, ['profile', 'skillId']) && validSkillInput(value);
+    case 'editSkill':
+      return (
+        validSkillInput(value) &&
+        exactInputKeys(value, ['profile', 'skillId', 'content']) &&
+        typeof value.content === 'string'
+      );
+    default:
+      return true;
+  }
+}
+
 function validateRequest(value: unknown): UiRequest {
   if (!object(value) || typeof value.operation !== 'string' || !object(value.input))
     throw new HttpRequestError(400, EXIT_CODES.USAGE, 'E_UI_REQUEST', 'Invalid UI request.');
@@ -152,6 +208,13 @@ function validateRequest(value: unknown): UiRequest {
       EXIT_CODES.USAGE,
       'E_UI_REQUEST',
       'The UI wire request contains a forbidden authority field.',
+    );
+  if (!validOperationInput(value.operation, value.input))
+    throw new HttpRequestError(
+      400,
+      EXIT_CODES.USAGE,
+      'E_UI_REQUEST',
+      'Invalid UI operation input.',
     );
   if (READ_OPERATIONS.has(value.operation)) {
     if ('phase' in value || 'authorizedDangerousPermissions' in value || 'planDigest' in value)
@@ -326,7 +389,9 @@ function requiredPermissions(
   const plan = object(metadata.plan) ? metadata.plan : undefined;
   return uniquePermissions([
     ...explicit,
-    ...(operation === 'install' && plan !== undefined ? installPermissions(plan) : []),
+    ...((operation === 'install' || operation === 'compose') && plan !== undefined
+      ? installPermissions(plan)
+      : []),
     ...(operation === 'update' ? updatePermissions(metadata) : []),
     ...requestedOperationPermissions(operation, input),
   ]);
@@ -336,6 +401,36 @@ function calculatedPlanDigest(metadata: EngineMetadata): string {
   if (object(metadata.plan) && typeof metadata.plan.planDigest === 'string')
     return metadata.plan.planDigest;
   return digest(metadata);
+}
+
+function pinnedGitHubSource(value: unknown): string | undefined {
+  if (
+    !object(value) ||
+    value.kind !== 'github' ||
+    typeof value.owner !== 'string' ||
+    typeof value.repo !== 'string' ||
+    typeof value.commit !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value.owner) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value.repo) ||
+    !/^[a-f0-9]{40}$/u.test(value.commit)
+  )
+    return undefined;
+  return `github:${value.owner}/${value.repo}#${value.commit}`;
+}
+
+function frozenApplyInput(
+  operation: UiWriteOperation,
+  input: Record<string, unknown> & { readonly dshHome: string },
+  metadata: EngineMetadata,
+): Record<string, unknown> & { readonly dshHome: string } {
+  const plan = object(metadata.plan) ? metadata.plan : undefined;
+  if (operation === 'install') {
+    const source = pinnedGitHubSource(plan?.source);
+    return source === undefined ? input : { ...input, source };
+  }
+  if (operation === 'compose' && object(plan?.compose) && object(plan.compose.spec))
+    return { ...input, spec: plan.compose.spec };
+  return input;
 }
 
 function planPayload(metadata: EngineMetadata): UiJsonObject {
@@ -434,7 +529,7 @@ async function dispatchWrite(
   const applied = await engines.runWrite({
     operation: request.operation,
     phase: 'apply',
-    input,
+    input: frozenApplyInput(request.operation, input, plannedMetadata),
     authorizedDangerousPermissions: authorization,
   });
   return {
@@ -648,6 +743,16 @@ function defaultEngines(dshHome: string, suppliedRuntime?: InstallRuntime): UiSe
             // checks closed instead of allowing a nominally read-only request to write.
             runDsh: async () => Promise.reject(new Error('UI doctor is read-only.')),
           });
+        case 'composePreview':
+          return previewCompose(
+            dshHome,
+            input as unknown as { spec: Parameters<typeof previewCompose>[1]['spec'] },
+          );
+        case 'skillContent':
+          return readSkillContent(
+            dshHome,
+            input as unknown as { profile: string; skillId: string },
+          );
       }
     },
     async runWrite(invocation) {
@@ -667,6 +772,21 @@ function defaultEngines(dshHome: string, suppliedRuntime?: InstallRuntime): UiSe
           return restoreProfile(input as unknown as Parameters<typeof restoreProfile>[0]);
         case 'gc':
           return runGc(input as unknown as Parameters<typeof runGc>[0]);
+        case 'compose':
+          return composeAndInstall(
+            dshHome,
+            input as { profile: string; spec: Parameters<typeof composeAndInstall>[1]['spec'] },
+            gatedRuntime,
+            invocation.phase,
+          );
+        case 'editSkill':
+          return editSkillContent(
+            dshHome,
+            input as { profile: string; skillId: string; content: string },
+            invocation.phase,
+          );
+        default:
+          throw new Error(`Unsupported UI write operation: ${invocation.operation}`);
       }
     },
   };

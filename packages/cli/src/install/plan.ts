@@ -44,7 +44,7 @@ function failure(exitCode: ExitCode, diagnostics: readonly Diagnostic[]): Instal
 
 function validProfile(value: string): boolean {
   return (
-    value.length >= 3 &&
+    value.length >= 1 &&
     value.length <= 64 &&
     value !== 'web' &&
     value !== 'headless' &&
@@ -117,7 +117,7 @@ function inputFailure(input: PrepareInstallPlanInput): InstallPreflightResult | 
       diagnostic(
         'E_PROFILE_NAME',
         '目标 profile 名不符合契约。',
-        '使用 3–64 位 kebab-case，且不能为 web/headless。',
+        '使用 1–64 位 kebab-case，且不能为 web/headless。',
         input.options.as,
       ),
     ]);

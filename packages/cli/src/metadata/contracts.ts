@@ -153,13 +153,18 @@ export function isAddressableProfileName(name: string): boolean {
 /** Whether dshpack may create and own a profile with this name. */
 export function isInstallableProfileName(name: string): boolean {
   return (
-    name.length >= 3 &&
+    name.length >= 1 &&
     name.length <= 64 &&
     PROFILE_NAME.test(name) &&
     !isReservedProfileName(name) &&
     name !== MODULE_FALLBACK &&
     isAddressableProfileName(name)
   );
+}
+
+/** Whether `name` is valid where a pack identity, rather than a profile path, is required. */
+export function isPackIdentityName(name: string): boolean {
+  return name.length >= 3 && isInstallableProfileName(name);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -377,7 +382,7 @@ function validV0(value: unknown): value is InstalledMetadataV0 {
     isRecord(pack) &&
     exactKeys(pack, ['name', 'version', 'manifestDigest']) &&
     typeof pack.name === 'string' &&
-    isInstallableProfileName(pack.name) &&
+    isPackIdentityName(pack.name) &&
     validSemver(pack.version) &&
     typeof pack.manifestDigest === 'string' &&
     isCanonicalSha256Sri(pack.manifestDigest) &&

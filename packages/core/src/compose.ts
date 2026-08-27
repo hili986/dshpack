@@ -9,8 +9,8 @@ const semanticVersion =
 const kebabCase = '^[a-z0-9]+(?:-[a-z0-9]+)*$';
 const packName = '^(?!web$)(?!headless$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$';
 const httpsUrl = '^https://[^/@\\s]+(?:/[^\\s]*)?$';
-const composeSource =
-  '^(?:profile:[a-z0-9][a-z0-9-]*|github:[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._-]*#[a-f0-9]{40}|tarball:(?:https://|file:|\\./).+|\\./.+)$';
+const githubRepository = '[A-Za-z0-9][A-Za-z0-9._-]*\\/[A-Za-z0-9][A-Za-z0-9._-]*';
+const composeSource = `^(?:profile:[a-z0-9][a-z0-9-]*|github:${githubRepository}(?:#[a-f0-9]{40})?|https://github\\.com/${githubRepository}(?:\\.git)?/?|tarball:(?:https://|file:|\\./).+|\\./.+)$`;
 
 function strictObject<T extends Record<string, ReturnType<typeof Type.Unsafe>>>(
   properties: T,

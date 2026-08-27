@@ -40,6 +40,34 @@ export type UiListInput = {
 export type UiStatusInput = Omit<StatusInput, 'dshHome'>;
 export type UiDiffInput = Omit<DiffInput, 'dshHome'>;
 export type UiDoctorInput = Pick<DoctorInput, 'profile' | 'strict'>;
+/** The browser submits compose.yml's validated document shape, never a file path. */
+export interface UiComposeSpec {
+  readonly composeVersion: 0;
+  readonly name: string;
+  readonly version: string;
+  readonly description: string;
+  readonly author: string;
+  readonly license: string;
+  readonly include: readonly { readonly from: string; readonly skills: readonly string[] }[];
+  readonly resolve?: readonly {
+    readonly id: string;
+    readonly rename?: string;
+    readonly prefer?: string;
+  }[];
+  readonly mcp?: readonly {
+    readonly serverName: string;
+    readonly transport: 'streamable-http';
+    readonly url: string;
+  }[];
+  readonly defaults: { readonly permissionPreset: 'workspace-write' | 'danger-full-access' };
+}
+export interface UiComposePreviewInput {
+  readonly spec: UiComposeSpec;
+}
+export interface UiSkillContentInput {
+  readonly profile: string;
+  readonly skillId: string;
+}
 
 export interface UiListRequest {
   readonly operation: 'list';
@@ -61,7 +89,23 @@ export interface UiDoctorRequest {
   readonly input: UiDoctorInput;
 }
 
-export type UiReadRequest = UiListRequest | UiStatusRequest | UiDiffRequest | UiDoctorRequest;
+export interface UiComposePreviewRequest {
+  readonly operation: 'composePreview';
+  readonly input: UiComposePreviewInput;
+}
+
+export interface UiSkillContentRequest {
+  readonly operation: 'skillContent';
+  readonly input: UiSkillContentInput;
+}
+
+export type UiReadRequest =
+  | UiListRequest
+  | UiStatusRequest
+  | UiDiffRequest
+  | UiDoctorRequest
+  | UiComposePreviewRequest
+  | UiSkillContentRequest;
 
 export type UiInstallInput = Pick<InstallInput, 'source' | 'as' | 'replace' | 'frozen' | 'force'>;
 export type UiUninstallInput = Pick<
@@ -71,8 +115,22 @@ export type UiUninstallInput = Pick<
 export type UiUpdateInput = Pick<UpdateInput, 'profile' | 'to' | 'ours' | 'theirs' | 'only'>;
 export type UiRestoreInput = Pick<RestoreInput, 'profile' | 'to' | 'force'>;
 export type UiGcInput = Omit<GcInput, 'dshHome' | 'dryRun'>;
+export interface UiComposeInput {
+  readonly profile: string;
+  readonly spec: UiComposeSpec;
+}
+export interface UiEditSkillInput extends UiSkillContentInput {
+  readonly content: string;
+}
 
-export type UiWriteOperation = 'install' | 'uninstall' | 'update' | 'restore' | 'gc';
+export type UiWriteOperation =
+  | 'install'
+  | 'uninstall'
+  | 'update'
+  | 'restore'
+  | 'gc'
+  | 'compose'
+  | 'editSkill';
 
 interface UiWriteRequestBase<Operation extends UiWriteOperation, Input extends object> {
   readonly operation: Operation;
@@ -105,13 +163,17 @@ export type UiUninstallRequest = UiPhasedWriteRequest<'uninstall', UiUninstallIn
 export type UiUpdateRequest = UiPhasedWriteRequest<'update', UiUpdateInput>;
 export type UiRestoreRequest = UiPhasedWriteRequest<'restore', UiRestoreInput>;
 export type UiGcRequest = UiPhasedWriteRequest<'gc', UiGcInput>;
+export type UiComposeRequest = UiPhasedWriteRequest<'compose', UiComposeInput>;
+export type UiEditSkillRequest = UiPhasedWriteRequest<'editSkill', UiEditSkillInput>;
 
 export type UiWriteRequest =
   | UiInstallRequest
   | UiUninstallRequest
   | UiUpdateRequest
   | UiRestoreRequest
-  | UiGcRequest;
+  | UiGcRequest
+  | UiComposeRequest
+  | UiEditSkillRequest;
 
 export type UiRequest = UiReadRequest | UiWriteRequest;
 

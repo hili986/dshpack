@@ -8,13 +8,13 @@ import { gzipSync } from 'node:zlib';
 import { request } from 'undici';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as sourceAdapter from '../src/adapters/source.js';
-import { fixedLookup, isPublicAddress } from '../src/adapters/source-network.js';
+import { fixedLookup, isPublicAddress, trustLocalDnsEnabled } from '../src/adapters/source-network.js';
 
 vi.mock('node:dns/promises', async (importOriginal) => ({ ...(await importOriginal<typeof import('node:dns/promises')>()), lookup: vi.fn() }));
 vi.mock('undici', async (importOriginal) => ({ ...(await importOriginal<typeof import('undici')>()), request: vi.fn() }));
 interface DownloadResponse { statusCode: number; location?: string; body?: AsyncIterable<Uint8Array>; cancel?: () => Promise<void> }
 interface ResolvedAddress { address: string; family: 4 | 6 }
-interface SourceDependencies { download?: (url: URL, address?: ResolvedAddress) => Promise<DownloadResponse>; makeTempDirectory?: () => Promise<string>; removeTempDirectory?: (path: string) => Promise<void>; hostnamePolicy?: (hostname: string) => boolean | Promise<boolean>; resolveHostname?: (hostname: string) => Promise<ResolvedAddress[]>; writeChunk?: (handle: unknown, chunk: Uint8Array, offset: number) => Promise<number> }
+interface SourceDependencies { download?: (url: URL, address?: ResolvedAddress) => Promise<DownloadResponse>; makeTempDirectory?: () => Promise<string>; removeTempDirectory?: (path: string) => Promise<void>; hostnamePolicy?: (hostname: string) => boolean | Promise<boolean>; resolveHostname?: (hostname: string) => Promise<ResolvedAddress[]>; trustLocalDns?: boolean; writeChunk?: (handle: unknown, chunk: Uint8Array, offset: number) => Promise<number> }
 interface MaterializedSource { directory: string; provenance: Record<string, unknown>; cleanup(): Promise<void> }
 type Materializer = (reference: string, dependencies?: SourceDependencies) => Promise<MaterializedSource>;
 
@@ -170,7 +170,7 @@ describe('materializeSource', () => {
     await expectSourceError(materialize(reference, { download }), 20, 'SOURCE_INVALID');
     expect(download).not.toHaveBeenCalled();
   });
-  it.each(['localhost', 'a.localhost', '127.0.0.1', '10.0.0.1', '169.254.1.1', '172.16.1.1', '192.168.1.1', '[::1]', '[fe80::1]', '[fc00::1]', '[fd00::1]', '[::ffff:127.0.0.1]'])(
+  it.each(['localhost', 'a.localhost', '127.0.0.1', '10.0.0.1', '169.254.1.1', '172.16.1.1', '192.168.1.1', '93.184.216.34', '[::1]', '[fe80::1]', '[fc00::1]', '[fd00::1]', '[::ffff:127.0.0.1]', '[2606:2800:220:1:248:1893:25c8:1946]'])(
     'rejects literal local, private, or link-local host %s',
     async (hostname) => {
       const bytes = archive();
@@ -195,6 +195,40 @@ describe('materializeSource', () => {
     expect(resolveHostname).toHaveBeenCalledWith('public.example'); await result.cleanup();
     await expectSourceError(materialize(`https://empty.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => [] }), 20, 'SOURCE_HOST_REJECTED');
     await expectSourceError(materialize(`https://failed.example/a.tgz#${sri(bytes)}`, { resolveHostname: async () => { throw new Error('dns failure'); } }), 20, 'SOURCE_HOST_REJECTED');
+  });
+  it('accepts a fake-IP DNS answer only after the explicit opt-in, while keeping localhost and IP literals denied', async () => {
+    const bytes = archive();
+    const fakeIp = { address: '198.18.0.115', family: 4 as const };
+    const sourceUrl = `https://fake-ip.example/a.tgz#${sri(bytes)}`;
+    await expectSourceError(
+      materialize(sourceUrl, {
+        trustLocalDns: false,
+        resolveHostname: async () => [fakeIp],
+        download: async () => ({ statusCode: 200, body: chunks(bytes) }),
+      }),
+      20,
+      'SOURCE_HOST_REJECTED',
+    );
+    const source = await materialize(sourceUrl, {
+      trustLocalDns: true,
+      resolveHostname: async () => [fakeIp],
+      download: async () => ({ statusCode: 200, body: chunks(bytes) }),
+    });
+    expect(source.provenance).toMatchObject({ kind: 'https' });
+    await source.cleanup();
+    for (const hostname of ['localhost', 'a.localhost', '127.0.0.1', '[::1]']) {
+      await expectSourceError(
+        materialize(`https://${hostname}/a.tgz#${sri(bytes)}`, {
+          trustLocalDns: true,
+          download: async () => ({ statusCode: 200, body: chunks(bytes) }),
+        }),
+        20,
+        'SOURCE_HOST_REJECTED',
+      );
+    }
+    expect(trustLocalDnsEnabled({ DSHPACK_TRUST_LOCAL_DNS: '1' })).toBe(true);
+    expect(trustLocalDnsEnabled({ DSHPACK_TRUST_LOCAL_DNS: 'true' })).toBe(false);
+    expect(trustLocalDnsEnabled({})).toBe(false);
   });
   it.each(['http://example.test/a.tgz', 'https://user@example.test/a.tgz', 'https://example.test/a.tgz?q=x', 'https://@example.test/a.tgz', 'https:////@example.test/a.tgz', 'https:\\\\@example.test/a.tgz', 'h\tttps://@example.test/a.tgz', 'https://example.test/a\rb.tgz', 'https://example.test/a\nb.tgz', 'https://example.test/a\tb.tgz', 'https://example.test/a\0b.tgz', 'https://example.test/a b.tgz', 'https://example.test/a\x7fb.tgz', 'https://example.test/a.tgz?', 'https://[']) (
     'rejects URL policy violation with an otherwise valid integrity %s',
@@ -327,6 +361,68 @@ describe('materializeSource', () => {
     );
     expect(failure.hint).toMatch(/git clone/u);
     expect(`${failure.message} ${failure.hint}`).not.toContain(secret);
+  });
+
+  it.each([
+    'github:owner/repo',
+    'https://github.com/owner/repo',
+    'https://github.com/owner/repo/',
+    'https://github.com/owner/repo.git',
+  ])('resolves bare GitHub repository %s to a pinned codeload source', async (reference) => {
+    const commit = '0123456789abcdef0123456789abcdef01234567';
+    const download = vi.fn(async (url: URL): Promise<DownloadResponse> => {
+      if (url.href === 'https://api.github.com/repos/owner/repo')
+        return { statusCode: 200, body: chunks(Buffer.from('{"default_branch":"main"}')) };
+      if (url.href === 'https://api.github.com/repos/owner/repo/commits/main')
+        return { statusCode: 200, body: chunks(Buffer.from(`{"sha":"${commit}"}`)) };
+      return { statusCode: 200, body: chunks(archive()) };
+    });
+
+    const source = await materialize(reference, { download });
+
+    expect(download.mock.calls.map(([url]) => url.href)).toEqual([
+      'https://api.github.com/repos/owner/repo',
+      'https://api.github.com/repos/owner/repo/commits/main',
+      `https://codeload.github.com/owner/repo/tar.gz/${commit}`,
+    ]);
+    expect(source.provenance).toMatchObject({
+      kind: 'github',
+      owner: 'owner',
+      repo: 'repo',
+      commit,
+    });
+    expect(sourceAdapter.sourceReferenceFromProvenance(source.provenance as never)).toBe(
+      `github:owner/repo#${commit}`,
+    );
+    await source.cleanup();
+  });
+
+  it.each([
+    ['a missing repository', 404, 'SOURCE_GITHUB_RESOLVE_NOT_FOUND'],
+    ['GitHub rate limiting', 403, 'SOURCE_GITHUB_RESOLVE_RATE_LIMIT'],
+    ['an unavailable resolver endpoint', 500, 'SOURCE_GITHUB_RESOLVE_NETWORK'],
+  ])('classifies %s while resolving a bare GitHub source', async (_case, statusCode, code) => {
+    await expectSourceError(
+      materialize('github:owner/repo', {
+        download: async () => ({ statusCode }),
+      }),
+      20,
+      code,
+    );
+  });
+
+  it('rejects a non-SHA default-branch HEAD rather than downloading an unpinned archive', async () => {
+    const download = vi.fn(async (url: URL): Promise<DownloadResponse> =>
+      url.pathname.endsWith('/commits/main')
+        ? { statusCode: 200, body: chunks(Buffer.from('{"sha":"main"}')) }
+        : { statusCode: 200, body: chunks(Buffer.from('{"default_branch":"main"}')) },
+    );
+    await expectSourceError(
+      materialize('github:owner/repo', { download }),
+      20,
+      'SOURCE_GITHUB_RESOLVE_INVALID',
+    );
+    expect(download).toHaveBeenCalledTimes(2);
   });
 
   it('accepts only a matching harmless GitHub codeload global PAX comment', async () => {

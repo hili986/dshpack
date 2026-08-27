@@ -18,6 +18,8 @@ export interface NetworkDependencies {
   download?: (url: URL, address: ResolvedAddress) => Promise<DownloadResponse>;
   hostnamePolicy?: (hostname: string) => boolean | Promise<boolean>;
   resolveHostname?: (hostname: string) => Promise<ResolvedAddress[]>;
+  /** Trust a user-controlled DNS/router (for example a fake-IP proxy) for hostnames only. */
+  trustLocalDns?: boolean;
 }
 
 type SourceFailure = (code: string, message: string, hint?: string) => Error;
@@ -82,6 +84,13 @@ export function isPublicAddress(address: string): boolean {
   return publicIpv4(address) || publicIpv6(address);
 }
 
+/** Opt in only when the caller deliberately trusts its local DNS and routing policy. */
+export function trustLocalDnsEnabled(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  return env.DSHPACK_TRUST_LOCAL_DNS === '1';
+}
+
 function normalizedHostname(url: URL): string {
   const bracketless = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
   return bracketless.toLowerCase().replace(/\.+$/u, '');
@@ -107,6 +116,9 @@ export async function resolvePublicTarget(
   }
   let addresses: ResolvedAddress[];
   const literalFamily = isIP(hostname);
+  if (literalFamily !== 0) {
+    throw fail('SOURCE_HOST_REJECTED', '远程 source 主机被安全策略拒绝。');
+  }
   try {
     addresses =
       literalFamily === 0
@@ -115,7 +127,11 @@ export async function resolvePublicTarget(
   } catch {
     throw fail('SOURCE_HOST_REJECTED', '远程 source 主机无法安全解析。');
   }
-  if (addresses.length === 0 || addresses.some(({ address }) => !isPublicAddress(address))) {
+  const trustLocalDns = dependencies.trustLocalDns ?? trustLocalDnsEnabled();
+  if (
+    addresses.length === 0 ||
+    (!trustLocalDns && addresses.some(({ address }) => !isPublicAddress(address)))
+  ) {
     throw fail('SOURCE_HOST_REJECTED', '远程 source 主机被安全策略拒绝。');
   }
   return addresses[0] as ResolvedAddress;
@@ -137,6 +153,7 @@ export async function defaultDownload(
   try {
     response = await request(url, {
       dispatcher: agent,
+      headers: { 'user-agent': 'dshpack' },
       maxRedirections: 0,
       headersTimeout: 30_000,
       bodyTimeout: 30_000,

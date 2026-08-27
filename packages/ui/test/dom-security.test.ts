@@ -68,6 +68,7 @@ describe('browser DOM shell trust boundary', () => {
     expect(main).toContain("type: 'plan-success'");
     expect(main).toContain("type: 'apply'");
     expect(main).toContain('confirm-danger-full-access');
+    expect(main).toMatch(/editor\.value\s*=\s*editorContent/u);
   });
 
   it('routes permission checkbox state back to the reducer for both grant and revoke', async () => {
@@ -83,7 +84,15 @@ describe('browser DOM shell trust boundary', () => {
 
     expect(main).toContain('window.location.hash');
     expect(main).toContain("window.addEventListener('hashchange'");
-    for (const view of ['overview', 'profile-diff', 'doctor', 'pack', 'write-review'])
+    for (const view of [
+      'overview',
+      'profile-diff',
+      'doctor',
+      'pack',
+      'compose',
+      'skill-editor',
+      'write-review',
+    ])
       expect(main).toContain(`case '${view}'`);
     expect(main).not.toContain('dataset');
   });
