@@ -1,15 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+**自由组合、Skill 编辑、贴网址就能装。** M3 + M3.5，用户真机反馈驱动的两轮功能。
 
 ### 新增
 
 - 本机 UI 支持自由组合：多来源逐项选择 skill，预览来源可得内容、provenance 与全量冲突；冲突必须明确 `prefer` 或 `rename` 后，才可经既有 plan → 逐项授权 → apply 流程组装并安装。
 - 本机 UI 支持 Skill 原文读取和编辑：profile 关联的 skill 列表显示 drift，编辑器以 textarea 属性装载文本；服务端限制为 `skills/<skillId>/SKILL.md`、256 KiB，并让保存结果保留为用户 drift。
+- **裸 GitHub 网址自动解析**：`https://github.com/owner/repo` 与 `github:owner/repo`（无 SHA）被接受；默认分支 HEAD 解析成 40 位 SHA 后钉死——计划展示、lock 记录、确认窗口冻结 pin（防 HEAD 在审阅期间移动）。带 `#sha` 的既有形态一字不变。
+- **`DSHPACK_TRUST_LOCAL_DNS=1` opt-in**：fake-ip/透明代理把 github 主机解析到保留地址段时，SSRF 预检默认拒绝（安全装置工作正常）；设置该变量即信任你自己的 DNS/路由，跳过该预检。`localhost` 与 IP 字面量仍拒绝；默认行为一字不变。
 
 ### 安全
 
-- 新增 composePreview 的零 `DSH_HOME` 写入快照、skillId/resolve 双层路径闭合、编辑大小上限和 pack 归属 drift 的回归与 mutant 证据；UI 中文/英文消息目录同步覆盖组合与编辑流程。
+- 八条 mutant 红绿证据：composePreview 写 `DSH_HOME`、skillId 放行 `..`、resolve 根目录越界、textarea 改 innerHTML、保存伪造 pack 归属、未设 opt-in 也跳过预检、自动解析不钉 SHA、opt-in 跳过 localhost 拒绝——全部变红后还原。
+- SECURITY.md 增补 composePreview 只读边界、Skill 编辑路径闭合与 fake-ip opt-in 的语义和代价。
 
 ## 0.4.1
 

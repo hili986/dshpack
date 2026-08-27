@@ -1,5 +1,36 @@
 # dshpack
 
+## 0.5.0
+
+### Minor Changes
+
+- 5ada58a: **贴 GitHub 网址就能装 + 代理网络 opt-in（M3.5）。** 用户裁决：功能性第一；安全机制不得让核心流程在用户网络环境里不可用。
+  
+  ### 新增
+  
+  - **裸 GitHub 来源自动解析**：`https://github.com/owner/repo`（容忍尾斜杠/`.git`）与 `github:owner/repo`（无 SHA）现在被接受；服务端把默认分支 HEAD 解析成 40 位小写 SHA 后**钉死**——计划/预览展示解析出的 SHA，lock/provenance 记 SHA，确认窗口内 re-plan/apply 用冻结的 pin（防 HEAD 在审阅期间移动的 TOCTOU）。带 `#sha` 的既有形态一字不变。
+  - **`DSHPACK_TRUST_LOCAL_DNS=1` opt-in**：fake-ip/透明代理会把 github 主机解析到保留地址段， SSRF 预检默认拒绝这类回答。设置该变量后跳过"本地 DNS 回答为私有/保留段"的预检（`localhost`、`*.localhost`、IP 字面量**仍拒绝**）；默认行为一字不变。SECURITY.md「已知且刻意接受」节与 README 均写明语义与代价。
+  
+  ### 安全
+  
+  - 三条 mutant 红绿证据：未设 opt-in 也跳过预检 → 红；自动解析不钉 SHA → 红；opt-in 下 localhost 拒绝被跳过 → 红。
+  - 失败保留分类：解析期的网络/仓库/限流错误仍走 exit 20 族诊断，不降级为通用契约码。
+- 5ada58a: **浏览器界面支持自由组合与 Skill 编辑（M3）。** 用户裁决：写操作保留两步确认；"在界面里直接操作、自由组合"从 CLI 专属搬进 UI。
+  
+  ### 新增
+  
+  - **自由组合页**：增量添加来源（本地目录 / 固定 SHA 的 `github:` / 带完整性的 `tarball:`），预览逐来源可选 skill、provenance 与全量冲突（`composePreview` 严格只读，私有临时目录内组装，`DSH_HOME` 零写入）；冲突必须单选 `prefer`（可选来源）或 `rename` 后，才经既有 plan → 逐项授权 → apply 组装并安装为新 profile（复用 install 的 journal 事务）。
+  - **Skill 编辑器**：profile 的 skill 列表标出已有 drift；等宽 textarea 属性装载原文；浏览器只提交 `profile` + 安全字符 `skillId` + 文本，服务端自行闭合到 `skills/<skillId>/SKILL.md`（白名单 + resolve 双重防护），256 KiB 硬上限；保存不重写 installed metadata，永远是你自己的 drift。
+  
+  ### 安全
+  
+  - 五条新闭合项各带 mutant 红绿证据：skillId 放行 `..`、resolve 根目录越界、preview 写 `DSH_HOME`、textarea 改 innerHTML、保存内容伪造 pack 归属——全部变红后还原。
+  - SECURITY.md 增补 `composePreview` 只读边界与 Skill 编辑路径闭合两条。
+
+### Patch Changes
+
+- @dshpack/core@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
