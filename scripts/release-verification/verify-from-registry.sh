@@ -212,10 +212,70 @@ if printf '%s' "$readme" | grep -q '未实现'; then
 else
   pass "no 未实现 claim in the published README"
 fi
-for cmd in compose uninstall update restore status diff gc migrate init pack; do
+for cmd in compose uninstall update restore status diff gc migrate init pack ui; do
   printf '%s' "$readme" | grep -qF -- "\`$cmd" || bad "published README never mentions $cmd"
 done
-pass "published README mentions the M1 command set"
+pass "published README mentions the M1/M2 command set"
+
+step "⑬ the shipped binary serves the token-gated browser UI (publishing bundles it since 0.4.0)"
+# Local tests build the bundle from the workspace; only this step proves the *published*
+# tarball carries dist/ui/ and the installed binary finds it module-relative at runtime.
+ui_log="$BASE/ui-server.log"
+"$BIN" ui --port 0 --no-open --dsh-home "$DSH_HOME" >"$ui_log" 2>&1 &
+ui_pid=$!
+url=""
+for _ in $(seq 1 60); do
+  url="$(head -n 1 "$ui_log" 2>/dev/null | grep -o 'http://127.0.0.1:[0-9]*/?token=[A-Za-z0-9_-]*' || true)"
+  [ -n "$url" ] && break
+  kill -0 "$ui_pid" 2>/dev/null || break
+  sleep 0.5
+done
+if [ -z "$url" ]; then
+  bad "ui server did not print its launch URL within 30s"
+  head -5 "$ui_log" 2>/dev/null
+else
+  pass "ui printed a loopback launch URL"
+  probe="$(UI_PROBE_URL="$url" node -e '
+    const url = new URL(process.env.UI_PROBE_URL);
+    const token = url.searchParams.get("token");
+    const get = async (withToken, pathname = url.pathname) => {
+      const target = new URL(pathname, url);
+      target.searchParams.set("token", withToken ? token : "wrong");
+      const response = await fetch(target);
+      return { status: response.status, policy: response.headers.get("referrer-policy"),
+               type: response.headers.get("content-type") ?? "", body: await response.text() };
+    };
+    const rootNoToken = await get(false);
+    const root = await get(true);
+    const scriptSource = root.body.match(/<script\b[^>]*\bsrc="([^"]+)"/)?.[1] ?? "";
+    const app = scriptSource ? await get(true, new URL(scriptSource, url).pathname)
+                             : { status: 0, policy: "", body: "" };
+    const appNoToken = scriptSource ? await get(false, new URL(scriptSource, url).pathname)
+                                    : { status: 0 };
+    console.log(`rootNoToken=${rootNoToken.status}`);
+    console.log(`root=${root.status}`);
+    console.log(`rootIsHtml=${root.type.startsWith("text/html")}`);
+    console.log(`appScriptShipsToken=${scriptSource.includes("/ui/app.js") && new URL(scriptSource, url).searchParams.get("token") === token}`);
+    console.log(`app=${app.status}`);
+    console.log(`appNoToken=${appNoToken.status}`);
+    console.log(`appPolicy=${app.policy}`);
+    console.log(`appBytes=${app.body.length}`);
+  ' 2>&1)"; rc=$?
+  if [ $rc -ne 0 ]; then bad "ui probe failed (rc=$rc)"; printf '%s\n' "$probe"; else
+    check "GET / without a valid token is refused" 'rootNoToken=401' "$probe"
+    check "GET / with the launch token serves the page" 'root=200' "$probe"
+    check "the page is HTML" 'rootIsHtml=true' "$probe"
+    check "the page loads /ui/app.js carrying the same token" 'appScriptShipsToken=true' "$probe"
+    check "GET /ui/app.js with the token serves the bundle" 'app=200' "$probe"
+    check "the bundle is refused without a valid token" 'appNoToken=401' "$probe"
+    check "UI responses set Referrer-Policy: no-referrer" 'appPolicy=no-referrer' "$probe"
+    bytes="${probe##*appBytes=}"; bytes="${bytes%%[^0-9]*}"
+    if [ "${bytes:-0}" -gt 10000 ]; then pass "the shipped bundle is not empty ($bytes bytes)"
+    else bad "the shipped bundle is suspiciously small (${bytes:-0} bytes)"; fi
+  fi
+fi
+kill "$ui_pid" 2>/dev/null
+wait "$ui_pid" 2>/dev/null || true
 
 printf '\n===== RESULT: %s =====\n' "$([ $fail -eq 0 ] && echo PASS || echo 'FAIL (see above)')"
 exit $fail
