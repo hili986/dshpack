@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type { Diagnostic } from '@dshpack/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +27,28 @@ async function temporaryHome(secret = 'ui-server-fixture'): Promise<string> {
   const home = join(root, secret);
   await mkdir(home);
   return home;
+}
+
+async function temporaryUiAssets(): Promise<{ index: URL; app: URL }> {
+  const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-assets-'));
+  temporaryRoots.push(root);
+  const index = join(root, 'index.html');
+  const app = join(root, 'app.js');
+  await writeFile(
+    index,
+    '<!doctype html><html><body><script src="/ui/app.js?token=__DSHPACK_UI_TOKEN__"></script></body></html>',
+  );
+  await writeFile(app, 'globalThis.dshpackUiFixture = true;');
+  return { index: pathToFileURL(index), app: pathToFileURL(app) };
+}
+
+async function missingUiAssets(): Promise<{ index: URL; app: URL }> {
+  const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-missing-assets-'));
+  temporaryRoots.push(root);
+  return {
+    index: pathToFileURL(join(root, 'index.html')),
+    app: pathToFileURL(join(root, 'app.js')),
+  };
 }
 
 afterEach(async () => {
@@ -59,6 +82,16 @@ async function post(
     body: JSON.stringify(body),
   });
   return { status: response.status, body: (await response.json()) as JsonObject };
+}
+
+async function getStatic(
+  target: string,
+  token?: string,
+): Promise<{ status: number; headers: Headers; text: string }> {
+  const response = await fetch(target, {
+    headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
+  });
+  return { status: response.status, headers: response.headers, text: await response.text() };
 }
 
 function origin(url: string): string {
@@ -172,6 +205,92 @@ describe('UI HTTP server trust boundary', () => {
       });
       expect(urlToken.status).toBe(200);
       expect(engines.runRead).toHaveBeenCalledTimes(2);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('authenticates static requests before attempting to read their assets', async () => {
+    const dshHome = await temporaryHome();
+    const handle = await startUiServer({
+      dshHome,
+      engines: inertEngines(),
+      uiAssets: await missingUiAssets(),
+    });
+    const base = origin(handle.url);
+    try {
+      for (const path of ['/', '/ui/app.js']) {
+        expect((await getStatic(`${base}${path}`)).status).toBe(401);
+        expect((await getStatic(`${base}${path}?token=wrong-token`)).status).toBe(401);
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('serves only the token-protected UI document and app asset with no-store security headers', async () => {
+    const dshHome = await temporaryHome();
+    const handle = await startUiServer({
+      dshHome,
+      engines: inertEngines(),
+      uiAssets: await temporaryUiAssets(),
+    });
+    const base = origin(handle.url);
+    try {
+      for (const path of ['/', '/ui/app.js']) {
+        for (const supplied of [undefined, 'wrong-token']) {
+          const query = supplied === undefined ? '' : `?token=${supplied}`;
+          const denied = await getStatic(`${base}${path}${query}`);
+          expect(denied.status, `${path} with ${supplied ?? 'no'} URL token`).toBe(401);
+          expect(denied.headers.get('referrer-policy')).toBe('no-referrer');
+          expect(denied.headers.get('cache-control')).toBe('no-store');
+          expect(denied.headers.get('x-content-type-options')).toBe('nosniff');
+          expect(denied.text).not.toContain(handle.token);
+        }
+      }
+
+      const page = await getStatic(`${base}/?token=${encodeURIComponent(handle.token)}`);
+      expect(page.status).toBe(200);
+      expect(page.headers.get('content-type')).toMatch(/^text\/html;\s*charset=utf-8$/u);
+      expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(page.headers.get('cache-control')).toBe('no-store');
+      expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(page.text).toContain(`/ui/app.js?token=${encodeURIComponent(handle.token)}`);
+      expect(page.text).not.toContain('__DSHPACK_UI_TOKEN__');
+
+      const app = await getStatic(`${base}/ui/app.js?token=${encodeURIComponent(handle.token)}`);
+      expect(app.status).toBe(200);
+      expect(app.headers.get('content-type')).toMatch(
+        /^(?:text|application)\/javascript;\s*charset=utf-8$/u,
+      );
+      expect(app.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(app.headers.get('cache-control')).toBe('no-store');
+      expect(app.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(app.text.length).toBeGreaterThan(0);
+
+      const unknown = await getStatic(
+        `${base}/ui/not-a-real-asset?token=${encodeURIComponent(handle.token)}`,
+        handle.token,
+      );
+      expect(unknown.status).toBe(404);
+      expect(unknown.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(unknown.headers.get('cache-control')).toBe('no-store');
+      expect(unknown.headers.get('x-content-type-options')).toBe('nosniff');
+
+      const wrongMethod = await fetch(
+        `${base}/ui/app.js?token=${encodeURIComponent(handle.token)}`,
+        {
+          method: 'POST',
+          body: 'ignored',
+        },
+      );
+      expect(wrongMethod.status).toBe(405);
+      expect(wrongMethod.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(wrongMethod.headers.get('cache-control')).toBe('no-store');
+      expect(wrongMethod.headers.get('x-content-type-options')).toBe('nosniff');
+
+      const api = await post(base, { operation: 'list', input: {} }, handle.token);
+      expect(api).toMatchObject({ status: 200, body: { exitCode: EXIT_CODES.SUCCESS } });
     } finally {
       await handle.close();
     }

@@ -111,7 +111,7 @@ node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目�
 | `gc` | 回收无引用的 CAS block 与过期代际 | 只删确认无人引用的块 |
 | `migrate` | 把 legacy metadata 重建为 v1 | 就地升级元数据 |
 | `doctor` | 诊断 dsh 环境与配置边界 | **会写**，见下 |
-| `ui` | 启动本机 Pack 管理服务 | 仅监听 `127.0.0.1`；stdout URL 含本次启动 token，默认随机端口 |
+| `ui` | 启动本机 Pack 管理服务（浏览器界面：总览 / diff / 诊断 / pack 详情 + 逐项授权的写操作） | 仅监听 `127.0.0.1`；stdout URL 含本次启动 token，默认随机端口 |
 
 `status` 每行给三个数，含义是钉死的：`drift` 是这个 profile 里被本地改过的资产数；`update` 只有加了 `--check-updates` 才不是 `not-checked`；**`shared` 是"有多少资产还被别的 profile 用着"**——按 profile 去重计数，同一个 profile 里两份内容相同的资产**不算**共享。这条区分是有意义的：`shared` 存在的意义就是回答"卸掉它会不会动到别人还要的字节"，而自己的两份副本会随它一起被删。想看引用计数意义上的共享看 `gc`，那是另一个问题。任一项无法计算时输出 `"unavailable"` 而不是 `0`——读不出来和真的是零，对自动化不是一回事。
 

@@ -14,6 +14,7 @@ const binPath =
 
 const children = new Set<ChildProcess>();
 const homes = new Set<string>();
+const workingDirectories = new Set<string>();
 
 interface OutputObserver {
   firstLine: Promise<string>;
@@ -74,12 +75,27 @@ function expectPortClosed(port: number): Promise<void> {
 }
 
 afterEach(async () => {
-  for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-  }
-  await Promise.all([...homes].map((home) => rm(home, { force: true, recursive: true })));
+  await Promise.all(
+    [...children].map(
+      (child) =>
+        new Promise<void>((resolveExit) => {
+          if (child.exitCode !== null || child.signalCode !== null) {
+            resolveExit();
+            return;
+          }
+          child.once('exit', () => resolveExit());
+          child.kill('SIGTERM');
+        }),
+    ),
+  );
+  await Promise.all(
+    [...homes, ...workingDirectories].map((directory) =>
+      rm(directory, { force: true, recursive: true }),
+    ),
+  );
   children.clear();
   homes.clear();
+  workingDirectories.clear();
 });
 
 describe('dshpack ui', () => {
@@ -130,5 +146,52 @@ describe('dshpack ui', () => {
 
     expect(output.stderr()).toBe('');
     expect(output.stdout().trim().split(/\r?\n/u)).toHaveLength(1);
+  });
+
+  it('serves token-protected HTML and its real app asset from outside the repository cwd', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dshpack-ui-static-home-'));
+    const cwd = await mkdtemp(join(tmpdir(), 'dshpack-ui-static-cwd-'));
+    homes.add(home);
+    workingDirectories.add(cwd);
+    const child = spawn(
+      process.execPath,
+      [binPath, 'ui', '--port', '0', '--no-open', '--dsh-home', home],
+      { cwd, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    children.add(child);
+
+    const output = observeOutput(child);
+    const line = await output.firstLine;
+    const launchUrl = new URL(line);
+    const rootWithoutToken = await fetch(`${launchUrl.origin}/`);
+    expect(rootWithoutToken.status).toBe(401);
+    expect(rootWithoutToken.headers.get('referrer-policy')).toBe('no-referrer');
+
+    const appWithoutToken = await fetch(`${launchUrl.origin}/ui/app.js`);
+    expect(appWithoutToken.status).toBe(401);
+    expect(appWithoutToken.headers.get('referrer-policy')).toBe('no-referrer');
+
+    const page = await fetch(launchUrl);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(page.headers.get('content-type')).toMatch(/^text\/html;\s*charset=utf-8$/u);
+    const html = await page.text();
+    const scriptSource = html.match(/<script\b[^>]*\bsrc=["']([^"']+)["']/iu)?.[1];
+    expect(scriptSource).toBeDefined();
+    const appUrl = new URL(scriptSource as string, launchUrl);
+    expect(appUrl.pathname).toBe('/ui/app.js');
+    expect(appUrl.searchParams.get('token')).toBe(launchUrl.searchParams.get('token'));
+
+    const app = await fetch(appUrl);
+    expect(app.status).toBe(200);
+    expect(app.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(app.headers.get('content-type')).toMatch(
+      /^(?:text|application)\/javascript;\s*charset=utf-8$/u,
+    );
+    expect((await app.text()).length).toBeGreaterThan(0);
+
+    const exited = waitForExit(child);
+    expect(child.kill('SIGTERM')).toBe(true);
+    await exited;
   });
 });

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import { type Diagnostic, redactSecrets } from '@dshpack/core';
@@ -27,6 +28,7 @@ import type {
 
 const HOST = '127.0.0.1';
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+const UI_TOKEN_MARKER = '__DSHPACK_UI_TOKEN__';
 const READ_OPERATIONS = new Set(['list', 'status', 'diff', 'doctor']);
 const WRITE_OPERATIONS = new Set(['install', 'uninstall', 'update', 'restore', 'gc']);
 const FORBIDDEN_INPUT_KEYS = new Set([
@@ -63,12 +65,19 @@ export interface UiServerEngineRegistry {
   runWrite(invocation: UiServerWriteInvocation): Promise<UiServerEngineReport>;
 }
 
+/** Explicit assets for source-mode tests. Production uses the module-relative defaults. */
+export interface UiServerUiAssets {
+  readonly index: URL;
+  readonly app: URL;
+}
+
 export interface UiServerOptions {
   readonly dshHome: string;
   readonly port?: number;
   readonly runtime?: InstallRuntime;
   readonly engines?: UiServerEngineRegistry;
   readonly maxBodyBytes?: number;
+  readonly uiAssets?: UiServerUiAssets;
 }
 
 export interface UiServerHandle {
@@ -498,9 +507,51 @@ function jsonResponse(
   response.writeHead(status, {
     'cache-control': 'no-store',
     'content-type': 'application/json; charset=utf-8',
+    'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
   });
   response.end(JSON.stringify(report));
+}
+
+type UiStaticAsset = 'index.html' | 'app.js';
+
+const defaultUiAssets: UiServerUiAssets = {
+  index: new URL('./ui/index.html', import.meta.url),
+  app: new URL('./ui/app.js', import.meta.url),
+};
+
+function staticAsset(pathname: string): UiStaticAsset | undefined {
+  if (pathname === '/') return 'index.html';
+  if (pathname === '/ui/app.js') return 'app.js';
+  return undefined;
+}
+
+function staticAssetUrl(asset: UiStaticAsset, assets: UiServerUiAssets): URL {
+  // The request pathname maps to a finite asset union, so no client-controlled path can reach the
+  // filesystem. `assets` is supplied only when a direct server caller deliberately injects a
+  // fixture; ordinary CLI use always resolves the module-relative bundle above.
+  return asset === 'index.html' ? assets.index : assets.app;
+}
+
+async function readStaticAsset(asset: UiStaticAsset, assets: UiServerUiAssets): Promise<Buffer> {
+  // The bundle is shipped with its sibling `ui/` directory. Keeping the lookup module-relative
+  // also makes the server independent of the process launch directory.
+  return readFile(staticAssetUrl(asset, assets));
+}
+
+function staticResponse(
+  response: ServerResponse,
+  asset: UiStaticAsset,
+  body: Buffer | string,
+): void {
+  response.writeHead(200, {
+    'cache-control': 'no-store',
+    'content-type':
+      asset === 'index.html' ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+  });
+  response.end(body);
 }
 
 function errorReport(error: HttpRequestError): UiServerEngineReport {
@@ -626,12 +677,28 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
   const token = randomBytes(32).toString('base64url');
   const engines = options.engines ?? defaultEngines(options.dshHome, options.runtime);
   const maximum = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const uiAssets = options.uiAssets ?? defaultUiAssets;
   const server = createServer(async (request, response) => {
     let parsed: unknown;
     try {
       if (!tokenMatches(token, authToken(request)))
         throw new HttpRequestError(401, EXIT_CODES.SECURITY, 'E_UI_AUTH', 'UI token rejected.');
       const url = new URL(request.url ?? '/', `http://${HOST}`);
+      const asset = staticAsset(url.pathname);
+      if (asset !== undefined) {
+        if (request.method !== 'GET')
+          throw new HttpRequestError(405, EXIT_CODES.USAGE, 'E_UI_METHOD', 'Method not allowed.');
+        const bytes = await readStaticAsset(asset, uiAssets);
+        if (asset === 'index.html') {
+          const html = bytes
+            .toString('utf8')
+            .replaceAll(UI_TOKEN_MARKER, encodeURIComponent(token));
+          staticResponse(response, asset, html);
+        } else {
+          staticResponse(response, asset, bytes);
+        }
+        return;
+      }
       if (url.pathname !== '/api')
         throw new HttpRequestError(404, EXIT_CODES.USAGE, 'E_UI_ROUTE', 'Unknown UI route.');
       if (request.method !== 'POST')

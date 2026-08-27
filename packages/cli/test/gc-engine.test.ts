@@ -28,6 +28,7 @@ import {
   MAX_TRANSACTION_STATE_BYTES,
   type ReplaceJournalAction,
   runTransaction,
+  TransactionFailure,
   type TransactionJournal,
   TransactionPhysicalProgressError,
   TransactionStateReadLimitError,
@@ -1264,6 +1265,75 @@ describe('generation garbage collection', () => {
     expect(await snapshot(dshHome)).toEqual(before);
   });
 
+  it('preserves an adapter TransactionFailure diagnostic while retrying a verified GC quarantine purge', async () => {
+    const dshHome = await home();
+    const base = await leaveVerifiedGcQuarantine(dshHome);
+    const before = await snapshot(dshHome);
+    const adapterFailure = new TransactionFailure(30, [
+      {
+        code: 'E_ADAPTER_ABORT',
+        severity: 'error',
+        message: 'adapter purge aborted with diagnostics sentinel',
+        evidence: 'local',
+      },
+    ]);
+
+    const result = await runGc(
+      { dshHome, keep: 1, dryRun: false },
+      {
+        createAdapter: () => ({
+          ...base,
+          async purgeGcQuarantineFile() {
+            throw adapterFailure;
+          },
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 30,
+      diagnostics: [
+        expect.objectContaining({
+          code: 'E_ADAPTER_ABORT',
+          message: 'adapter purge aborted with diagnostics sentinel',
+        }),
+      ],
+      metadata: { deletedGenerations: [], deletedBlocks: [], manualRecovery: [] },
+    });
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
+  it('uses a stable diagnostic fallback when an adapter aborts a verified GC quarantine purge without diagnostics', async () => {
+    const dshHome = await home();
+    const base = await leaveVerifiedGcQuarantine(dshHome);
+    const before = await snapshot(dshHome);
+
+    const result = await runGc(
+      { dshHome, keep: 1, dryRun: false },
+      {
+        createAdapter: () => ({
+          ...base,
+          async purgeGcQuarantineFile() {
+            throw new TransactionFailure(70, []);
+          },
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 70,
+      diagnostics: [
+        expect.objectContaining({
+          code: 'E_GC_QUARANTINE_PURGE',
+          message: 'GC quarantine purge failed.',
+        }),
+      ],
+      metadata: { deletedGenerations: [], deletedBlocks: [], manualRecovery: [] },
+    });
+    expect(result.diagnostics[0]?.code).not.toBeUndefined();
+    expect(await snapshot(dshHome)).toEqual(before);
+  });
+
   it.each([
     [
       'a bounded-read limit error',
@@ -2352,6 +2422,69 @@ describe('generation garbage collection', () => {
       metadata: { deletedGenerations: [], deletedBlocks: [], manualRecovery: [] },
     });
     expect(await fingerprint(current)).toEqual(before);
+  });
+
+  it('surfaces a non-GcFailure from the locked rescan without changing managed state', async () => {
+    const dshHome = await home();
+    const obsolete = await writeBlock(dshHome, Buffer.from('locked scan failure obsolete'));
+    const retained = await writeBlock(dshHome, Buffer.from('locked scan failure retained'));
+    const obsoleteGeneration = await writeGeneration(dshHome, 'alpha', 1, [obsolete]);
+    await writeGeneration(dshHome, 'alpha', 2, [retained]);
+    await writeFile(join(dshHome, '.dshpack', 'generations', 'alpha', 'current'), '2\n');
+    const before = await snapshot(dshHome);
+    const managedBefore = await snapshotManagedState(dshHome);
+    const cause = new Error('locked scan root failure sentinel');
+    let locked = false;
+    let injected = false;
+    let initialRootBound = false;
+
+    // Deliberately inject through bindRoot, above safe-fs. A safePathHooks error is normalized
+    // into GcFailure before lockedScanFailure sees it, so it cannot exercise the raw rethrow.
+    const bindRoot: typeof bindSecureRoot = async (path, hooks) => {
+      if (locked && path === dshHome) {
+        injected = true;
+        throw cause;
+      }
+      if (path === dshHome) initialRootBound = true;
+      return bindSecureRoot(path, hooks);
+    };
+    const result = await runGc(
+      { dshHome, keep: 1, dryRun: false },
+      {
+        bindRoot,
+        onBeforeLockedScan: async () => {
+          locked = true;
+        },
+      },
+    );
+
+    expect(injected).toBe(true);
+    expect(initialRootBound).toBe(true);
+    expect(result).toMatchObject({
+      exitCode: 70,
+      diagnostics: [
+        expect.objectContaining({
+          code: 'E_TRANSACTION_ABORTED',
+          message: expect.stringContaining(cause.message),
+        }),
+      ],
+      metadata: { deletedGenerations: [], deletedBlocks: [], manualRecovery: [] },
+    });
+    const after = await snapshot(dshHome);
+    expect(await snapshotManagedState(dshHome)).toEqual(managedBefore);
+    for (const [path, bytes] of before) expect(after.get(path)).toEqual(bytes);
+    // A failed transaction keeps its terminal journal for audit/recovery, but it must not create
+    // an old-payload backup or alter any pre-existing managed bytes before the first deletion.
+    const created = [...after.keys()].filter((path) => !before.has(path));
+    expect(created).toEqual([
+      expect.stringMatching(/^\.dshpack\/backups\/gc-[^/]+\/journal\.json$/),
+    ]);
+    expect(created.some((path) => path.includes('/old/'))).toBe(false);
+    const journalPath = created[0];
+    if (journalPath === undefined) throw new Error('locked scan abort did not retain its journal');
+    const journal = JSON.parse(await readFile(join(dshHome, journalPath), 'utf8'));
+    expect(journal).toMatchObject({ state: 'rolled-back', actions: [] });
+    await expect(readFile(obsoleteGeneration)).resolves.toBeDefined();
   });
 
   it('permits a degraded non-restorable retained generation to reference an absent block', async () => {

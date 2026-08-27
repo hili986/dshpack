@@ -129,6 +129,13 @@ function assertReadmeShipped(files, packageName) {
   }
 }
 
+function assertCliUiAssets(files) {
+  const packagedPaths = new Set(files.map(({ relative: path }) => path));
+  for (const expected of ['package/dist/ui/index.html', 'package/dist/ui/app.js']) {
+    if (!packagedPaths.has(expected)) throw new Error(`missing required UI asset: ${expected}`);
+  }
+}
+
 async function assertForbiddenContentAbsent(files, packageName) {
   const forbidden = files.filter(({ relative: path }) => forbiddenPath(path));
   if (forbidden.length > 0) {
@@ -198,6 +205,7 @@ export async function verifyReleasePack() {
       await assertForbiddenContentAbsent(files, packageToVerify.name);
       assertReadmeShipped(files, packageToVerify.name);
       if (packageToVerify.name === '@dshpack/core') await assertCoreSchemas(extractionRoot);
+      if (packageToVerify.name === 'dshpack') assertCliUiAssets(files);
     }
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });

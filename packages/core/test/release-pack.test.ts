@@ -90,4 +90,32 @@ describe('release tarball verification', () => {
     console.info(`RELEASE_METADATA_MISSING_GREEN status=${green.status}`);
     expect(green.status, output(green)).toBe(0);
   }, 30_000);
+
+  it('turns red when the dshpack tarball omits either required UI asset and green after restore', async () => {
+    const original = await readFile(cliManifest, 'utf8');
+    const manifest = JSON.parse(original) as Record<string, unknown>;
+    try {
+      await writeFile(
+        cliManifest,
+        `${JSON.stringify(
+          { ...manifest, files: ['dist/index.js', 'dist/bin.js', 'README.md'] },
+          null,
+          2,
+        )}\n`,
+        'utf8',
+      );
+      const red = run(verifyReleasePack);
+      console.info(`RELEASE_UI_ASSET_OMISSION_RED status=${red.status} ${output(red).trim()}`);
+      expect(red.status).not.toBe(0);
+      expect(output(red)).toMatch(
+        /missing required UI asset: package\/dist\/ui\/(?:index\.html|app\.js)/u,
+      );
+    } finally {
+      await writeFile(cliManifest, original, 'utf8');
+    }
+
+    const green = run(verifyReleasePack);
+    console.info(`RELEASE_UI_ASSET_OMISSION_GREEN status=${green.status}`);
+    expect(green.status, output(green)).toBe(0);
+  }, 30_000);
 });

@@ -67,6 +67,10 @@
 - **授权只应答它点名的那一项。** 授予 `foo` 的构建不会应答 `foo-core` 的构建询问：匹配是精确的，与"父包、scope、或某个已授权的依赖都不会把权限隐式传递出去"同规。
 - 写操作一律 `plan` → `apply` 两步，`apply` 必须携带用户看到的那份计划的摘要；服务端重算摘要并比对，对不上就拒绝执行。**apply 路径本身也强制先重新 plan**，所以授权与摘要两道闸在 apply 上都拦得住。
 - **已知且刻意接受的一处**：默认会自动打开浏览器，方式是把含 token 的 URL 作为参数传给系统的打开器（Windows `rundll32`、macOS `open`、Linux `xdg-open`）。进程命令行在部分系统上对同机其它进程可读，因此 token 的可见范围从"看得见终端的人"扩大到"能枚举进程的人"。**多用户机器上请用 `--no-open`**，自行把终端里那条 URL 贴进浏览器。
+- **浏览器端把第三方内容只当文本。** 页面显示的几乎全部内容来自第三方 pack（名称、描述、路径、诊断），而本页持有能授权特权操作的 token。UI 源码禁用 `innerHTML` / `insertAdjacentHTML` / `document.write`，渲染全程 `textContent` / `createElement`，且由测试对源码做静态断言；恶意 pack 在名字里塞标记换不来脚本执行。
+- **token 不离开本页。** 所有 UI 响应带 `Referrer-Policy: no-referrer`；pack 提供的 URL（homepage、仓库地址）渲染为纯文本，不是可点链接也不是图片地址；token 只存在于内存，不进 `localStorage` / `sessionStorage` / cookie。
+- **样式是完全静态的。** 唯一的 `<style>` 块随 `index.html` 内置，无外部资源；UI 源码不得出现 `.style` 属性写入或 `setAttribute('style', …)`——持有 token 的页面上，动态 CSS 是与外链同族的外泄通道。
+- **浏览器 bundle 是可审计的。** 零运行时依赖（不引 React / Vue / Vite），由仓内既有构建器打成约 36 kB 的单文件。这是刻意的设计约束：用户要审计"我点的那个授权开关到底做了什么"时，应该读得懂发给他的那份产物。
 
 ## 失败后的机器状态
 
