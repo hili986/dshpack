@@ -2,7 +2,7 @@
 
 把一个 dsh 场景——skills、MCP、profile patch、权限默认值——导出成一个**可安装、可分享、可审计**的 pack，再把 pack 装成标准的 dsh profile。
 
-> **0.3.x 仍为预发布。** pack 格式与 CLI 参数都还不是稳定 API。
+> **0.4.x 仍为预发布。** pack 格式与 CLI 参数都还不是稳定 API。
 
 ```sh
 npm i -g dshpack
