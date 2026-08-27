@@ -4,6 +4,7 @@ import { chmod, type FileHandle, lstat, mkdtemp, open, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { Diagnostic } from '@dshpack/core';
 import { EXIT_CODES } from '../exit-codes.js';
 import { inspectAndExtractArchive } from './source-archive.js';
 import {
@@ -37,6 +38,7 @@ export type SourceProvenance =
 
 export interface MaterializedSource {
   directory: string;
+  diagnostics?: readonly Diagnostic[];
   provenance: SourceProvenance;
   cleanup(): Promise<void>;
 }
@@ -502,13 +504,18 @@ async function materializeArchive(
         source.hint,
       );
     }
-    const directory = await inspectAndExtractArchive(
+    const extracted = await inspectAndExtractArchive(
       archivePath,
       workspace,
       archiveFailure,
       source.githubCommit === undefined ? undefined : { commit: source.githubCommit },
     );
-    return { directory, provenance, cleanup: cleanupOnce(workspace, removeDirectory) };
+    return {
+      directory: extracted.directory,
+      provenance,
+      cleanup: cleanupOnce(workspace, removeDirectory),
+      ...(extracted.diagnostics.length === 0 ? {} : { diagnostics: extracted.diagnostics }),
+    };
   } catch (error) {
     if (workspace !== undefined) await removeDirectory(workspace).catch(() => undefined);
     if (error instanceof SourceError) throw error;

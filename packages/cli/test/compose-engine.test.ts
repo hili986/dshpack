@@ -100,6 +100,37 @@ afterEach(async () => {
 });
 
 describe('composePack', () => {
+  it('carries an archive skipped-entry warning into the compose report without materializing it', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const archiveWarning = {
+      code: 'E_ARCHIVE_ENTRY_SKIPPED',
+      severity: 'warning' as const,
+      message: 'Skipped non-regular archive entry: skills/link.',
+      hint: 'The entry was not deployed or followed.',
+      evidence: 'local' as const,
+    };
+    const sourceMaterial = {
+      ...material('citation', './local-pack'),
+      diagnostics: [archiveWarning],
+    } as unknown as ComposeMaterializedSource;
+
+    const report = await composePack(
+      { composeFile: source, output },
+      dependencies({ './local-pack': sourceMaterial }),
+    );
+
+    expect(report).toMatchObject({
+      exitCode: EXIT_CODES.SUCCESS,
+      diagnostics: [
+        expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED', severity: 'warning' }),
+      ],
+    });
+    const pack = parsePack(await readFile(join(output, 'pack.yml'), 'utf8')).value;
+    expect(JSON.stringify(pack)).not.toContain('skills/link');
+  });
+
   it('writes the resolved GitHub SHA to provenance and accepts a raw prefer directive', async () => {
     const root = await temporary();
     const bare = 'https://github.com/owner/repo';
@@ -239,6 +270,29 @@ describe('composePack', () => {
     expect(pack?.provenance).toEqual(
       expect.arrayContaining([expect.objectContaining({ license: 'UNLICENSED' })]),
     );
+  });
+
+  it('keeps a declared-license mismatch visible while accepting a rename resolution without prefer', async () => {
+    const root = await temporary();
+    const source = await composeFile(
+      root,
+      [{ from: './local-pack', skills: ['citation'] }],
+      [{ id: 'citation', rename: 'citation-renamed' }],
+    );
+    const output = join(root, 'output');
+
+    const report = await composePack(
+      { composeFile: source, output },
+      dependencies({ './local-pack': material('citation', './local-pack', 'Apache-2.0') }),
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SUCCESS);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'W_COMPOSE_LICENSE_MISMATCH' })]),
+    );
+    expect(report.metadata.selected).toEqual([
+      expect.objectContaining({ id: 'citation-renamed', originalId: 'citation' }),
+    ]);
   });
 
   it('rejects a credential hit with exit 31 and leaves both source bytes and target untouched', async () => {

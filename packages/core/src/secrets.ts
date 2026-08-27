@@ -69,6 +69,16 @@ function hasCredentialAlphabet(value: string): boolean {
   return classes.length >= 3;
 }
 
+/** Human-readable taxonomy labels such as `UX/accessibility/consistency` are not opaque values. */
+function isSlashSeparatedProse(value: string): boolean {
+  const segments = value.split('/');
+  return (
+    segments.length >= 3 &&
+    !/[0-9+_=]/u.test(value) &&
+    segments.every((segment) => /^[A-Za-z]+$/u.test(segment))
+  );
+}
+
 /**
  * Redact credential-shaped text before it crosses a logging boundary.
  * Detection diagnostics intentionally contain only locations; this companion
@@ -195,7 +205,12 @@ export function scanSecrets(input: SecretScanInput): readonly Diagnostic[] {
   for (const match of input.content.matchAll(highEntropyCandidate)) {
     const value = match[0];
     const index = match.index;
-    if (index === undefined || !hasCredentialAlphabet(value) || shannonEntropy(value) < 3.5)
+    if (
+      index === undefined ||
+      isSlashSeparatedProse(value) ||
+      !hasCredentialAlphabet(value) ||
+      shannonEntropy(value) < 3.5
+    )
       continue;
     const position = lineColumn(input.content, index);
     diagnostics.push(

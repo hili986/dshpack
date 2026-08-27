@@ -10,7 +10,7 @@ import {
 
 export { assertPortableSnapshotEntries, SnapshotCaptureError } from './snapshot-path.js';
 
-export const MAX_SOURCE_FILES = 1000;
+export const MAX_SOURCE_FILES = 4096;
 export const MAX_SOURCE_FILE_BYTES = 1024 * 1024;
 export const MAX_SOURCE_TOTAL_BYTES = 10 * 1024 * 1024;
 
@@ -292,7 +292,7 @@ export async function captureSourceDirectory(
       } else if (metadata.kind === 'file') {
         fileCount += 1;
         if (fileCount > MAX_SOURCE_FILES) {
-          throw new SnapshotCaptureError('limit', 'SOURCE exceeds 1000 files', path);
+          throw new SnapshotCaptureError('limit', 'SOURCE exceeds 4096 files', path);
         }
         await assertCanonical(logicalRoot, canonicalRoot, absolute, realpathPath);
         const bytes = await readBoundedRegularFile(absolute, dependencies, metadata);

@@ -166,6 +166,198 @@ afterEach(() => {
 });
 
 describe('browser main shell behavior', () => {
+  it('renders compose validation and preview diagnostics inside the compose view', async () => {
+    const skipped = 'Skipped non-regular archive entry: .claude/skills/link.';
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [
+            {
+              code: 'E_ARCHIVE_ENTRY_SKIPPED',
+              severity: 'warning',
+              message: skipped,
+              hint: 'The entry was not deployed or followed.',
+            },
+          ],
+          exitCode: 0,
+          metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#compose';
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    expect(profile.placeholder).toBe('my-research-kit');
+    profile.value = '中文名称';
+    profile.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+
+    const directoryMessage = '会成为目录名，需使用小写字母、数字或连字符。';
+    expect(root.children[1]?.textContent).toContain(directoryMessage);
+    expect(root.children[0]?.textContent).not.toContain(directoryMessage);
+
+    profile.value = 'my-research-kit';
+    profile.fire('input');
+    elementWithText(root, '\u9884\u89c8\u7ec4\u5408')?.fire('click');
+    const sourceMessage = '\u8bf7\u81f3\u5c11\u586b\u5199\u4e00\u4e2a\u6765\u6e90\u3002';
+    expect(root.children[1]?.textContent).toContain(sourceMessage);
+    expect(root.children[0]?.textContent).not.toContain(sourceMessage);
+
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+
+    expect(root.children[1]?.textContent).toContain('E_ARCHIVE_ENTRY_SKIPPED');
+    expect(root.children[1]?.textContent).toContain(skipped);
+    expect(root.children[0]?.textContent).not.toContain(skipped);
+  });
+
+  it('renders only structurally valid compose diagnostics with their declared severity', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [
+            { code: 'E_PREVIEW', severity: 'error', message: 'preview error' },
+            { code: 'W_PREVIEW', severity: 'warning', message: 'preview warning' },
+            { code: 'I_PREVIEW', severity: 'info', message: 'preview info' },
+            { code: 'X_PREVIEW', severity: 'unknown', message: 'must not render' },
+            { code: 7, severity: 'warning', message: 'must not render' },
+            { code: 'W_MISSING_MESSAGE', severity: 'warning' },
+          ],
+          exitCode: 0,
+          metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#compose';
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'diagnostic-preview';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+
+    const feedback = descendants(root).filter((element) =>
+      (element as unknown as { className?: string }).className?.startsWith('compose-feedback'),
+    );
+    expect(feedback.map((element) => element.textContent)).toEqual([
+      'E_PREVIEW: preview error',
+      'W_PREVIEW: preview warning',
+      'I_PREVIEW: preview info',
+    ]);
+    expect(
+      feedback.map((element) => (element as unknown as { className?: string }).className),
+    ).toEqual([
+      'compose-feedback compose-feedback-error',
+      'compose-feedback compose-feedback-warning',
+      'compose-feedback compose-feedback-info',
+    ]);
+    expect(visibleText(root)).not.toContain('must not render');
+  });
+
+  it('requires and serializes a concrete conflict preference before compose install planning', async () => {
+    const first = 'https://github.com/dsh-packs/web-dev';
+    const second = 'https://github.com/dsh-packs/research-writing';
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [
+              { from: first, skills: ['notes'] },
+              { from: second, skills: ['notes'] },
+            ],
+            selected: [
+              { from: first, id: 'notes', originalId: 'notes' },
+              { from: second, id: 'notes', originalId: 'notes' },
+            ],
+            conflicts: [{ path: 'skills/notes' }],
+          },
+        },
+      },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#compose';
+    let composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const firstSource = composeInputs[2];
+    if (profile === undefined || firstSource === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'merged-notes';
+    profile.fire('input');
+    firstSource.value = first;
+    firstSource.fire('input');
+    elementWithText(root, '添加来源')?.fire('click');
+    composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const secondSource = composeInputs[3];
+    if (secondSource === undefined) throw new Error('expected second compose source');
+    secondSource.value = second;
+    secondSource.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+
+    expect(visibleText(root)).toContain('skills/notes');
+    expect(elementWithText(root, '组装并安装')?.disabled).toBe(true);
+    const prefer = inputs(root).find((input) => input.type === 'radio');
+    if (prefer === undefined) throw new Error('expected conflict preference');
+    prefer.checked = true;
+    prefer.fire('change');
+    const sourceSelect = descendants(root)
+      .filter((element) => element.tagName === 'select')
+      .at(-1);
+    if (sourceSelect === undefined) throw new Error('expected conflict source selector');
+    expect(sourceSelect.disabled).toBe(false);
+    expect(sourceSelect.value).toBe(first);
+    sourceSelect.value = second;
+    sourceSelect.fire('change');
+    const install = elementWithText(root, '组装并安装');
+    expect(install?.disabled).toBe(false);
+    install?.fire('click');
+    await settle();
+
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'compose',
+      phase: 'plan',
+      input: {
+        profile: 'merged-notes',
+        spec: {
+          include: [
+            { from: first, skills: ['*'] },
+            { from: second, skills: ['*'] },
+          ],
+          resolve: [{ id: 'skills/notes', prefer: second }],
+        },
+      },
+    });
+  });
+
   it('walks the Chinese compose flow through preview, selected skills, and the existing plan review', async () => {
     const pinned = 'github:dsh-packs/web-dev#0123456789abcdef0123456789abcdef01234567';
     const previewBody = {
@@ -370,6 +562,75 @@ describe('browser main shell behavior', () => {
         input: { profile: 'alpha', skillId: 'notes', content: '# user-owned notes\n' },
       },
     ]);
+  });
+
+  it('filters malformed editor diff metadata and blocks unsafe skill-content requests', async () => {
+    const malformedStatus = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: {
+        profiles: [
+          { profile: 'alpha', status: 'tracked' },
+          { profile: 'orphan', status: 'untracked' },
+          { profile: 7, status: 'tracked' },
+          null,
+        ],
+      },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: malformedStatus },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            assetDigests: [
+              { target: 'skills/notes', digest: 'sha256-notes' },
+              { target: 'profiles/alpha.yml', digest: 'sha256-ignore' },
+              { target: 9, digest: 'sha256-ignore' },
+            ],
+            localDrift: [
+              { kind: 'skill', target: 'skills/draft' },
+              { kind: 'profile', target: 'skills/ignored' },
+              { kind: 'skill', target: 9 },
+            ],
+          },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#skill-editor';
+    expect(elementWithText(root, 'Load skill')).toBeDefined();
+    elementWithText(root, 'Load skill')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls)).toHaveLength(1);
+
+    const profile = descendants(root).filter((element) => element.tagName === 'select')[1];
+    if (profile === undefined) throw new Error('expected editor profile select');
+    profile.value = 'alpha';
+    profile.fire('change');
+    await settle();
+
+    expect(visibleText(root)).toContain('draft (Drifted)');
+    expect(elementWithText(root, 'notes')).toBeDefined();
+    expect(visibleText(root)).not.toContain('ignored');
+    expect(visibleText(root)).not.toContain('orphan');
+    const skill = inputs(root)
+      .filter((input) => input.type === 'text')
+      .at(-1);
+    if (skill === undefined) throw new Error('expected editor skill input');
+    skill.value = '../unsafe';
+    skill.fire('input');
+    elementWithText(root, 'Load skill')?.fire('click');
+    await settle();
+
+    expect(requestBodies(fakes.calls)).toHaveLength(2);
+    expect(visibleText(root)).toContain('Choose or enter a safe skill ID.');
   });
 
   it('re-renders all chrome from the runtime locale switch without translating server diagnostics', async () => {
@@ -1001,5 +1262,191 @@ describe('browser main shell behavior', () => {
     loading.document.fire('DOMContentLoaded');
     await settle();
     expect(elementWithText(loading.document.body, 'dshpack 包管理')).toBeDefined();
+  });
+
+  it('keeps every compose diagnostic visible, resolves conflicts, and refreshes selected skills', async () => {
+    const sourceUrl = 'https://github.com/dsh-packs/web-dev';
+    const previewBody = {
+      diagnostics: [
+        { code: 'E_PREVIEW', severity: 'error', message: 'preview error' },
+        { code: 'W_PREVIEW', severity: 'warning', message: 'preview warning' },
+        { code: 'I_PREVIEW', severity: 'info', message: 'preview info' },
+        { code: 'E_INVALID', severity: 'unexpected', message: 'must not render' },
+        { code: 3, severity: 'error', message: 'must not render' },
+      ],
+      exitCode: 0,
+      metadata: {
+        phase: 'preview',
+        sourceSkills: [
+          { from: sourceUrl, skills: ['notes'] },
+          { from: sourceUrl, skills: 3 },
+        ],
+        selected: [null, { from: sourceUrl, id: 'notes', originalId: 'notes' }],
+        conflicts: [null, { path: 'skills/notes/SKILL.md' }],
+      },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: previewBody },
+      { status: 200, body: previewBody },
+      { status: 200, body: previewBody },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    expect(inputs(root).filter((input) => input.type === 'text')).toHaveLength(4);
+    const textInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = textInputs[1];
+    const source = textInputs[2];
+    const secondSource = textInputs[3];
+    if (profile === undefined || source === undefined || secondSource === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'research-kit';
+    profile.fire('input');
+    source.value = sourceUrl;
+    source.fire('input');
+    secondSource.value = sourceUrl;
+    secondSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    const firstPreview = visibleText(root);
+    expect(firstPreview).toContain('E_PREVIEW: preview error');
+    expect(firstPreview).toContain('W_PREVIEW: preview warning');
+    expect(firstPreview).toContain('I_PREVIEW: preview info');
+    expect(firstPreview).not.toContain('must not render');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+
+    const selectedSkill = inputs(root).find((input) => input.type === 'checkbox');
+    if (selectedSkill === undefined) throw new Error('expected source skill');
+    selectedSkill.checked = true;
+    selectedSkill.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    const deselectedSkill = inputs(root).find((input) => input.type === 'checkbox');
+    if (deselectedSkill === undefined) throw new Error('expected refreshed source skill');
+    expect(deselectedSkill.checked).toBe(true);
+    deselectedSkill.checked = false;
+    deselectedSkill.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    const radios = () => inputs(root).filter((input) => input.type === 'radio');
+    const prefer = radios()[0];
+    if (prefer === undefined) throw new Error('expected prefer resolution');
+    prefer.checked = true;
+    prefer.fire('change');
+    const resolutionSelect = descendants(root)
+      .filter((element) => element.tagName === 'select')
+      .at(-1);
+    if (resolutionSelect === undefined) throw new Error('expected source resolution select');
+    resolutionSelect.value = sourceUrl;
+    resolutionSelect.fire('change');
+
+    const rename = radios()[1];
+    if (rename === undefined) throw new Error('expected rename resolution');
+    rename.checked = true;
+    rename.fire('change');
+    expect(
+      descendants(root)
+        .filter((element) => element.tagName === 'select')
+        .at(-1)?.disabled,
+    ).toBe(true);
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'compose',
+      phase: 'plan',
+      input: { profile: 'research-kit' },
+    });
+  });
+
+  it('keeps malformed editor and compose inputs conservative before any server write', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: { diagnostics: [], exitCode: 0, metadata: {} } },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#skill-editor';
+    elementWithText(root, 'Load skill')?.fire('click');
+    expect(visibleText(root)).toContain('Choose a Profile.');
+    const editorSkill = inputs(root).find((input) => input.type === 'text');
+    if (editorSkill === undefined) throw new Error('expected editor skill input');
+    editorSkill.value = 'bad skill';
+    editorSkill.fire('input');
+    elementWithText(root, 'Save and review plan')?.fire('click');
+    expect(visibleText(root)).toContain('Choose a Profile.');
+    expect(requestBodies(fakes.calls)).toEqual([{ operation: 'list', input: {} }]);
+
+    fakes.window.location.hash = '#compose';
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    vi.stubGlobal('HTMLInputElement', class NotAnInput {});
+    profile.value = 'ignored-profile';
+    profile.fire('input');
+    source.value = 'ignored-source';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    expect(visibleText(root)).toContain(
+      'The Profile name becomes a directory name; use lowercase letters, digits, or hyphens.',
+    );
+  });
+
+  it('filters malformed editor metadata while retaining a valid drifted skill', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: { diagnostics: [], exitCode: 0, metadata: { profiles: 'not-a-list' } } },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            assetDigests: [null, { target: 3 }, { target: 'settings.json' }],
+            localDrift: [
+              null,
+              { kind: 'other', target: 'skills/skip' },
+              { kind: 'skill', target: 'skills/notes' },
+            ],
+          },
+        },
+      },
+      { status: 200, body: { diagnostics: [], exitCode: 0, metadata: { content: 3 } } },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#skill-editor';
+    const profile = descendants(root).filter((element) => element.tagName === 'select')[1];
+    if (profile === undefined) throw new Error('expected editor profile select');
+    profile.value = 'alpha';
+    profile.fire('change');
+    await settle();
+    expect(elementWithText(root, 'notes (Drifted)')).toBeDefined();
+
+    const skill = inputs(root).find((input) => input.type === 'text');
+    if (skill === undefined) throw new Error('expected editor skill');
+    skill.value = 'bad skill';
+    skill.fire('input');
+    elementWithText(root, 'Load skill')?.fire('click');
+    expect(visibleText(root)).toContain('Choose or enter a safe skill ID.');
+
+    elementWithText(root, 'notes (Drifted)')?.fire('click');
+    await settle();
+    const content = textareas(root)[0];
+    expect(content?.value).toBe('');
   });
 });

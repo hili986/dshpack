@@ -297,7 +297,7 @@ export async function readValidatedPack(
           caught instanceof SnapshotCaptureError && caught.kind === 'security'
             ? 'SOURCE 含不能安全快照的文件系统条目。'
             : caught instanceof SnapshotCaptureError && caught.kind === 'limit'
-              ? 'SOURCE 超过 1000 文件、单文件 1 MiB 或总量 10 MiB 限制。'
+              ? 'SOURCE 超过 4096 文件、单文件 1 MiB 或总量 10 MiB 限制。'
               : '无法获取与验证绑定的 SOURCE 字节。',
           caught instanceof SnapshotCaptureError && caught.kind === 'security'
             ? '移除 symlink、设备文件与不安全路径。'

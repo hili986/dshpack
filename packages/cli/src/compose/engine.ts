@@ -224,6 +224,7 @@ export async function composePack(
         adapterExit ??= materialized.exitCode;
         continue;
       }
+      diagnostics.push(...(materialized.diagnostics ?? []));
       sources.push(materialized);
     }
     if (hasErrors(diagnostics))

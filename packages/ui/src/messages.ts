@@ -210,7 +210,7 @@ export const messages: Readonly<Record<Locale, MessageCatalog>> = {
     editorLoadSkill: '加载 Skill',
     editorSave: '保存并审阅计划',
     editorDrift: '已漂移',
-    validationComposeProfile: '请填写安全的新 Profile 名称。',
+    validationComposeProfile: 'Profile 名称会成为目录名，需使用小写字母、数字或连字符。',
     validationComposeSource: '请至少填写一个来源。',
     validationEditorProfile: '请选择 Profile。',
     validationEditorSkill: '请选择或填写安全的 Skill ID。',
@@ -353,7 +353,8 @@ export const messages: Readonly<Record<Locale, MessageCatalog>> = {
     editorLoadSkill: 'Load skill',
     editorSave: 'Save and review plan',
     editorDrift: 'Drifted',
-    validationComposeProfile: 'Enter a safe new Profile name.',
+    validationComposeProfile:
+      'The Profile name becomes a directory name; use lowercase letters, digits, or hyphens.',
     validationComposeSource: 'Enter at least one source.',
     validationEditorProfile: 'Choose a Profile.',
     validationEditorSkill: 'Choose or enter a safe skill ID.',

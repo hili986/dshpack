@@ -122,6 +122,27 @@ function previewResolvedSources(response: UiResponse | undefined): readonly stri
   ];
 }
 
+interface ComposeDiagnostic {
+  readonly code: string;
+  readonly message: string;
+  readonly severity: 'error' | 'warning' | 'info';
+}
+
+function previewDiagnostics(response: UiResponse | undefined): readonly ComposeDiagnostic[] {
+  return (response?.diagnostics ?? []).flatMap((item) => {
+    if (!record(item) || typeof item.code !== 'string' || typeof item.message !== 'string')
+      return [];
+    switch (item.severity) {
+      case 'error':
+      case 'warning':
+      case 'info':
+        return [{ code: item.code, message: item.message, severity: item.severity }];
+      default:
+        return [];
+    }
+  });
+}
+
 function editorSkillsFromDiff(value: unknown): readonly EditorSkill[] {
   if (!record(value)) return [];
   const drift = new Set(
@@ -399,6 +420,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let composePreviewRevision = 0;
   let composePreviewRequest = 0;
   let composeResolutions: readonly ComposeResolutionForm[] = [];
+  let composeValidation: MessageKey | undefined;
   let composeInstallButton: HTMLButtonElement | undefined;
   let editorProfile = '';
   let editorSkills: readonly EditorSkill[] = [];
@@ -525,6 +547,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       currentIndex === index ? source : current,
     );
     composeResolutions = [];
+    composeValidation = undefined;
     invalidateComposePreview();
   }
 
@@ -557,20 +580,32 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     const resolvedSources = document.createElement('section');
     const conflicts = document.createElement('section');
 
+    const validationFeedback = (key: MessageKey): HTMLParagraphElement => {
+      const feedback = document.createElement('p');
+      feedback.className = 'compose-feedback compose-feedback-error';
+      feedback.textContent = message(state.locale, key);
+      return feedback;
+    };
+
     heading.textContent = message(state.locale, 'composeHeading');
     profileLabel.textContent = message(state.locale, 'composeProfile');
     profile.type = 'text';
+    profile.placeholder = 'my-research-kit';
     profile.value = composeProfile;
     profile.addEventListener('input', (event) => {
       const current = event.currentTarget;
       if (current instanceof HTMLInputElement) {
         composeProfile = current.value.trim();
+        composeValidation = undefined;
         invalidateComposePreview();
       }
     });
     profileLabel.append(profile);
+    const profileFeedback =
+      composeValidation === 'validationComposeProfile'
+        ? validationFeedback(composeValidation)
+        : undefined;
 
-    sources.textContent = message(state.locale, 'composeSource');
     for (const [index, source] of composeSources.entries()) {
       const card = document.createElement('section');
       const sourceLabel = document.createElement('label');
@@ -597,7 +632,10 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         renderComposeScreen();
       });
       skillsHeading.textContent = message(state.locale, 'composeSourceSkills');
-      card.append(sourceLabel, remove, skillsHeading);
+      card.append(sourceLabel);
+      if (composeValidation === 'validationComposeSource' && source.from.length === 0)
+        card.append(validationFeedback(composeValidation));
+      card.append(remove, skillsHeading);
       for (const skill of previewSkills(composePreview, index)) {
         const skillLabel = document.createElement('label');
         const checked = document.createElement('input');
@@ -707,14 +745,28 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         }),
       );
     });
+    const diagnostics = document.createElement('section');
+    for (const item of previewDiagnostics(composePreview)) {
+      const feedback = document.createElement('p');
+      feedback.className =
+        item.severity === 'error'
+          ? 'compose-feedback compose-feedback-error'
+          : item.severity === 'warning'
+            ? 'compose-feedback compose-feedback-warning'
+            : 'compose-feedback compose-feedback-info';
+      feedback.textContent = `${item.code}: ${item.message}`;
+      diagnostics.append(feedback);
+    }
     panel.append(
       heading,
       profileLabel,
+      ...(profileFeedback === undefined ? [] : [profileFeedback]),
       sources,
       resolvedSources,
       addSource,
       conflicts,
       preview,
+      diagnostics,
       install,
     );
     activeMount.append(panel);
@@ -941,11 +993,13 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
 
   async function requestComposePreview(): Promise<void> {
     if (!safeProfile(composeProfile)) {
-      setMessageKey('validationComposeProfile');
+      composeValidation = 'validationComposeProfile';
+      renderIfActive('compose');
       return;
     }
     if (composeSources.length === 0 || composeSources.some((source) => source.from.length === 0)) {
-      setMessageKey('validationComposeSource');
+      composeValidation = 'validationComposeSource';
+      renderIfActive('compose');
       return;
     }
     const request = {
@@ -957,6 +1011,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     const result = await postApi(token, request, state.locale);
     if (revision !== composePreviewRevision || requestId !== composePreviewRequest) return;
     composePreview = result.response;
+    composeValidation = undefined;
     const ids = new Set(previewConflictIds(composePreview));
     composeResolutions = composeResolutions.filter((item) => ids.has(item.id));
     renderIfActive('compose');

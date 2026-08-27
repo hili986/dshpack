@@ -1,8 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...original, lstat: vi.fn(original.lstat) };
+});
 
 import { diffProfile } from '../src/diff/engine.js';
 import { EXIT_CODES } from '../src/exit-codes.js';
@@ -157,6 +162,25 @@ describe('UI skill content path closure', () => {
     );
     expect(fileUnsafe).toMatchObject({
       diagnostics: [expect.objectContaining({ code: 'E_UI_SKILL_PATH' })],
+    });
+  });
+
+  it('does not reinterpret unexpected storage errors as an absent skill and rejects invalid edit profiles', async () => {
+    const dshHome = await fixture();
+    const denied = Object.assign(new Error('storage access denied'), { code: 'EACCES' });
+    vi.mocked(lstat).mockRejectedValueOnce(denied);
+    await expect(
+      readSkillContent(dshHome, { profile: 'notes-profile', skillId: 'notes' }),
+    ).rejects.toBe(denied);
+
+    const invalidEdit = await editSkillContent(
+      dshHome,
+      { profile: '-invalid', skillId: 'notes', content: '# unchanged\n' },
+      'plan',
+    );
+    expect(invalidEdit).toMatchObject({
+      exitCode: EXIT_CODES.CONTRACT,
+      diagnostics: [expect.objectContaining({ code: 'E_UI_SKILL_PROFILE' })],
     });
   });
 

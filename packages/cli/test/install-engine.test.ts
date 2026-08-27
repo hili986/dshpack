@@ -19,6 +19,37 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 describe('install ten-stage engine', () => {
+  it('keeps skipped archive-entry diagnostics visible in an install plan', async () => {
+    const dshHome = await home();
+    const source = await enginePack();
+    const fake = fakeRuntime();
+    const baseMaterialize = fake.runtime.materializeSource;
+    fake.runtime.materializeSource = async (reference) => ({
+      ...(await baseMaterialize(reference)),
+      diagnostics: [
+        {
+          code: 'E_ARCHIVE_ENTRY_SKIPPED',
+          severity: 'warning',
+          message: 'Skipped non-regular archive entry: skills/link.',
+          hint: 'The entry was not deployed or followed.',
+          evidence: 'local',
+        },
+      ],
+    });
+
+    const report = await installPack(
+      { source, dshHome, dryRun: true, json: true, interactive: false },
+      fake.runtime,
+    );
+
+    expect(report).toMatchObject({
+      exitCode: 0,
+      diagnostics: [
+        expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED', severity: 'warning' }),
+      ],
+    });
+  });
+
   it('stops dry-run at the plan, cleans source, and leaves DSH_HOME byte-identical', async () => {
     const dshHome = await home();
     await writeFile(join(dshHome, 'sentinel'), 'unchanged');

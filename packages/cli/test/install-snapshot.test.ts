@@ -234,11 +234,11 @@ describe('install source snapshot safety', () => {
     expect(lstatPaths.some((path) => path.endsWith('.git'))).toBe(false);
   });
 
-  it('rejects the 1001st streamed file entry before opening that entry', async () => {
+  it('rejects the 4097th streamed file entry before opening that entry', async () => {
     const directory = { ...fileStat(0), kind: 'directory' as const };
     let opens = 0;
     async function* files() {
-      for (let index = 0; index < 1001; index += 1) yield { name: `${index}.txt` };
+      for (let index = 0; index < 4097; index += 1) yield { name: `${index}.txt` };
     }
     await expect(
       captureSourceDirectory('C:/pack', {
@@ -261,6 +261,6 @@ describe('install source snapshot safety', () => {
         },
       }),
     ).rejects.toMatchObject({ kind: 'limit' });
-    expect(opens).toBe(1000);
+    expect(opens).toBe(4096);
   });
 });

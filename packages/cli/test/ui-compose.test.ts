@@ -207,8 +207,15 @@ describe('UI compose preview', () => {
     const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
     roots.push(root);
     const pinned = 'github:owner/repo#0123456789abcdef0123456789abcdef01234567';
+    const archiveWarning = {
+      code: 'E_ARCHIVE_ENTRY_SKIPPED',
+      severity: 'warning' as const,
+      message: 'Skipped non-regular archive entry: skills/link.',
+      hint: 'The entry was not deployed or followed.',
+      evidence: 'local' as const,
+    };
     const compose = vi.fn(async () => ({
-      diagnostics: [],
+      diagnostics: [archiveWarning],
       exitCode: EXIT_CODES.SUCCESS,
       metadata: {
         directory: '',
@@ -247,6 +254,9 @@ describe('UI compose preview', () => {
     const applied = await composeAndInstall(root, input, {} as never, 'apply', dependencies);
     expect(planned).toMatchObject({
       exitCode: EXIT_CODES.SUCCESS,
+      diagnostics: [
+        expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED', severity: 'warning' }),
+      ],
       metadata: {
         plan: {
           operation: 'compose',
@@ -257,6 +267,9 @@ describe('UI compose preview', () => {
     });
     expect(applied).toMatchObject({
       exitCode: EXIT_CODES.SUCCESS,
+      diagnostics: [
+        expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED', severity: 'warning' }),
+      ],
       metadata: { status: 'installed' },
     });
     const plan = (planned.metadata as { plan: { planDigest: string } }).plan;
@@ -272,6 +285,62 @@ describe('UI compose preview', () => {
       expect.objectContaining({ dryRun: false }),
       expect.anything(),
     );
+  });
+
+  it('keeps an unpinned source and its prefer rule unchanged in the reviewed compose plan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
+    roots.push(root);
+    const source = 'https://github.com/owner/repo';
+    const input = {
+      profile: 'combined-notes',
+      spec: {
+        composeVersion: 0,
+        name: 'combined-notes',
+        version: '1.0.0',
+        description: 'Preserve an unpinned source until the adapter resolves it.',
+        author: 'dshpack test',
+        license: 'MIT',
+        include: [{ from: source, skills: ['notes'] }],
+        resolve: [{ id: 'notes', prefer: source }],
+        defaults: { permissionPreset: 'workspace-write' },
+      },
+    } as const;
+    const result = await composeAndInstall(root, input, {} as never, 'plan', {
+      compose: (async () => ({
+        diagnostics: [],
+        exitCode: EXIT_CODES.SUCCESS,
+        metadata: {
+          directory: '',
+          dryRun: false,
+          selected: [{ from: source, id: 'notes', originalId: 'notes' }],
+          sources: [source],
+        },
+      })) as never,
+      install: (async () => ({
+        diagnostics: [],
+        exitCode: EXIT_CODES.SUCCESS,
+        metadata: {
+          plan: {
+            pack: { name: 'combined-notes', version: '1.0.0' },
+            rollbackSnapshot: { targetBeforeStateDigest: 'sha256-before' },
+          },
+        },
+      })) as never,
+    });
+
+    expect(result).toMatchObject({
+      exitCode: EXIT_CODES.SUCCESS,
+      metadata: {
+        plan: {
+          compose: {
+            spec: {
+              include: [{ from: source, skills: ['notes'] }],
+              resolve: [{ id: 'notes', prefer: source }],
+            },
+          },
+        },
+      },
+    });
   });
 
   it('preserves compose failures and handles an install report without a plan', async () => {

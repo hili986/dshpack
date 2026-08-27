@@ -3,16 +3,32 @@ import { createReadStream } from 'node:fs';
 import { lstat, mkdir } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createGunzip } from 'node:zlib';
+import type { Diagnostic } from '@dshpack/core';
 import { x as extractTar, Parser, type ReadEntry } from 'tar';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
-const MAX_ENTRIES = 1000;
+const MAX_ENTRIES = 4096;
 
 type ArchiveError = (code: string, message: string) => Error;
 
 export interface GitHubArchiveExpectation {
   commit: string;
+}
+
+interface ArchiveState {
+  paths: Map<string, string>;
+  terminals: Set<string>;
+  parents: Set<string>;
+  filePaths: Set<string>;
+  bytes: number;
+  diagnostics: Diagnostic[];
+  githubRootName: string | undefined;
+}
+
+interface ArchiveInspection {
+  diagnostics: readonly Diagnostic[];
+  githubRoot: string | undefined;
 }
 
 function dataAfterNul(block: Buffer, offset: number, length: number): boolean {
@@ -83,16 +99,24 @@ function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
   return raw;
 }
 
+function deployableEntry(entry: ReadEntry): boolean {
+  return entry.type === 'File' || entry.type === 'OldFile' || entry.type === 'Directory';
+}
+
+function skippedEntryDiagnostic(path: string): Diagnostic {
+  return {
+    code: 'E_ARCHIVE_ENTRY_SKIPPED',
+    severity: 'warning',
+    message: `已跳过非普通归档条目：${path}。`,
+    hint: '该条目未部署，也未跟随其链接目标。',
+    evidence: 'local',
+    path,
+  };
+}
+
 function inspectEntry(
   entry: ReadEntry,
-  state: {
-    paths: Map<string, string>;
-    terminals: Set<string>;
-    parents: Set<string>;
-    filePaths: Set<string>;
-    bytes: number;
-    githubRootName: string | undefined;
-  },
+  state: ArchiveState,
   fail: ArchiveError,
   expectedGitHub?: GitHubArchiveExpectation,
 ): void {
@@ -107,15 +131,17 @@ function inspectEntry(
   if (entry.extended !== undefined || unsafeGlobal) {
     throw fail('ARCHIVE_UNSAFE', '归档包含扩展元数据。');
   }
-  if (entry.type !== 'File' && entry.type !== 'OldFile' && entry.type !== 'Directory') {
-    throw fail('ARCHIVE_UNSAFE', '归档包含链接或特殊文件。');
-  }
-  const segments = safeEntryPath(entry, fail).split('/');
+  const path = safeEntryPath(entry, fail);
+  const segments = path.split('/');
   if (expectedGitHub !== undefined) {
     const root = segments[0] as string;
     state.githubRootName ??= root;
     if (root !== state.githubRootName)
       throw fail('ARCHIVE_UNSAFE', 'GitHub codeload 归档包含多个顶层目录。');
+  }
+  if (!deployableEntry(entry)) {
+    state.diagnostics.push(skippedEntryDiagnostic(path));
+    return;
   }
   const leafCanonical = segments.join('/').normalize('NFC').toLowerCase();
   for (let index = 1; index <= segments.length; index += 1) {
@@ -156,15 +182,16 @@ async function preflight(
   filename: string,
   fail: ArchiveError,
   expectedGitHub?: GitHubArchiveExpectation,
-): Promise<string | undefined> {
+): Promise<ArchiveInspection> {
   if (!(await rawHeadersSafe(filename)))
     throw fail('ARCHIVE_UNSAFE', '归档原始 header 不安全或无效。');
-  const state = {
+  const state: ArchiveState = {
     paths: new Map<string, string>(),
     terminals: new Set<string>(),
     parents: new Set<string>(),
     filePaths: new Set<string>(),
     bytes: 0,
+    diagnostics: [],
     githubRootName: undefined,
   };
   let entries = 0;
@@ -217,7 +244,7 @@ async function preflight(
   if (failure !== undefined) throw failure;
   if (metaHeaders !== consumedMeta) throw fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。');
   if (entries === 0) throw fail('ARCHIVE_UNSAFE', '归档为空或无效。');
-  return state.githubRootName;
+  return { diagnostics: state.diagnostics, githubRoot: state.githubRootName };
 }
 
 export async function inspectAndExtractArchive(
@@ -225,8 +252,8 @@ export async function inspectAndExtractArchive(
   workspace: string,
   fail: ArchiveError,
   expectedGitHub?: GitHubArchiveExpectation,
-): Promise<string> {
-  const githubRoot = await preflight(archivePath, fail, expectedGitHub);
+): Promise<{ directory: string; diagnostics: readonly Diagnostic[] }> {
+  const { diagnostics, githubRoot } = await preflight(archivePath, fail, expectedGitHub);
   const directory = join(workspace, 'contents');
   await mkdir(directory, { mode: 0o700 });
   try {
@@ -237,14 +264,15 @@ export async function inspectAndExtractArchive(
       preservePaths: false,
       win32: false,
       noChmod: true,
+      filter: (_path, entry) => deployableEntry(entry as ReadEntry),
     });
   } catch {
     throw fail('ARCHIVE_UNSAFE', '归档无法安全解包。');
   }
-  if (githubRoot === undefined) return directory;
+  if (githubRoot === undefined) return { directory, diagnostics };
   const root = join(directory, githubRoot);
   const metadata = await lstat(root).catch(() => undefined);
   if (metadata === undefined || !metadata.isDirectory() || metadata.isSymbolicLink())
     throw fail('ARCHIVE_UNSAFE', 'GitHub codeload 顶层条目不是普通目录。');
-  return root;
+  return { directory: root, diagnostics };
 }

@@ -60,6 +60,13 @@ describe('four-layer secret scanning', () => {
       'E_SECRET_URL_USERINFO',
     ],
     ['high entropy string', 'key: zQ9vLm2aBx7Rt4YpNc8Kd1WsFe6Hu3Gi\n', 'E_SECRET_HIGH_ENTROPY'],
+    // The slash-prose exemption is narrow: a digit anywhere puts the value back on the
+    // entropy layer's plate, so splitting a secret with slashes does not hide it.
+    [
+      'slash-separated value with digits',
+      'key: zQ9v/Lm2aBx7/Rt4YpNc8Kd1WsFe6Hu3Gi\n',
+      'E_SECRET_HIGH_ENTROPY',
+    ],
   ])('detects %s as a value-level secret', (_name, content, code) => {
     expect(
       scanSecrets({ path: 'settings/agent-presets.yml', content }).some(
@@ -93,6 +100,7 @@ describe('four-layer secret scanning', () => {
     ['40-character commit SHA', '0123456789abcdef0123456789abcdef01234567'],
     ['sha512 integrity', `sha512-${'a'.repeat(86)}`],
     ['verified package name', '@deepseek-ai/dsh-mcp-client'],
+    ['slash-separated prose', 'UX/accessibility/consistency'],
   ])('does not mistake a %s for a credential', (_name, value) => {
     expect(scanSecrets({ path: 'pack.yml', content: `value: ${value}\n` })).toEqual([]);
   });

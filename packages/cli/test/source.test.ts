@@ -1,7 +1,7 @@
 // biome-ignore-all format: compact security matrices keep this test file under the 400-line project limit.
 import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -15,7 +15,7 @@ vi.mock('undici', async (importOriginal) => ({ ...(await importOriginal<typeof i
 interface DownloadResponse { statusCode: number; location?: string; body?: AsyncIterable<Uint8Array>; cancel?: () => Promise<void> }
 interface ResolvedAddress { address: string; family: 4 | 6 }
 interface SourceDependencies { download?: (url: URL, address?: ResolvedAddress) => Promise<DownloadResponse>; makeTempDirectory?: () => Promise<string>; removeTempDirectory?: (path: string) => Promise<void>; hostnamePolicy?: (hostname: string) => boolean | Promise<boolean>; resolveHostname?: (hostname: string) => Promise<ResolvedAddress[]>; trustLocalDns?: boolean; writeChunk?: (handle: unknown, chunk: Uint8Array, offset: number) => Promise<number> }
-interface MaterializedSource { directory: string; provenance: Record<string, unknown>; cleanup(): Promise<void> }
+interface MaterializedSource { directory: string; provenance: Record<string, unknown>; diagnostics?: readonly { code: string; severity: string; message: string }[]; cleanup(): Promise<void> }
 type Materializer = (reference: string, dependencies?: SourceDependencies) => Promise<MaterializedSource>;
 
 const rawMaterialize = sourceAdapter.materializeSource as unknown as Materializer;
@@ -411,6 +411,85 @@ describe('materializeSource', () => {
     );
   });
 
+  it('normalizes a safe protocol-relative redirect without permitting a scheme downgrade', async () => {
+    const bytes = archive();
+    const seen: string[] = [];
+    const result = await materialize(`https://example.test/a.tgz#${sri(bytes)}`, {
+      download: async (url: URL) => {
+        seen.push(url.href);
+        return seen.length === 1
+          ? { statusCode: 302, location: '//cdn.example.test/final.tgz' }
+          : { statusCode: 200, body: chunks(bytes) };
+      },
+    });
+
+    expect(seen).toEqual([
+      'https://example.test/a.tgz',
+      'https://cdn.example.test/final.tgz',
+    ]);
+    expect(result.provenance).toMatchObject({ kind: 'https', url: 'https://example.test/a.tgz' });
+    await result.cleanup();
+  });
+
+  it('rejects a redirect that would downgrade a pinned HTTPS source before a second request', async () => {
+    const bytes = archive();
+    const download = vi.fn(async () => ({ statusCode: 302, location: 'http://cdn.example.test/final.tgz' }));
+
+    await expectSourceError(
+      materialize(`https://example.test/a.tgz#${sri(bytes)}`, { download }),
+      20,
+      'SOURCE_INVALID',
+    );
+
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a pinned file: source that is not a tarball before allocating temporary storage', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'not-an-archive.txt');
+    const makeTempDirectory = vi.fn();
+    const bytes = Buffer.from('ordinary text');
+    await writeFile(source, bytes);
+
+    await expectSourceError(
+      materialize(`file:${source}#${sri(bytes)}`, { makeTempDirectory }),
+      20,
+      'SOURCE_INVALID',
+    );
+
+    expect(makeTempDirectory).not.toHaveBeenCalled();
+  });
+
+  it('rejects raw control characters in a file: source before allocating temporary storage', async () => {
+    const root = await temporaryRoot();
+    const archivePath = join(root, 'pack.tgz');
+    const bytes = archive();
+    const makeTempDirectory = vi.fn();
+    await writeFile(archivePath, bytes);
+
+    await expectSourceError(
+      materialize(`file:${archivePath}\n#${sri(bytes)}`, { makeTempDirectory }),
+      20,
+      'SOURCE_INVALID',
+    );
+
+    expect(makeTempDirectory).not.toHaveBeenCalled();
+  });
+
+  it('rejects a file: archive URL with an authority under the local-source policy', async () => {
+    const makeTempDirectory = vi.fn();
+    const failure = await expectSourceError(
+      materialize(`file://untrusted.example/pack.tgz#${sri(Buffer.from('unused'))}`, {
+        makeTempDirectory,
+      }),
+      20,
+      'SOURCE_INVALID',
+    );
+
+    expect(failure.message).toContain('安全策略');
+    expect(makeTempDirectory).not.toHaveBeenCalled();
+  });
+
   it('rejects a non-SHA default-branch HEAD rather than downloading an unpinned archive', async () => {
     const download = vi.fn(async (url: URL): Promise<DownloadResponse> =>
       url.pathname.endsWith('/commits/main')
@@ -456,14 +535,69 @@ describe('materializeSource', () => {
     await expectSourceError(materialize(source), 31, 'ARCHIVE_UNSAFE');
   });
 
-  it.each(['1', '2', '3', '4', '6', '7', 'S', 'Z', 'L'])(
-    'rejects link and special tar entry type %s',
+  it('keeps an unsafe path on a skipped link as a hard archive rejection', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'unsafe-link-path.dshpack.tgz');
+    await writeFile(source, archive([{ name: '../outside', type: '2', linkName: 'safe' }]));
+
+    await expectSourceError(materialize(source), 31, 'ARCHIVE_UNSAFE');
+  });
+
+  it('does not deploy a symbolic link whose target would otherwise stay inside the archive', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'safe-target-link.dshpack.tgz');
+    await writeFile(source, archive([
+      { name: 'safe', data: 'ok' },
+      { name: 'safe-alias', type: '2', linkName: 'safe' },
+    ]));
+
+    const result = await materialize(source);
+
+    await expect(readFile(join(result.directory, 'safe'), 'utf8')).resolves.toBe('ok');
+    await expect(lstat(join(result.directory, 'safe-alias'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'E_ARCHIVE_ENTRY_SKIPPED',
+        severity: 'warning',
+        message: expect.stringContaining('safe-alias'),
+      }),
+    ]);
+    await result.cleanup();
+  });
+
+  it('skips links and special tar entries without extracting or following them', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'special.dshpack.tgz');
+    const skipped = ['link', 'hard-link', 'character', 'block', 'fifo', 'reserved'];
+    await writeFile(source, archive([
+      { name: 'safe', data: 'ok' },
+      { name: skipped[0] as string, type: '2', linkName: '../outside' },
+      { name: skipped[1] as string, type: '1', linkName: 'safe' },
+      { name: skipped[2] as string, type: '3' },
+      { name: skipped[3] as string, type: '4' },
+      { name: skipped[4] as string, type: '6' },
+      { name: skipped[5] as string, type: '7' },
+    ]));
+
+    const result = await materialize(source);
+
+    await expect(readFile(join(result.directory, 'safe'), 'utf8')).resolves.toBe('ok');
+    for (const path of skipped)
+      await expect(lstat(join(result.directory, path))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result.diagnostics).toEqual(
+      skipped.map((path) => expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED', severity: 'warning', message: expect.stringContaining(path) })),
+    );
+    await result.cleanup();
+  });
+
+  it.each(['Z', 'L'])(
+    'keeps malformed tar entry type %s as a hard archive rejection',
     async (type) => {
       const root = await temporaryRoot();
-      const source = join(root, 'special.dshpack.tgz');
-      await writeFile(source, archive([{ name: 'safe', data: 'ok' }, { name: 'unsafe', type, ...(type === '1' || type === '2' ? { linkName: 'target' } : {}), data: type === 'L' ? 'tail\0' : '' }]));
+      const source = join(root, 'malformed-special.dshpack.tgz');
+      await writeFile(source, archive([{ name: 'unsafe', type, data: type === 'L' ? 'tail\0' : '' }]));
       const failure = await expectSourceError(materialize(source), 31, 'ARCHIVE_UNSAFE');
-      if (type === 'Z' || type === 'L') expect(failure.message).toMatch(/header/u);
+      expect(failure.message).toMatch(/header/u);
     },
   );
 
@@ -491,14 +625,25 @@ describe('materializeSource', () => {
           data: Buffer.alloc(1024 * 1024),
         })),
       ),
-      archive(Array.from({ length: 1001 }, (_, index) => ({ name: `file-${index}` }))),
-      archive(Array.from({ length: 1001 }, (_, index) => ({ name: `dir-${index}/`, type: '5' }))),
+      archive(Array.from({ length: 4097 }, (_, index) => ({ name: `file-${index}` }))),
+      archive(Array.from({ length: 4097 }, (_, index) => ({ name: `dir-${index}/`, type: '5' }))),
     ];
     for (const [index, contents] of cases.entries()) {
       const source = join(root, `limit-${index}.dshpack.tgz`);
       await writeFile(source, contents);
       await expectSourceError(materialize(source), 31, 'ARCHIVE_LIMIT');
     }
+  });
+
+  it('accepts a bounded real-world archive above the legacy 1000-entry cap', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'many-safe-entries.dshpack.tgz');
+    await writeFile(source, archive(Array.from({ length: 2504 }, (_, index) => ({ name: `file-${index}` }))));
+
+    const result = await materialize(source);
+
+    await expect(access(join(result.directory, 'file-2503'))).resolves.toBeUndefined();
+    await result.cleanup();
   });
   it('loops partial FileHandle writes and persists the exact downloaded archive', async () => {
     const root = await temporaryRoot(); const workspace = join(root, 'short-write'); const bytes = archive();

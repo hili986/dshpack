@@ -66,7 +66,7 @@ describe('install plan review mutants', () => {
     };
     const tooMany = await readValidatedPack('C:/pack', {
       ...common,
-      listPaths: async () => Array.from({ length: 1001 }, (_, index) => `files/${index}.md`),
+      listPaths: async () => Array.from({ length: 4097 }, (_, index) => `files/${index}.md`),
       readBytes: async () => {
         reads += 1;
         return Buffer.from('x');
@@ -76,6 +76,21 @@ describe('install plan review mutants', () => {
     expect(tooMany.diagnostics[0]).toMatchObject({ code: 'E_SOURCE_SNAPSHOT_LIMIT' });
     expect(reads).toBe(0);
     expect(validated).toBe(false);
+
+    const accepted = await readValidatedPack('C:/pack', {
+      ...common,
+      frozen: false,
+      listPaths: async () => [
+        'pack.yml',
+        'files/',
+        ...Array.from({ length: 2503 }, (_, index) => `files/${index}.md`),
+      ],
+      readBytes: async (path) =>
+        path.endsWith('pack.yml') ? Buffer.from(stringify(manifest()), 'utf8') : Buffer.from('x'),
+    });
+    expect(accepted.material).toBeDefined();
+    expect(validated).toBe(true);
+    validated = false;
 
     const tooLarge = await readValidatedPack('C:/pack', {
       ...common,

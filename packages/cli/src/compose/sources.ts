@@ -1,22 +1,29 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { lstat, readdir } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
-import type { Diagnostic } from '@dshpack/core';
+import { type Diagnostic, inspectSkill, scanSecrets } from '@dshpack/core';
 
 import {
   materializeSource,
   SourceError,
   sourceReferenceFromProvenance,
 } from '../adapters/source.js';
-import { diagnostic } from '../commands/shared.js';
+import { diagnostic, exitCodeFor } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import { exportProfile } from '../export/engine.js';
 import { skillsIn } from '../install/build-plan.js';
 import { readValidatedPack, type ValidatedPackMaterial } from '../install/read.js';
+import {
+  captureSourceDirectory,
+  readBoundedRegularFile,
+  SnapshotCaptureError,
+} from '../install/snapshot-capture.js';
 import type { ComposeSelection, ComposeSourceItem } from './schema.js';
 
 export interface ComposeMaterializedSource {
   cleanup: () => Promise<void>;
+  diagnostics?: readonly Diagnostic[];
   from: string;
   license?: string;
   material: ValidatedPackMaterial;
@@ -50,19 +57,193 @@ function normalizeReference(reference: string, composeFile: string): string {
   return value.startsWith('./') ? resolve(dirname(composeFile), value) : value;
 }
 
+const CONVENTIONAL_SKILL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+interface ConventionalSkillSource {
+  diagnostics: readonly Diagnostic[];
+  license: string;
+  material: ValidatedPackMaterial;
+}
+
+function digest(algorithm: 'sha256' | 'sha512', value: Uint8Array): string {
+  return `${algorithm}-${createHash(algorithm)
+    .update(value)
+    .digest(algorithm === 'sha256' ? 'base64url' : 'base64')}`;
+}
+
+async function conventionalLicense(root: string): Promise<string> {
+  for (const name of ['LICENSE', 'LICENSE.md']) {
+    try {
+      const text = Buffer.from(await readBoundedRegularFile(join(root, name))).toString('utf8');
+      if (/CC0 1\.0 Universal/u.test(text)) return 'CC0-1.0';
+      if (/MIT License/u.test(text)) return 'MIT';
+      if (/Apache License[\s\S]*Version 2\.0/u.test(text)) return 'Apache-2.0';
+    } catch {
+      // A missing or untrusted license file must not turn into an invented license declaration.
+    }
+  }
+  return 'UNLICENSED';
+}
+
+/**
+ * Adapt the conventional `.agents/skills/<id>/SKILL.md` layout for composition only.
+ * The compatibility boundary is deliberately narrow: auxiliary repository files are not
+ * materialized, while each deployed SKILL.md is captured through the immutable snapshot reader.
+ */
+async function conventionalSkillSource(
+  root: string,
+): Promise<ConventionalSkillSource | ComposeSourceFailure | undefined> {
+  const skillsRoot = join(root, '.agents', 'skills');
+  let names: string[];
+  try {
+    const metadata = await lstat(skillsRoot);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+      return {
+        diagnostics: [
+          sourceFailure(
+            'E_PATH_CONVENTIONAL_SKILLS',
+            '.agents/skills 必须是普通目录。',
+            '移除符号链接或特殊文件后重试。',
+            skillsRoot,
+          ),
+        ],
+        exitCode: EXIT_CODES.SECURITY,
+      };
+    }
+    names = (await readdir(skillsRoot)).filter((name) => CONVENTIONAL_SKILL_ID.test(name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    return {
+      diagnostics: [
+        sourceFailure(
+          'E_SOURCE_CONVENTIONAL_SKILLS',
+          '无法读取 .agents/skills 约定来源。',
+          '检查来源目录权限后重试。',
+          skillsRoot,
+        ),
+      ],
+      exitCode: EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
+    };
+  }
+  if (names.length === 0) return undefined;
+  const allowed = new Set(names);
+  let captured: Awaited<ReturnType<typeof captureSourceDirectory>>;
+  try {
+    captured = await captureSourceDirectory(skillsRoot, {
+      skipPath: (path) => {
+        const parts = path.split('/');
+        const id = parts[0];
+        return (
+          id === undefined ||
+          !allowed.has(id) ||
+          parts.length > 2 ||
+          (parts.length === 2 && parts[1] !== 'SKILL.md')
+        );
+      },
+    });
+  } catch (error) {
+    const security = error instanceof SnapshotCaptureError && error.kind === 'security';
+    return {
+      diagnostics: [
+        sourceFailure(
+          security ? 'E_PATH_CONVENTIONAL_SKILLS' : 'E_SOURCE_CONVENTIONAL_SKILLS',
+          security
+            ? '.agents/skills 包含不安全的路径、链接或特殊文件。'
+            : '.agents/skills 无法在受限快照中读取。',
+          security ? '移除不安全条目后重试。' : '缩小来源或检查读取失败原因后重试。',
+          error instanceof SnapshotCaptureError && error.path !== undefined
+            ? error.path
+            : skillsRoot,
+        ),
+      ],
+      exitCode: security ? EXIT_CODES.SECURITY : EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
+    };
+  }
+  const files = captured.files
+    .filter(({ path }) => /^[a-z0-9]+(?:-[a-z0-9]+)*\/SKILL\.md$/u.test(path))
+    .map(({ path, bytes }) => ({ path: `skills/${path}`, bytes }));
+  if (files.length === 0) return undefined;
+  const diagnostics = files.flatMap(({ path, bytes }) => {
+    const content = Buffer.from(bytes).toString('utf8');
+    return [...scanSecrets({ path, content }), ...inspectSkill(content, path)];
+  });
+  if (diagnostics.some(({ severity }) => severity === 'error')) {
+    return { diagnostics, exitCode: exitCodeFor(diagnostics) };
+  }
+  const materialFiles = files.map(({ path, bytes }) => ({
+    path,
+    sha512: digest('sha512', bytes),
+    contentBase64: Buffer.from(bytes).toString('base64'),
+  }));
+  const license = await conventionalLicense(root);
+  return {
+    diagnostics: [
+      diagnostic(
+        'W_COMPOSE_CONVENTIONAL_SKILL_SOURCE',
+        'warning',
+        '已按 .agents/skills 约定识别来源技能；仅已校验的 SKILL.md 会进入组合。',
+        '来源中的其他仓库文件不会部署。',
+        skillsRoot,
+      ),
+      ...diagnostics,
+    ],
+    license,
+    material: {
+      manifest: {
+        formatVersion: 0,
+        name: 'conventional-skill-source',
+        version: '0.0.0',
+        description: 'Conventional external skill source.',
+        author: 'external-source',
+        license,
+        dsh: { tested: ['0.1.0-rc.6'] },
+        plugins: [],
+        mcp: [],
+        defaults: { permissionPreset: 'workspace-write' },
+      },
+      paths: materialFiles.map(({ path }) => path),
+      files: materialFiles,
+      sourceFiles: materialFiles.map(({ path, sha512 }) => ({ path, sha512 })),
+      manifestDigest: digest(
+        'sha256',
+        Buffer.from(JSON.stringify(materialFiles.map(({ path, sha512 }) => ({ path, sha512 })))),
+      ),
+    },
+  };
+}
+
 async function validated(
   root: string,
   from: string,
   cleanup: () => Promise<void>,
   readPack: typeof readValidatedPack,
+  diagnostics: readonly Diagnostic[] = [],
 ): Promise<ComposeSourceResult> {
   const source = await readPack(root, { frozen: false });
   if (source.material === undefined) {
+    const conventional = await conventionalSkillSource(root);
+    if (conventional !== undefined) {
+      if ('exitCode' in conventional) {
+        await cleanup();
+        return {
+          diagnostics: [...diagnostics, ...conventional.diagnostics],
+          exitCode: conventional.exitCode,
+        };
+      }
+      return {
+        cleanup,
+        diagnostics: [...diagnostics, ...conventional.diagnostics],
+        from,
+        license: conventional.license,
+        material: conventional.material,
+      };
+    }
     await cleanup();
-    return { diagnostics: source.diagnostics, exitCode: source.exitCode };
+    return { diagnostics: [...diagnostics, ...source.diagnostics], exitCode: source.exitCode };
   }
   return {
     cleanup,
+    ...(diagnostics.length === 0 ? {} : { diagnostics }),
     from,
     license: source.material.manifest.license,
     material: source.material,
@@ -130,6 +311,7 @@ export async function materializeComposeSource(
       from,
       materialized.cleanup,
       dependencies.readPack ?? readValidatedPack,
+      materialized.diagnostics,
     );
   } catch (error) {
     return {

@@ -66,6 +66,15 @@ describe('compose source materialization', () => {
     const materialize = vi.fn().mockResolvedValue({
       directory: 'C:/workspace/local-pack',
       provenance: { kind: 'directory', path: 'C:/workspace/local-pack' },
+      diagnostics: [
+        {
+          code: 'E_ARCHIVE_ENTRY_SKIPPED',
+          severity: 'warning',
+          message: 'Skipped non-regular archive entry: skills/link.',
+          hint: 'The entry was not deployed or followed.',
+          evidence: 'local',
+        },
+      ],
       cleanup,
     });
     const readPack = vi
@@ -85,6 +94,9 @@ describe('compose source materialization', () => {
     if (!isComposeMaterializedSource(result)) throw new Error('expected materialized source');
     expect(result.from).toBe('./local-pack');
     expect(result.license).toBe('MIT');
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED', severity: 'warning' }),
+    ]);
     await result.cleanup();
     expect(cleanup).toHaveBeenCalledOnce();
   });
@@ -117,6 +129,312 @@ describe('compose source materialization', () => {
     expect(result.from).toBe(`github:owner/repo#${commit}`);
     await result.cleanup();
   });
+
+  it('adapts a conventional .agents skills source without admitting unrelated repository files', async () => {
+    const root = await temporary();
+    const skillRoot = join(root, '.agents', 'skills', 'external-skill');
+    await mkdir(skillRoot, { recursive: true });
+    await writeFile(
+      join(skillRoot, 'SKILL.md'),
+      '---\nname: external-skill\ndescription: An external skill.\n---\n# External\n',
+    );
+    await writeFile(join(skillRoot, 'reference.md'), 'not a skill entry point\n');
+    await writeFile(join(root, 'LICENSE'), 'MIT License\n');
+    await writeFile(join(root, 'unrelated.txt'), 'never becomes a composed skill\n');
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+
+    const result = await materializeComposeSource(
+      { from: './external-source', skills: ['*'] },
+      join(root, 'compose.yml'),
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+        readPack: vi.fn().mockResolvedValue({
+          diagnostics: [
+            {
+              code: 'E_LAYOUT_UNKNOWN',
+              severity: 'error',
+              message: 'not a dshpack pack',
+              hint: '',
+              evidence: 'local',
+            },
+          ],
+          exitCode: EXIT_CODES.CONTRACT,
+        }),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(true);
+    if (!isComposeMaterializedSource(result)) throw new Error('expected conventional source');
+    expect(result.license).toBe('MIT');
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'W_COMPOSE_CONVENTIONAL_SKILL_SOURCE' }),
+      ]),
+    );
+    expect(sourceSkills(result, { from: result.from, skills: ['*'] }).available).toEqual([
+      'external-skill',
+    ]);
+    expect(result.material.paths).toEqual(['skills/external-skill/SKILL.md']);
+    expect(result.material.files).toEqual([
+      expect.objectContaining({ path: 'skills/external-skill/SKILL.md' }),
+    ]);
+    await result.cleanup();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the original pack diagnostics when no conventional skill entry exists', async () => {
+    const root = await temporary();
+    await mkdir(join(root, '.agents', 'skills', 'not_valid'), { recursive: true });
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+    const original = {
+      diagnostics: [
+        {
+          code: 'E_LAYOUT_UNKNOWN',
+          severity: 'error' as const,
+          message: 'not a dshpack pack',
+          hint: '',
+          evidence: 'local' as const,
+        },
+      ],
+      exitCode: EXIT_CODES.CONTRACT,
+    };
+
+    const result = await materializeComposeSource(
+      { from: './external-source', skills: ['*'] },
+      join(root, 'compose.yml'),
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+        readPack: vi.fn().mockResolvedValue(original),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(false);
+    expect(result).toEqual(original);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('rejects malformed conventional skill entry points instead of adapting them', async () => {
+    const root = await temporary();
+    const skillRoot = join(root, '.agents', 'skills', 'bad-skill');
+    await mkdir(skillRoot, { recursive: true });
+    await writeFile(join(skillRoot, 'SKILL.md'), '# missing frontmatter\n');
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+
+    const result = await materializeComposeSource(
+      { from: './external-source', skills: ['*'] },
+      join(root, 'compose.yml'),
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+        readPack: vi.fn().mockResolvedValue({
+          diagnostics: [],
+          exitCode: EXIT_CODES.CONTRACT,
+        }),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(false);
+    expect(result).toMatchObject({
+      exitCode: EXIT_CODES.CONTRACT,
+      diagnostics: [expect.objectContaining({ code: 'DSH010' })],
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a conventional skill root that is not a normal directory', async () => {
+    const root = await temporary();
+    const agents = join(root, '.agents');
+    await mkdir(agents, { recursive: true });
+    await writeFile(join(agents, 'skills'), 'not a directory\n');
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+
+    const result = await materializeComposeSource(
+      { from: './external-source', skills: ['*'] },
+      join(root, 'compose.yml'),
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+        readPack: vi.fn().mockResolvedValue({
+          diagnostics: [],
+          exitCode: EXIT_CODES.CONTRACT,
+        }),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(false);
+    expect(result).toMatchObject({
+      exitCode: EXIT_CODES.SECURITY,
+      diagnostics: [expect.objectContaining({ code: 'E_PATH_CONVENTIONAL_SKILLS' })],
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['CC0 license', 'Creative Commons Legal Code\nCC0 1.0 Universal\n', 'CC0-1.0'],
+    ['Apache license', 'Apache License\nVersion 2.0, January 2004\n', 'Apache-2.0'],
+    ['unknown license', 'A custom license text\n', 'UNLICENSED'],
+  ])(
+    'reads a declared %s without inventing a different license',
+    async (_name, licenseText, license) => {
+      const root = await temporary();
+      const skillRoot = join(root, '.agents', 'skills', 'licensed-skill');
+      await mkdir(skillRoot, { recursive: true });
+      await writeFile(
+        join(skillRoot, 'SKILL.md'),
+        '---\nname: licensed-skill\ndescription: A licensed skill.\n---\n# Licensed\n',
+      );
+      await writeFile(join(root, 'LICENSE'), licenseText);
+      const cleanup = vi.fn().mockResolvedValue(undefined);
+
+      const result = await materializeComposeSource(
+        { from: './external-source', skills: ['*'] },
+        join(root, 'compose.yml'),
+        undefined,
+        {
+          materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+          readPack: vi.fn().mockResolvedValue({ diagnostics: [], exitCode: EXIT_CODES.CONTRACT }),
+        },
+      );
+
+      expect(isComposeMaterializedSource(result)).toBe(true);
+      if (!isComposeMaterializedSource(result)) throw new Error('expected conventional source');
+      expect(result.license).toBe(license);
+      await result.cleanup();
+    },
+  );
+
+  it('does not adapt a conventional directory that has no direct SKILL.md entry point', async () => {
+    const root = await temporary();
+    const skillRoot = join(root, '.agents', 'skills', 'incomplete-skill');
+    await mkdir(join(skillRoot, 'nested'), { recursive: true });
+    await writeFile(join(skillRoot, 'nested', 'SKILL.md'), '# nested is not deployable\n');
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+    const original = { diagnostics: [], exitCode: EXIT_CODES.CONTRACT };
+
+    const result = await materializeComposeSource(
+      { from: './external-source', skills: ['*'] },
+      join(root, 'compose.yml'),
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+        readPack: vi.fn().mockResolvedValue(original),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(false);
+    expect(result).toEqual(original);
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('keeps secret-shaped conventional skill content as a security rejection', async () => {
+    const root = await temporary();
+    const skillRoot = join(root, '.agents', 'skills', 'secret-skill');
+    await mkdir(skillRoot, { recursive: true });
+    await writeFile(
+      join(skillRoot, 'SKILL.md'),
+      [
+        '---',
+        'name: secret-skill',
+        'description: A skill with a rejected credential.',
+        '---',
+        'apiKey: zQ9vLm2aBx7Rt4YpNc8Kd1WsFe6Hu3Gi',
+      ].join('\n'),
+    );
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+
+    const result = await materializeComposeSource(
+      { from: './external-source', skills: ['*'] },
+      join(root, 'compose.yml'),
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+        readPack: vi.fn().mockResolvedValue({ diagnostics: [], exitCode: EXIT_CODES.CONTRACT }),
+      },
+    );
+
+    expect(isComposeMaterializedSource(result)).toBe(false);
+    expect(result).toMatchObject({
+      exitCode: EXIT_CODES.SECURITY,
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'E_SECRET_KEY' })]),
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('classifies an unreadable conventional root as source integrity rather than pretending none exists', async () => {
+    vi.resetModules();
+    const filesystem = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.doMock('node:fs/promises', () => ({
+      ...filesystem,
+      lstat: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('permission denied'), { code: 'EACCES' })),
+    }));
+    const { materializeComposeSource: materialize } = await import('../src/compose/sources.js');
+    const cleanup = vi.fn().mockResolvedValue(undefined);
+
+    const result = await materialize(
+      { from: './external-source', skills: ['*'] },
+      'C:/workspace/compose.yml',
+      undefined,
+      {
+        materialize: vi.fn().mockResolvedValue({ directory: 'C:/workspace/external', cleanup }),
+        readPack: vi.fn().mockResolvedValue({ diagnostics: [], exitCode: EXIT_CODES.CONTRACT }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      exitCode: EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
+      diagnostics: [expect.objectContaining({ code: 'E_SOURCE_CONVENTIONAL_SKILLS' })],
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+    vi.doUnmock('node:fs/promises');
+    vi.resetModules();
+  });
+
+  it.each([
+    ['security', EXIT_CODES.SECURITY, 'E_PATH_CONVENTIONAL_SKILLS'],
+    ['limit', EXIT_CODES.SOURCE_NETWORK_INTEGRITY, 'E_SOURCE_CONVENTIONAL_SKILLS'],
+  ] as const)(
+    'keeps conventional snapshot %s failures visible and classified',
+    async (kind, exitCode, code) => {
+      vi.resetModules();
+      const snapshot = await vi.importActual<typeof import('../src/install/snapshot-capture.js')>(
+        '../src/install/snapshot-capture.js',
+      );
+      vi.doMock('../src/install/snapshot-capture.js', () => ({
+        ...snapshot,
+        captureSourceDirectory: vi
+          .fn()
+          .mockRejectedValue(
+            new snapshot.SnapshotCaptureError(kind, 'injected snapshot failure', 'SKILL.md'),
+          ),
+      }));
+      const { materializeComposeSource: materialize } = await import('../src/compose/sources.js');
+      const root = await temporary();
+      await mkdir(join(root, '.agents', 'skills', 'snapshot-skill'), { recursive: true });
+      const cleanup = vi.fn().mockResolvedValue(undefined);
+
+      const result = await materialize(
+        { from: './external-source', skills: ['*'] },
+        join(root, 'compose.yml'),
+        undefined,
+        {
+          materialize: vi.fn().mockResolvedValue({ directory: root, cleanup }),
+          readPack: vi.fn().mockResolvedValue({ diagnostics: [], exitCode: EXIT_CODES.CONTRACT }),
+        },
+      );
+
+      expect(result).toMatchObject({
+        exitCode,
+        diagnostics: [expect.objectContaining({ code, path: 'SKILL.md' })],
+      });
+      expect(cleanup).toHaveBeenCalledOnce();
+      vi.doUnmock('../src/install/snapshot-capture.js');
+      vi.resetModules();
+    },
+  );
 
   it('expands star, preserves immutable source bytes, and reports every explicit missing skill with choices', () => {
     const source = {

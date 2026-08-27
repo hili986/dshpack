@@ -149,6 +149,7 @@ export async function installPack(
       'not-started',
     );
   }
+  const sourceDiagnostics = materialized.diagnostics ?? [];
   let read: ReadPackResult;
   try {
     read = await runtime.readValidatedPack(materialized.directory, {
@@ -184,7 +185,8 @@ export async function installPack(
       };
     }
   }
-  if (read.material === undefined) return report(read.exitCode, read.diagnostics, 'not-started');
+  if (read.material === undefined)
+    return report(read.exitCode, [...sourceDiagnostics, ...read.diagnostics], 'not-started');
   const material = read.material;
   let versions: Awaited<ReturnType<InstallRuntime['probe']>>;
   try {
@@ -192,7 +194,10 @@ export async function installPack(
   } catch {
     return report(
       EXIT_CODES.ENVIRONMENT,
-      [diagnostic('E_PROBE', 'error', 'dsh 或 pnpm 不可用。', '仅从 PATH 安装受支持版本。')],
+      [
+        ...sourceDiagnostics,
+        diagnostic('E_PROBE', 'error', 'dsh 或 pnpm 不可用。', '仅从 PATH 安装受支持版本。'),
+      ],
       'not-started',
     );
   }
@@ -200,6 +205,7 @@ export async function installPack(
     return report(
       EXIT_CODES.ENVIRONMENT,
       [
+        ...sourceDiagnostics,
         diagnostic(
           'E_PNPM_VERSION_UNSUPPORTED',
           'error',
@@ -227,7 +233,7 @@ export async function installPack(
           );
     return report(
       error instanceof SourceError ? error.exitCode : EXIT_CODES.SOURCE_NETWORK_INTEGRITY,
-      [item],
+      [...sourceDiagnostics, item],
       'not-started',
     );
   }
@@ -239,6 +245,7 @@ export async function installPack(
     return report(
       EXIT_CODES.SECURITY,
       [
+        ...sourceDiagnostics,
         diagnostic(
           'E_TARGET_STATE',
           'error',
@@ -265,7 +272,7 @@ export async function installPack(
   const preflight = await prepareInstallPlanFromValidated(
     planInput,
     material,
-    read.diagnostics,
+    [...sourceDiagnostics, ...read.diagnostics],
     resolution,
   );
   if (preflight.plan === undefined)
@@ -302,6 +309,7 @@ export async function installPack(
     return report(
       EXIT_CODES.SECURITY,
       [
+        ...preflight.diagnostics,
         diagnostic(
           'E_TARGET_STATE',
           'error',
@@ -317,6 +325,7 @@ export async function installPack(
     return report(
       EXIT_CODES.CONTRACT,
       [
+        ...preflight.diagnostics,
         diagnostic(
           'E_TARGET_STATE_CHANGED',
           'error',

@@ -59,6 +59,8 @@ node packages/cli/dist/bin.js install --dry-run --as demo --dsh-home <隔离目�
 
 **来源必须可复现。** GitHub 源只接受 **40 位小写 commit SHA**——分支名、tag、短 SHA、甚至 40 位但含大写，一律 exit 20 且在任何子进程启动前就拒绝。HTTPS tarball 必须带 sha512 SRI，URL 不得含 userinfo。
 
+**归档中的非普通条目不会被跟随或部署。** symbolic link、hard link、设备与 FIFO 会被逐条跳过；每个被跳过的路径都会作为 warning diagnostic 明确告诉你，路径越界和损坏 header 仍会整档拒绝。
+
 **`--yes` 不能替代危险确认。** 它只能省掉那句"确定要装吗"。逐包的 `--allow-build`、`danger-full-access` 都仍需各自的显式授权；`--replace`（覆盖已有 profile）和 `--allow-unverified` 更是**硬门**——前者不给就不会发生，后者不给直接失败，都不走"提示一下"这条路。任何交互提示的默认值都是拒绝；非 TTY 环境下缺确认会 exit 21 并打印完整的非交互命令，不会把 CI 卡死。
 
 **build script 默认全禁。** 依赖的 install/lifecycle script 只有在 pack 的 `allowBuilds` 里**逐个精确包名**列出、且你在安装时逐项授权后才会执行。父包、scope、或某个已授权的依赖，都不会把权限隐式传递出去。这是一份允许名单，不是 sandbox——放行一个 build script 等于允许该依赖以你的用户权限执行代码，所以它应该保持为空。

@@ -275,7 +275,7 @@ export async function composeAndInstall(
       pack: installationPlan?.pack,
       targetBeforeState: installationPlan?.rollbackSnapshot.targetBeforeStateDigest,
     });
-    return result(installed.diagnostics, installed.exitCode, {
+    return result([...composed.diagnostics, ...installed.diagnostics], installed.exitCode, {
       ...installed.metadata,
       compose: { selected },
       ...(installationPlan === undefined
