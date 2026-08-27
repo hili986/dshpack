@@ -223,6 +223,30 @@ function stringsInNonTextNodes(root: BrowserViewNode): string[] {
 }
 
 describe('browser view description tree', () => {
+  it('translates chrome to English while preserving diagnostic data exactly', () => {
+    const overview = renderBrowserView({
+      kind: 'overview',
+      locale: 'en',
+      data: planResponse.metadata,
+    });
+    const doctor = renderBrowserView({ kind: 'doctor', locale: 'en', data: planResponse });
+    const emptyPack = renderBrowserView({
+      kind: 'pack',
+      locale: 'en',
+      data: { provenance: [] },
+    });
+
+    expect(textContent(overview)).toContain('Overview');
+    expect(textContent(overview)).toContain('Status summary');
+    expect(textContent(overview)).toContain('View Profile');
+    expect(textContent(doctor)).toContain('Diagnostics');
+    expect(textContent(doctor)).toContain('CodeSeverityMessageLocation');
+    expect(textContent(emptyPack)).toContain('No provenance is available.');
+    expect(textContent(doctor)).toContain('E_HOSTILE');
+    expect(textContent(doctor)).toContain(hostileDiagnostic);
+    expect(textContent(doctor)).toContain(`src/${hostileSkill}:4:7`);
+  });
+
   it('renders overview profile state, counts, and actions without DOM dependencies', () => {
     const tree = renderBrowserView({
       kind: 'overview',
@@ -230,11 +254,11 @@ describe('browser view description tree', () => {
     });
     expect(tree.type).toBe('element');
     expect(textContent(tree)).toContain(hostilePack);
-    expect(textContent(tree)).toContain('drift');
+    expect(textContent(tree)).toContain('漂移');
     expect(textContent(tree)).toContain('available');
-    expect(textContent(tree)).toContain('untracked: 0');
-    expect(textContent(tree)).toContain('reserved: 0');
-    expect(textContent(tree)).toContain('broken: 0');
+    expect(textContent(tree)).toContain('未跟踪');
+    expect(textContent(tree)).toContain('已保留');
+    expect(textContent(tree)).toContain('异常');
     expect(nodes(tree).some((node) => node.type === 'control')).toBe(true);
     const rowActions = nodes(tree).filter(
       (node): node is BrowserControlNode =>
@@ -273,9 +297,9 @@ describe('browser view description tree', () => {
   it('renders profile diff in three sections with a short digest', () => {
     const tree = renderBrowserView({ kind: 'profile-diff', data: planResponse.metadata });
     const content = textContent(tree);
-    expect(content).toContain('local drift');
-    expect(content).toContain('upstream delta');
-    expect(content).toContain('effective mismatch');
+    expect(content).toContain('本地漂移');
+    expect(content).toContain('上游差异');
+    expect(content).toContain('生效不一致');
     expect(content).toContain('sha256-revie');
     expect(content).not.toContain('sha256-review');
   });
@@ -301,9 +325,9 @@ describe('browser view description tree', () => {
       },
     });
     const content = textContent(tree);
-    for (const status of ['tracked', 'untracked', 'reserved', 'broken'])
-      expect(content).toContain(`${status}: 1`);
-    expect(content).toContain('generation: 7');
+    for (const status of ['已跟踪', '未跟踪', '已保留', '异常']) expect(content).toContain(status);
+    expect(content).toContain('generation');
+    expect(content).toContain('7');
 
     const operations = nodes(tree).filter(
       (node): node is BrowserControlNode =>
@@ -317,12 +341,20 @@ describe('browser view description tree', () => {
     ]);
   });
 
-  it('renders doctor diagnostics with location and side-effect owner as text', () => {
+  it('renders doctor diagnostics and side effects as labelled table data', () => {
     const tree = renderBrowserView({ kind: 'doctor', data: planResponse });
     const content = textContent(tree);
     expect(content).toContain(hostileDiagnostic);
     expect(content).toContain(`src/${hostileSkill}:4:7`);
-    expect(content).toContain('owner: dsh');
+    const sideEffectTable = elements(tree).find(
+      (node) =>
+        node.tag === 'table' &&
+        textContent(node).includes('所有者') &&
+        textContent(node).includes('路径') &&
+        textContent(node).includes('profile/cordis.yml'),
+    );
+    expect(sideEffectTable).toBeDefined();
+    expect(textContent(sideEffectTable as BrowserElementNode)).toContain('dsh');
     expect(
       elements(tree).some((node) => {
         const tag = node.tag as string;
@@ -357,7 +389,7 @@ describe('browser view description tree', () => {
     const applying = reduceBrowserState(reviewingState(), { type: 'apply' });
     const tree = renderBrowserView({ kind: 'write-review', state: applying });
 
-    expect(textContent(tree)).toContain('Applying reviewed plan');
+    expect(textContent(tree)).toContain('正在执行已审阅的计划');
     expect(nodes(tree).some((node) => node.type === 'control' && node.action === 'apply')).toBe(
       false,
     );
@@ -373,15 +405,13 @@ describe('browser view description tree', () => {
     const tree = renderBrowserView({ kind: 'write-review', state: done });
     const content = textContent(tree);
 
-    expect(content).toContain('execution result');
+    expect(content).toContain('执行结果');
     expect(content).toContain('generation');
     expect(content).toContain('I_APPLIED');
-    expect(content).toContain('info');
+    expect(content).toContain('信息');
     expect(content).toContain('Applied reviewed plan.');
     expect(content).toContain('profiles/research.yml:12:7');
-    expect(content).toContain(
-      'code: I_APPLIED | severity: info | message: Applied reviewed plan. | location: profiles/research.yml:12:7',
-    );
+    expect(content).toContain('代码级别说明位置');
     expect(content).not.toContain('This hint must not be rendered.');
     expect(content).not.toContain('local');
     expect(stringsInNonTextNodes(tree)).not.toContain('Applied reviewed plan.');
@@ -397,14 +427,12 @@ describe('browser view description tree', () => {
     const content = textContent(tree);
 
     expect(content).toContain('E_PLAN_FAILED');
-    expect(content).toContain('error');
+    expect(content).toContain('错误');
     expect(content).toContain('The write plan could not be prepared.');
     expect(content).toContain('packs/research/pack.yml:4:11');
-    expect(content).toContain('Write operation failed');
+    expect(content).toContain('写操作失败');
     expect(content).not.toContain('plan failed');
-    expect(content).toContain(
-      'code: E_PLAN_FAILED | severity: error | message: The write plan could not be prepared. | location: packs/research/pack.yml:4:11',
-    );
+    expect(content).toContain('代码级别说明位置');
     expect(content).not.toContain('This hint must not be rendered.');
     expect(content).not.toContain('local');
     expect(stringsInNonTextNodes(tree)).not.toContain('The write plan could not be prepared.');
@@ -420,12 +448,10 @@ describe('browser view description tree', () => {
     const content = textContent(tree);
 
     expect(content).toContain('E_PLAN_STALE');
-    expect(content).toContain('warning');
+    expect(content).toContain('警告');
     expect(content).toContain('The reviewed plan changed before apply.');
     expect(content).toContain('profiles/research.yml:18:3');
-    expect(content).toContain(
-      'code: E_PLAN_STALE | severity: warning | message: The reviewed plan changed before apply. | location: profiles/research.yml:18:3',
-    );
+    expect(content).toContain('代码级别说明位置');
     expect(content).not.toContain('This hint must not be rendered.');
     expect(content).not.toContain('local');
     expect(stringsInNonTextNodes(tree)).not.toContain('The reviewed plan changed before apply.');
@@ -503,8 +529,8 @@ describe('browser view description tree', () => {
       },
     });
     const overviewContent = textContent(overview);
-    expect(overviewContent).toContain('unknown');
-    expect(overviewContent).toContain('drift: unknown');
+    expect(overviewContent).toContain('未知');
+    expect(overviewContent).toContain('漂移');
     expect(
       nodes(overview).some((node) => node.type === 'control' && node.action === 'view-pack'),
     ).toBe(false);
@@ -518,7 +544,7 @@ describe('browser view description tree', () => {
         effectiveMismatch: {},
       },
     });
-    expect(textContent(diff)).toContain('digest: ');
+    expect(textContent(diff)).toContain('计划摘要：');
 
     const doctor = renderBrowserView({
       kind: 'doctor',
@@ -527,7 +553,7 @@ describe('browser view description tree', () => {
         metadata: { sideEffects: [null, { owner: 7, path: false }] },
       },
     });
-    expect(textContent(doctor)).toContain('code:  | severity:  | message: ');
+    expect(textContent(doctor)).toContain('代码级别说明位置');
     expect(textContent(doctor)).not.toContain('not-a-location');
   });
 
@@ -549,6 +575,7 @@ describe('browser view description tree', () => {
       data: { plan: { manifest: null, provenance: null, lock: null } },
     });
     expect(textContent(emptyFallback)).toContain('manifest');
+    expect(textContent(emptyFallback)).toContain('暂无可用来源信息');
     const primitivePackValues = renderBrowserView({
       kind: 'pack',
       data: { plan: { manifest: 7, provenance: true, lock: Symbol('inert-value') } },
@@ -580,11 +607,11 @@ describe('browser view description tree', () => {
     });
     expect(textContent(review)).toContain('new-plugin: plugins/alpha (alpha@1.0.0)');
     expect(textContent(review)).toContain('version-mismatch: dsh (1.0.0, 2.0.0)');
-    expect(textContent(review)).toContain('missing permissions');
+    expect(textContent(review)).toContain('缺少授权');
 
     expect(
       textContent(renderBrowserView({ kind: 'overview' }, { profiles: [{ status: 'tracked' }] })),
-    ).toContain('tracked: 1');
+    ).toContain('已跟踪');
     expect(
       textContent(renderBrowserView({ kind: 'profile-diff' }, { planDigest: 'fallback-digest' })),
     ).toContain('fallback-dig');
@@ -595,7 +622,7 @@ describe('browser view description tree', () => {
       textContent(renderBrowserView({ kind: 'pack' }, { manifest: { source: 'fallback' } })),
     ).toContain('fallback');
     expect(textContent(renderBrowserView({ kind: 'doctor', data: { sideEffects: [] } }))).toContain(
-      'doctor',
+      '诊断',
     );
   });
 
@@ -608,7 +635,7 @@ describe('browser view description tree', () => {
     const tree = renderBrowserView({ kind: 'write-review', state: reviewing });
     const all = nodes(tree);
     const controls = all.filter((node) => node.type === 'control');
-    expect(textContent(tree)).toContain('review');
+    expect(textContent(tree)).toContain('写操作审阅');
     expect(controls.some((node) => /all|bulk|全部|一键/iu.test(node.label))).toBe(false);
     expect(controls.some((node) => node.action === 'grant')).toBe(true);
     const grantControls = controls.filter((node) => node.action === 'grant');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { mountBrowserView, renderBrowserNode } from '../src/dom.js';
-import type { BrowserViewNode, BrowserViewTag } from '../src/view.js';
+import type { BrowserViewClass, BrowserViewNode, BrowserViewTag } from '../src/view.js';
 import { descendants, FakeDocument, type FakeElement } from './fake-dom.js';
 
 const tags: readonly BrowserViewTag[] = [
@@ -28,6 +28,24 @@ const tags: readonly BrowserViewTag[] = [
   'code',
 ];
 
+const classes: readonly BrowserViewClass[] = [
+  'page',
+  'page-header',
+  'panel',
+  'summary-grid',
+  'data-table',
+  'status-badge',
+  'status-tracked',
+  'status-untracked',
+  'status-reserved',
+  'status-broken',
+  'severity-info',
+  'severity-warning',
+  'severity-error',
+  'callout',
+  'review-status',
+];
+
 function document(): FakeDocument {
   return new FakeDocument();
 }
@@ -50,6 +68,27 @@ describe('imperative DOM adapter', () => {
       expect(rendered.tagName).toBe(tag);
       expect(descendants(rendered).some((child) => child.tagName === 'img')).toBe(false);
     }
+  });
+
+  it('materializes only the fixed presentation class set', () => {
+    const fake = document();
+    for (const className of classes) {
+      const rendered = renderBrowserNode(fake as unknown as Document, {
+        type: 'element',
+        tag: 'section',
+        attrs: { className },
+        children: [],
+      }) as unknown as FakeElement;
+      expect(rendered.classList.contains(className)).toBe(true);
+    }
+
+    const hostile = renderBrowserNode(fake as unknown as Document, {
+      type: 'element',
+      tag: 'section',
+      attrs: { className: 'pack-controlled-selector' as BrowserViewClass },
+      children: [],
+    }) as unknown as FakeElement;
+    expect(hostile.classList.contains('pack-controlled-selector')).toBe(false);
   });
 
   it('emits immutable control descriptions from button and checkbox events', () => {

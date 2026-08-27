@@ -161,6 +161,7 @@ export default defineConfig({
         'packages/ui/src/view.ts': { branches: 90 },
         'packages/ui/src/dom.ts': { branches: 90 },
         'packages/ui/src/main.ts': { branches: 90 },
+        'packages/ui/src/messages.ts': { branches: 90 },
       },
     },
   },

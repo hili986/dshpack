@@ -7,6 +7,14 @@ export class FakeElement {
   hidden = false;
   type = '';
   value = '';
+  placeholder = '';
+  private readonly classNames = new Set<string>();
+  readonly classList = {
+    add: (...tokens: string[]): void => {
+      for (const token of tokens) this.classNames.add(token);
+    },
+    contains: (token: string): boolean => this.classNames.has(token),
+  };
   private text = '';
   private readonly listeners = new Map<string, Listener[]>();
 

@@ -1,4 +1,9 @@
-import type { BrowserControlNode, BrowserViewNode, BrowserViewTag } from './view.js';
+import type {
+  BrowserControlNode,
+  BrowserViewClass,
+  BrowserViewNode,
+  BrowserViewTag,
+} from './view.js';
 
 /** A control callback receives the immutable description node, never user data from an attribute. */
 export type BrowserControlHandler = (control: BrowserControlNode, event: Event) => void;
@@ -48,6 +53,30 @@ function trustedElement(document: Document, tag: BrowserViewTag): HTMLElement {
       return document.createElement('td');
     case 'code':
       return document.createElement('code');
+  }
+}
+
+/** Keep presentation names closed even if an untyped caller constructs a description tree. */
+function trustedClass(value: BrowserViewClass): BrowserViewClass | undefined {
+  switch (value) {
+    case 'page':
+    case 'page-header':
+    case 'panel':
+    case 'summary-grid':
+    case 'data-table':
+    case 'status-badge':
+    case 'status-tracked':
+    case 'status-untracked':
+    case 'status-reserved':
+    case 'status-broken':
+    case 'severity-info':
+    case 'severity-warning':
+    case 'severity-error':
+    case 'callout':
+    case 'review-status':
+      return value;
+    default:
+      return undefined;
   }
 }
 
@@ -102,6 +131,11 @@ export function renderBrowserNode(
   const element = trustedElement(document, node.tag);
   if (node.tag === 'details' && node.attrs?.open === true)
     (element as HTMLDetailsElement).open = true;
+  const className = node.attrs?.className;
+  if (className !== undefined) {
+    const safeClassName = trustedClass(className);
+    if (safeClassName !== undefined) element.classList.add(safeClassName);
+  }
   appendChildren(element, node.children, document, onControl);
   return element;
 }

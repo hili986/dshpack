@@ -146,6 +146,68 @@ afterEach(() => {
 });
 
 describe('browser main shell behavior', () => {
+  it('re-renders all chrome from the runtime locale switch without translating server diagnostics', async () => {
+    const serverDiagnostic = 'server diagnostic remains verbatim';
+    const serverPath = 'profiles/alpha.yml:4:7';
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [
+            { code: 'E_SERVER', severity: 'error', message: serverDiagnostic, path: serverPath },
+          ],
+          exitCode: 70,
+          metadata: { sideEffects: [] },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    expect(visibleText(root)).toContain('总览');
+    expect(visibleText(root)).toContain('预览计划');
+    expect(visibleText(root)).toContain('状态概览');
+
+    const operation = descendants(root).find((element) => element.tagName === 'select');
+    if (operation === undefined) throw new Error('expected operation selector');
+    operation.value = 'update';
+    operation.fire('change');
+    elementWithText(root, '预览计划')?.fire('click');
+    expect(visibleText(root)).toContain('请填写已有 Profile 名后再预览计划。');
+    elementWithText(root, 'EN')?.fire('click');
+    const english = visibleText(root);
+    for (const label of [
+      'Overview',
+      'Drift comparison',
+      'Diagnostics',
+      'Pack details',
+      'Write review',
+      'Preview plan',
+      'Status summary',
+      'Version',
+      'View Profile',
+    ])
+      expect(english).toContain(label);
+    expect(english).toContain('Profile name');
+    expect(english).toContain('Enter an existing Profile name before previewing the plan.');
+
+    fakes.window.location.hash = '#doctor';
+    await settle();
+    const doctor = visibleText(root);
+    expect(doctor).toContain('CodeSeverityMessageLocation');
+    expect(doctor).toContain('E_SERVER');
+    expect(doctor).toContain(serverDiagnostic);
+    expect(doctor).toContain(serverPath);
+
+    fakes.window.location.hash = '#pack';
+    expect(visibleText(root)).toContain('No provenance is available.');
+
+    elementWithText(root, '中')?.fire('click');
+    expect(visibleText(root)).toContain('Pack 详情');
+  });
+
   it('materializes only the active hash view and switches it on hashchange', async () => {
     const fakes = installBrowserFakes([
       { status: 200, body: statusBody },
@@ -165,7 +227,7 @@ describe('browser main shell behavior', () => {
     expect(activeSections()[0]?.children[0]?.tagName).toBe('main');
     fakes.window.location.hash = '#doctor';
     expect(activeSections()).toHaveLength(1);
-    expect(visibleText(activeSections()[0] as FakeElement)).toContain('doctor');
+    expect(visibleText(activeSections()[0] as FakeElement)).toContain('诊断');
   });
 
   it('renders each hash-selected screen into the one active mount', async () => {
@@ -175,10 +237,10 @@ describe('browser main shell behavior', () => {
     await settle();
 
     for (const [hash, heading] of [
-      ['#profile-diff', 'profile diff'],
-      ['#pack', 'pack'],
-      ['#write-review', 'write review'],
-      ['#unknown', 'profiles'],
+      ['#profile-diff', '漂移对比'],
+      ['#pack', 'Pack 详情'],
+      ['#write-review', '写操作审阅'],
+      ['#unknown', '总览'],
     ] as const) {
       fakes.window.location.hash = hash;
       const views = descendants(root).filter(
@@ -187,6 +249,34 @@ describe('browser main shell behavior', () => {
       expect(views).toHaveLength(1);
       expect(visibleText(views[0] as FakeElement)).toContain(heading);
     }
+  });
+
+  it('puts the shared target field in explicit Profile diff mode outside write planning', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: { diagnostics: [], exitCode: 0, metadata: {} } },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, '漂移对比')?.fire('click');
+    const target = descendants(root).find(
+      (element) => element.tagName === 'input' && element.type === 'text',
+    );
+    expect(visibleText(root)).toContain('用于漂移对比的 Profile 名');
+    expect(target?.placeholder).toContain('需要比较的 Profile 名');
+    expect(elementWithText(root, '预览计划')?.disabled).toBe(true);
+    expect(elementWithText(root, '加载漂移对比')?.disabled).toBe(false);
+
+    if (target === undefined) throw new Error('expected diff target');
+    target.value = 'alpha';
+    elementWithText(root, '加载漂移对比')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toEqual({
+      operation: 'diff',
+      input: { profile: 'alpha', checkUpdates: true },
+    });
   });
 
   it('loads profile, pack, and write-review controls through their active view handlers', async () => {
@@ -199,7 +289,7 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    elementWithText(root, 'View profile')?.fire('click');
+    elementWithText(root, '查看 Profile')?.fire('click');
     await settle();
     expect(fakes.window.location.hash).toBe('#profile-diff');
     fakes.window.location.hash = '#write-review';
@@ -207,11 +297,11 @@ describe('browser main shell behavior', () => {
       (element) => element.tagName === 'input' && element.type === 'text',
     );
     if (source !== undefined) source.value = '';
-    elementWithText(root, 'Plan write operation')?.fire('click');
-    expect(visibleText(root)).toContain('Enter a source or profile before planning.');
-    elementWithText(root, 'Reset review')?.fire('click');
+    elementWithText(root, '预览写操作')?.fire('click');
+    expect(visibleText(root)).toContain('请填写安装来源后再预览计划。');
+    elementWithText(root, '重置审阅')?.fire('click');
     fakes.window.location.hash = '#pack';
-    expect(elementWithText(root, 'View pack details')).toBeUndefined();
+    expect(elementWithText(root, '查看 Pack 详情')).toBeUndefined();
     expect(fakes.window.location.hash).toBe('#pack');
   });
 
@@ -225,13 +315,13 @@ describe('browser main shell behavior', () => {
     await settle();
 
     expect(requestBodies(fakes.calls)[0]).toEqual({ operation: 'list', input: {} });
-    elementWithText(root, 'View pack')?.fire('click');
+    elementWithText(root, '查看 Pack')?.fire('click');
     await settle();
     expect(fakes.window.location.hash).toBe('#pack');
     expect(visibleText(root)).toContain('from-list-response');
 
     fakes.window.location.hash = '#overview';
-    elementWithText(root, 'Update profile')?.fire('click');
+    elementWithText(root, '更新 Profile')?.fire('click');
     await settle();
     expect(fakes.window.location.hash).toBe('#write-review');
 
@@ -246,8 +336,8 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    elementWithText(root, 'View diff')?.fire('click');
-    expect(visibleText(root)).toContain('Select a profile before loading its diff.');
+    elementWithText(root, '查看漂移')?.fire('click');
+    expect(visibleText(root)).toContain('请先选择一个 Profile，再查看漂移。');
   });
 
   it('revalidates a row as tracked at click time before starting a write plan', async () => {
@@ -271,12 +361,12 @@ describe('browser main shell behavior', () => {
 
     mutableProfile.status = 'untracked';
     const update = descendants(root).find(
-      (element) => element.tagName === 'button' && element.textContent === 'Update profile',
+      (element) => element.tagName === 'button' && element.textContent === '更新 Profile',
     );
     expect(update).toBeDefined();
     update?.fire('click');
 
-    expect(visibleText(root)).toContain('Select a tracked profile before planning.');
+    expect(visibleText(root)).toContain('请先选择一个已跟踪的 Profile，再预览计划。');
     expect(requestBodies(fakes.calls)).toEqual([{ operation: 'list', input: {} }]);
   });
 
@@ -289,7 +379,7 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    elementWithText(root, 'Update profile')?.fire('click');
+    elementWithText(root, '更新 Profile')?.fire('click');
     await settle();
     vi.stubGlobal('HTMLInputElement', class NotAnInput {});
     inputs(root)
@@ -299,7 +389,7 @@ describe('browser main shell behavior', () => {
 
     const ordinaryGrant = inputs(root).find((candidate) => candidate.type === 'checkbox');
     expect(ordinaryGrant?.checked).toBe(false);
-    expect(elementWithText(root, 'Apply reviewed plan')?.disabled).toBe(true);
+    expect(elementWithText(root, '执行已审阅计划')?.disabled).toBe(true);
     expect(
       requestBodies(fakes.calls)
         .filter((body) => typeof body.phase === 'string')
@@ -319,7 +409,7 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    for (const action of ['Update profile', 'Uninstall profile', 'Restore profile']) {
+    for (const action of ['更新 Profile', '卸载 Profile', '恢复 Profile']) {
       fakes.window.location.hash = '#overview';
       await settle();
       const button = elementWithText(root, action);
@@ -361,13 +451,13 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    elementWithText(root, 'View diff')?.fire('click');
+    elementWithText(root, '查看漂移')?.fire('click');
     await settle();
     fakes.window.location.hash = '#overview';
-    elementWithText(root, 'View profile')?.fire('click');
+    elementWithText(root, '查看 Profile')?.fire('click');
     await settle();
     fakes.window.location.hash = '#overview';
-    elementWithText(root, 'Run doctor')?.fire('click');
+    elementWithText(root, '运行诊断')?.fire('click');
     await settle();
     expect(requestBodies(fakes.calls).filter((body) => body.operation === 'doctor')).toHaveLength(
       1,
@@ -377,12 +467,12 @@ describe('browser main shell behavior', () => {
     const source = descendants(root).find(
       (element) => element.tagName === 'input' && element.type === 'text',
     );
-    const plan = elementWithText(root, 'Plan');
+    const plan = elementWithText(root, '预览计划');
     expect(select).toBeDefined();
     expect(source).toBeDefined();
     expect(plan).toBeDefined();
     for (const [operation, value] of [
-      ['install', 'https://example.invalid/pack.tgz'],
+      ['install', 'tarball:https://example.invalid/pack.tgz#sha512-deadbeef'],
       ['uninstall', 'alpha'],
       ['update', 'alpha'],
       ['restore', 'alpha'],
@@ -390,6 +480,7 @@ describe('browser main shell behavior', () => {
     ] as const) {
       if (select !== undefined && source !== undefined) {
         select.value = operation;
+        select.fire('change');
         source.value = value;
       }
       plan?.fire('click');
@@ -404,8 +495,88 @@ describe('browser main shell behavior', () => {
       'restore',
       'gc',
     ]);
-    expect(writes[0]?.input).toMatchObject({ source: 'https://example.invalid/pack.tgz' });
+    expect(writes[0]?.input).toMatchObject({
+      source: 'tarball:https://example.invalid/pack.tgz#sha512-deadbeef',
+    });
     expect(writes[4]?.input).toEqual({});
+  });
+
+  it('makes the write target semantics explicit and blocks a profile-shaped install value locally', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: planWith() },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    const select = descendants(root).find((element) => element.tagName === 'select');
+    const source = descendants(root).find(
+      (element) => element.tagName === 'input' && element.type === 'text',
+    );
+    if (select === undefined || source === undefined) throw new Error('expected write form');
+
+    expect(visibleText(root)).toContain('安装来源');
+    expect(source.placeholder).toContain('github:owner/repo#40位sha');
+    source.value = 'personal-notes';
+    elementWithText(root, '预览计划')?.fire('click');
+    expect(visibleText(root)).toContain('install 需要来源而非 profile 名');
+    expect(requestBodies(fakes.calls)).toEqual([{ operation: 'list', input: {} }]);
+
+    source.value = './examples/compose/sources/personal-notes';
+    elementWithText(root, '预览计划')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'install',
+      phase: 'plan',
+      input: { source: './examples/compose/sources/personal-notes' },
+    });
+    expect(visibleText(root)).not.toContain('install 需要来源而非 profile 名');
+
+    select.value = 'update';
+    select.fire('change');
+    expect(visibleText(root)).toContain('Profile 名');
+    expect(source.placeholder).toContain('已有 profile 名');
+
+    select.value = 'gc';
+    select.fire('change');
+    expect(visibleText(root)).toContain('无需输入');
+    expect(source.disabled).toBe(true);
+  });
+
+  it('explains SOURCE_INVALID as an install-source mistake after a server response', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 500,
+        body: {
+          diagnostics: [
+            {
+              code: 'SOURCE_INVALID',
+              severity: 'error',
+              message: '本地 source 不存在或无法读取。',
+            },
+          ],
+          exitCode: 20,
+          metadata: {},
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    const source = descendants(root).find(
+      (element) => element.tagName === 'input' && element.type === 'text',
+    );
+    if (source === undefined) throw new Error('expected write source');
+    source.value = './missing-source';
+    elementWithText(root, '预览计划')?.fire('click');
+    await settle();
+
+    expect(visibleText(root)).toContain(
+      'install 需要来源而非 profile 名；若想操作已有 profile，请选择 update/uninstall/restore。',
+    );
   });
 
   it('declines malformed form operations and reports empty diff/profile actions locally', async () => {
@@ -422,11 +593,11 @@ describe('browser main shell behavior', () => {
       select.value = 'not-an-operation';
       source.value = '';
     }
-    elementWithText(root, 'Plan')?.fire('click');
-    expect(visibleText(root)).toContain('Enter a source or profile before planning.');
+    elementWithText(root, '预览计划')?.fire('click');
+    expect(visibleText(root)).toContain('请选择有效操作。');
 
     await controller.refreshDiff();
-    expect(visibleText(root)).toContain('Enter a profile before loading its diff.');
+    expect(visibleText(root)).toContain('请先填写 Profile 名，再查看漂移。');
   });
 
   it('does not turn an unknown review-panel operation into an API request', async () => {
@@ -439,11 +610,12 @@ describe('browser main shell behavior', () => {
     const select = descendants(root).find((element) => element.tagName === 'select');
     if (select === undefined) throw new Error('expected operation select');
     select.value = 'unknown-operation';
-    const plan = elementWithText(root, 'Plan write operation');
+    select.fire('change');
+    const plan = elementWithText(root, '预览写操作');
     expect(plan).toBeDefined();
     plan?.fire('click');
 
-    expect(visibleText(root)).toContain('Enter a source or profile before planning.');
+    expect(visibleText(root)).toContain('请选择有效操作。');
     expect(requestBodies(fakes.calls)).toEqual([{ operation: 'list', input: {} }]);
   });
 
@@ -466,23 +638,23 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    const update = elementWithText(root, 'Update profile');
+    const update = elementWithText(root, '更新 Profile');
     update?.fire('click');
     await settle();
-    expect(elementWithText(root, 'Apply reviewed plan')?.disabled).toBe(true);
-    elementWithText(root, 'Apply reviewed plan')?.fire('click');
+    expect(elementWithText(root, '执行已审阅计划')?.disabled).toBe(true);
+    elementWithText(root, '执行已审阅计划')?.fire('click');
 
     for (const input of inputs(root).filter((candidate) => candidate.type === 'checkbox')) {
       expect(input).toBeDefined();
       input.checked = true;
       input.fire('change');
     }
-    const apply = elementWithText(root, 'Apply reviewed plan');
+    const apply = elementWithText(root, '执行已审阅计划');
     expect(apply?.disabled).toBe(false);
     apply?.fire('click');
     await settle();
 
-    expect(visibleText(root)).toContain('missing permissions');
+    expect(visibleText(root)).toContain('缺少授权');
     expect(visibleText(root)).toContain('danger-full-access: alpha');
     expect(
       requestBodies(fakes.calls)
@@ -502,12 +674,12 @@ describe('browser main shell behavior', () => {
     startBrowserUi(root as unknown as HTMLElement);
     await settle();
 
-    elementWithText(root, 'Update profile')?.fire('click');
+    elementWithText(root, '更新 Profile')?.fire('click');
     await settle();
-    elementWithText(root, 'Apply reviewed plan')?.fire('click');
+    elementWithText(root, '执行已审阅计划')?.fire('click');
     await settle();
-    expect(visibleText(root)).toContain('plan is stale');
-    elementWithText(root, 'Plan again')?.fire('click');
+    expect(visibleText(root)).toContain('计划已过期，请重新审阅。');
+    elementWithText(root, '重新预览计划')?.fire('click');
     await settle();
 
     const bodies = requestBodies(fakes.calls).filter((body) => typeof body.phase === 'string');
@@ -543,7 +715,7 @@ describe('browser main shell behavior', () => {
     await settle();
 
     expect(visibleText(root)).toContain('E_UI_RESPONSE');
-    expect(visibleText(root)).toContain('The UI server returned an invalid response.');
+    expect(visibleText(root)).toContain('UI 服务返回了无效响应。');
     expect(fakes.calls).toHaveLength(2);
   });
 
@@ -563,16 +735,16 @@ describe('browser main shell behavior', () => {
     if (activeMount === undefined) throw new Error('expected active mount');
     activeMount.textContent = 'tampered active view';
     expect(activeMount.textContent).toContain('tampered active view');
-    elementWithText(root, 'overview')?.fire('click');
-    expect(activeMount.textContent).toContain('profiles');
+    elementWithText(root, '总览')?.fire('click');
+    expect(activeMount.textContent).toContain('总览');
     expect(activeMount.textContent).not.toContain('tampered active view');
-    elementWithText(root, 'Update profile')?.fire('click');
+    elementWithText(root, '更新 Profile')?.fire('click');
     await settle();
 
     vi.stubGlobal('HTMLInputElement', class NotAnInput {});
     for (const input of inputs(root).filter((candidate) => candidate.type === 'checkbox'))
       input.fire('change');
-    expect(elementWithText(root, 'Apply reviewed plan')?.disabled).toBe(true);
+    expect(elementWithText(root, '执行已审阅计划')?.disabled).toBe(true);
     expect(fakes.window.location.hash).toBe('#write-review');
   });
 
@@ -582,7 +754,7 @@ describe('browser main shell behavior', () => {
     vi.resetModules();
     await import('../src/main.js');
     await settle();
-    expect(elementWithText(ready.document.body, 'Pack management')).toBeDefined();
+    expect(elementWithText(ready.document.body, 'dshpack 包管理')).toBeDefined();
 
     vi.unstubAllGlobals();
     const loading = installBrowserFakes([{ status: 200, body: statusBody }]);
@@ -590,9 +762,9 @@ describe('browser main shell behavior', () => {
     vi.stubGlobal('document', loading.document);
     vi.resetModules();
     await import('../src/main.js');
-    expect(elementWithText(loading.document.body, 'Pack management')).toBeUndefined();
+    expect(elementWithText(loading.document.body, 'dshpack 包管理')).toBeUndefined();
     loading.document.fire('DOMContentLoaded');
     await settle();
-    expect(elementWithText(loading.document.body, 'Pack management')).toBeDefined();
+    expect(elementWithText(loading.document.body, 'dshpack 包管理')).toBeDefined();
   });
 });

@@ -1,16 +1,117 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>dshpack</title>
     <style>
-      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-      body { margin: 0; }
-      main { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
-      section, details, ul, dl { margin-block: .75rem; }
-      button, input, select { font: inherit; margin: .25rem; }
-      button:disabled { cursor: not-allowed; opacity: .6; }
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f4f7fb;
+        color: #1d2939;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 20rem; }
+      .page { display: grid; gap: 1rem; }
+      .page-header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; padding: .25rem 0; }
+      .page-header h1 { margin: 0; font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.035em; }
+      .page-header p { margin: 0; color: #667085; font-size: .875rem; }
+      #app { max-width: 78rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+      #app > section:first-child {
+        display: grid;
+        grid-template-columns: max-content minmax(16rem, 1fr) max-content max-content;
+        gap: .75rem;
+        align-items: end;
+        padding: 1.25rem;
+        border: 1px solid #d7dfeb;
+        border-radius: 1rem;
+        background: #ffffff;
+        box-shadow: 0 .5rem 1.75rem rgb(30 41 59 / 8%);
+      }
+      #app > section:first-child > h1 {
+        grid-column: 1 / -1;
+        margin: 0;
+        font-size: 1.4rem;
+        letter-spacing: -.02em;
+      }
+      #app > section:first-child label { display: grid; gap: .375rem; color: #475467; font-size: .875rem; font-weight: 650; }
+      .locale-switch { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: .375rem; }
+      .locale-switch button { flex: 0 0 auto; min-width: 3.25rem; }
+      #app > section:first-child nav {
+        grid-column: 1 / -1;
+        display: flex;
+        flex-wrap: wrap;
+        gap: .375rem;
+        padding-top: .25rem;
+        border-top: 1px solid #e4eaf2;
+      }
+      #app > section:first-child > p { grid-column: 1 / -1; min-height: 1.25rem; margin: 0; color: #b42318; font-size: .875rem; }
+      button, input, select { min-height: 2.5rem; border-radius: .5rem; font: inherit; }
+      input, select { width: 100%; border: 1px solid #b9c6d8; background: #ffffff; color: inherit; padding: .5rem .625rem; }
+      button { border: 1px solid #175cd3; background: #175cd3; color: #ffffff; padding: .5rem .875rem; font-weight: 650; cursor: pointer; }
+      button:hover { background: #1849a9; border-color: #1849a9; }
+      button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid rgb(43 127 255 / 35%); outline-offset: 2px; }
+      button:disabled { cursor: not-allowed; opacity: .55; }
+      nav button { min-height: 2.125rem; border-color: transparent; background: #edf2f7; color: #344054; padding: .375rem .65rem; font-size: .875rem; }
+      nav button:hover { background: #dbe8fb; color: #0b4eb4; }
+      #app > section:nth-child(2) { margin-top: 1.25rem; }
+      .panel, .summary-grid, details { overflow: hidden; border: 1px solid #d7dfeb; border-radius: .875rem; background: #ffffff; box-shadow: 0 .25rem 1rem rgb(30 41 59 / 5%); }
+      .panel, .summary-grid { padding: 1rem; }
+      .panel h2, .summary-grid h2 { margin: 0 0 .875rem; font-size: 1rem; }
+      .summary-grid { max-width: 30rem; }
+      .data-table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+      .data-table th, .data-table td { padding: .75rem .625rem; border-bottom: 1px solid #e4eaf2; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+      .data-table th { background: #f8fafc; color: #475467; font-size: .75rem; font-weight: 700; letter-spacing: .025em; }
+      .data-table tr:last-child td { border-bottom: 0; }
+      .data-table td > section { display: flex; flex-wrap: wrap; gap: .375rem; }
+      .data-table td button { min-height: 2rem; padding: .25rem .5rem; font-size: .75rem; }
+      code.status-badge, code.status-tracked, code.status-untracked, code.status-reserved, code.status-broken, code.severity-info, code.severity-warning, code.severity-error {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: .2rem .5rem;
+        font-family: inherit;
+        font-size: .75rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      code.status-badge { background: #eef2f6; color: #475467; }
+      code.status-tracked, code.severity-info { background: #e7f6ec; color: #087443; }
+      code.status-untracked, code.status-reserved, code.severity-warning { background: #fff4df; color: #9a6700; }
+      code.status-broken, code.severity-error { background: #fdecec; color: #b42318; }
+      .callout, .review-status { margin: 0; padding: .75rem .875rem; border-radius: .625rem; background: #eef4ff; color: #1849a9; }
+      .callout { background: #fff4e5; color: #8a4b08; }
+      details { padding: .875rem 1rem; }
+      details summary { cursor: pointer; font-weight: 700; }
+      details > :not(summary) { margin-top: .875rem; }
+      dl { display: grid; grid-template-columns: minmax(9rem, max-content) 1fr; gap: .5rem .875rem; margin: 0; }
+      dt { color: #475467; font-weight: 650; }
+      dd { margin: 0; overflow-wrap: anywhere; }
+      ul { padding-left: 1.25rem; }
+      @media (max-width: 46rem) {
+        #app { padding: 1rem .75rem 2rem; }
+        #app > section:first-child { grid-template-columns: 1fr; }
+        #app > section:first-child button { width: 100%; }
+        #app > section:first-child nav button { width: auto; }
+        .page-header { align-items: flex-start; flex-direction: column; gap: .375rem; }
+        .data-table { display: block; overflow-x: auto; white-space: nowrap; }
+        .data-table td > section { min-width: 15rem; }
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { background: #101828; color: #f0f4fa; }
+        #app > section:first-child, .panel, .summary-grid, details { border-color: #344054; background: #182230; box-shadow: none; }
+        #app > section:first-child label, dt, .data-table th { color: #a8b6c9; }
+        #app > section:nth-child(2) .page-header p { color: #a8b6c9; }
+        #app > section:first-child nav { border-color: #344054; }
+        input, select { border-color: #475467; background: #101828; color: #f0f4fa; }
+        nav button, .data-table th { background: #243244; color: #d0d9e8; }
+        nav button:hover { background: #30415a; color: #ffffff; }
+        .data-table th, .data-table td { border-color: #344054; }
+        .callout, .review-status { background: #19355e; color: #c7dbff; }
+        .callout { background: #4b3414; color: #ffe1a8; }
+        code.status-badge { background: #344054; color: #d0d9e8; }
+      }
     </style>
   </head>
   <body>

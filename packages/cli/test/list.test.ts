@@ -113,6 +113,15 @@ describe('listProfiles', () => {
       {
         installedAt: '2026-08-16T00:00:00.000Z',
         pack: { name: 'demo-pack', version: '1.2.3' },
+        packDetails: {
+          lock: marker('tracked').effectiveLock,
+          manifest: {
+            manifestDigest: SHA256_A,
+            name: 'demo-pack',
+            version: '1.2.3',
+          },
+          provenance: [],
+        },
         profile: 'tracked',
         status: 'tracked',
       },

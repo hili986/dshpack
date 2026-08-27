@@ -68,7 +68,7 @@ function asReviewing(state: ReturnType<typeof reduceBrowserState>): BrowserRevie
 describe('browser state model', () => {
   it('follows idle -> planning -> reviewing with an empty grant set', () => {
     const idle = createInitialState();
-    expect(idle.phase).toBe('idle');
+    expect(idle).toMatchObject({ phase: 'idle', locale: 'zh' });
 
     const planning = reduce(idle, { type: 'plan', request });
     expect(planning).toMatchObject({ phase: 'planning', operation: 'install' });
@@ -85,6 +85,20 @@ describe('browser state model', () => {
       missing: [buildPermission],
       dangerConfirmed: false,
     });
+  });
+
+  it('changes locale through an ordinary state action without changing lifecycle phase', () => {
+    const idle = createBrowserState();
+    const english = reduceBrowserState(idle, { type: 'set-locale', locale: 'en' });
+
+    expect(english).toMatchObject({ phase: 'idle', locale: 'en' });
+    expect(reduceBrowserState(english, { type: 'set-locale', locale: 'zh' })).toMatchObject({
+      phase: 'idle',
+      locale: 'zh',
+    });
+    expect(reduceBrowserState(english, { type: 'set-locale', locale: 'other' } as never)).toBe(
+      english,
+    );
   });
 
   it('starts every new plan with all dangerous grants switched off', () => {

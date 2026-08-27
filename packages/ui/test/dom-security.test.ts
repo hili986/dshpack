@@ -49,9 +49,12 @@ describe('browser DOM shell trust boundary', () => {
   it('ships a static stylesheet without a pack-controlled CSS channel or external resource', async () => {
     const [html, sources] = await Promise.all([publicAsset('index.html'), allSources()]);
     const styleBlocks = html.match(/<style>[\s\S]*?<\/style>/gu) ?? [];
+    const stylesheet = styleBlocks[0] ?? '';
 
     expect(styleBlocks).toHaveLength(1);
     expect(html).not.toMatch(/https?:\/\//u);
+    expect(html).not.toMatch(/\sstyle\s*=/u);
+    expect(stylesheet).not.toMatch(/(?:https?:\/\/|github:|tarball:|url\s*\()/u);
     for (const source of sources)
       expect(source).not.toMatch(/(?:\.style\b|setAttribute\(\s*['"]style['"])/u);
   });

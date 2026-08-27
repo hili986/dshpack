@@ -6,6 +6,8 @@ import type {
   UiWriteRequest,
 } from 'dshpack';
 
+import type { Locale } from './messages.js';
+
 /** The browser owns only this small, explicit lifecycle. */
 export type BrowserPhase =
   | 'idle'
@@ -16,11 +18,15 @@ export type BrowserPhase =
   | 'stale'
   | 'failed';
 
-export interface BrowserIdleState {
+export interface BrowserLocaleState {
+  readonly locale: Locale;
+}
+
+export interface BrowserIdleState extends BrowserLocaleState {
   readonly phase: 'idle';
 }
 
-export interface BrowserPlanningState {
+export interface BrowserPlanningState extends BrowserLocaleState {
   readonly phase: 'planning';
   readonly operation: UiWriteRequest['operation'];
   readonly input: UiWriteRequest['input'];
@@ -28,7 +34,7 @@ export interface BrowserPlanningState {
   readonly error?: UiResponse;
 }
 
-export interface BrowserReviewFields {
+export interface BrowserReviewFields extends BrowserLocaleState {
   readonly operation: UiWriteRequest['operation'];
   readonly input: UiWriteRequest['input'];
   readonly request: UiWriteRequest;
@@ -64,7 +70,7 @@ export interface BrowserStaleState extends BrowserReviewFields {
   readonly error: UiResponse;
 }
 
-export interface BrowserFailedState {
+export interface BrowserFailedState extends BrowserLocaleState {
   readonly phase: 'failed';
   readonly operation: UiWriteRequest['operation'];
   readonly input: UiWriteRequest['input'];
@@ -107,6 +113,7 @@ export type BrowserResponseAction = {
 
 export type BrowserApplyAction = { readonly type: 'apply' };
 export type BrowserResetAction = { readonly type: 'reset' };
+export type BrowserSetLocaleAction = { readonly type: 'set-locale'; readonly locale: Locale };
 
 interface BrowserUnknownAction {
   readonly type: string;
@@ -131,9 +138,10 @@ export type BrowserAction =
   | BrowserResponseAction
   | BrowserApplyAction
   | BrowserResetAction
+  | BrowserSetLocaleAction
   | BrowserUnknownAction;
 
-export const createBrowserState = (): BrowserIdleState => ({ phase: 'idle' });
+export const createBrowserState = (): BrowserIdleState => ({ phase: 'idle', locale: 'zh' });
 export const createInitialState = createBrowserState;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -265,6 +273,7 @@ function planRequest(value: UiRequest): UiWriteRequest | undefined {
 function reviewFromPlan(
   request: UiWriteRequest,
   response: UiResponse,
+  locale: Locale,
   highlightedMissing: readonly UiDangerousPermission[] = [],
 ): BrowserReviewingState {
   const plan = planFrom(response);
@@ -273,6 +282,7 @@ function reviewFromPlan(
   const missing = reportedMissing.length > 0 ? reportedMissing : required;
   return {
     phase: 'reviewing',
+    locale,
     operation: request.operation,
     input: request.input,
     request,
@@ -290,6 +300,7 @@ function reviewFromPlan(
 function failedFromPlanning(state: BrowserPlanningState, response: UiResponse): BrowserFailedState {
   return {
     phase: 'failed',
+    locale: state.locale,
     operation: state.operation,
     input: state.input,
     request: state.request,
@@ -301,6 +312,7 @@ function failedFromPlanning(state: BrowserPlanningState, response: UiResponse): 
 function failedFromApplying(state: BrowserApplyingState, response: UiResponse): BrowserFailedState {
   return {
     phase: 'failed',
+    locale: state.locale,
     operation: state.operation,
     input: state.input,
     request: state.request,
@@ -353,6 +365,7 @@ function reviewFromApplying(
       : required.filter((item) => !hasPermission(granted, item));
   return {
     phase: 'reviewing',
+    locale: state.locale,
     operation: state.operation,
     input: state.input,
     request: cleanPlanRequest(state.request),
@@ -371,11 +384,12 @@ function reviewFromApplying(
 }
 
 function staleFrom(
-  state: Pick<BrowserPlanningState, 'operation' | 'input' | 'request'>,
+  state: Pick<BrowserPlanningState, 'locale' | 'operation' | 'input' | 'request'>,
   response: UiResponse,
 ): BrowserStaleState {
   return {
     phase: 'stale',
+    locale: state.locale,
     operation: state.operation,
     input: state.input,
     request: cleanPlanRequest(state.request),
@@ -487,7 +501,13 @@ function normalizeAction(action: BrowserAction): BrowserAction {
 export function reduceBrowserState(state: BrowserState, rawAction: BrowserAction): BrowserState {
   const action = normalizeAction(rawAction);
 
-  if (action.type === 'reset') return createBrowserState();
+  if (action.type === 'reset') return { phase: 'idle', locale: state.locale };
+
+  if (action.type === 'set-locale') {
+    const locale = 'locale' in action ? action.locale : undefined;
+    if (locale !== 'zh' && locale !== 'en') return state;
+    return { ...state, locale };
+  }
 
   if (action.type === 'plan') {
     if (!['idle', 'reviewing', 'stale', 'done', 'failed'].includes(state.phase)) return state;
@@ -499,6 +519,7 @@ export function reduceBrowserState(state: BrowserState, rawAction: BrowserAction
     if (candidate === undefined) return state;
     return {
       phase: 'planning',
+      locale: state.locale,
       operation: candidate.operation,
       input: candidate.input,
       // A plan is always a fresh review. Never carry caller-supplied grants across the
@@ -552,7 +573,7 @@ export function reduceBrowserState(state: BrowserState, rawAction: BrowserAction
       if (status === 409) {
         return staleFrom(state, report);
       }
-      const candidate = reviewFromPlan(state.request, report);
+      const candidate = reviewFromPlan(state.request, report, state.locale);
       if (status >= 400 || !hasUsablePlan(report)) return failedFromPlanning(state, report);
       return candidate;
     }

@@ -1,4 +1,5 @@
 import type { Dirent } from 'node:fs';
+import type { PackLock } from '@dshpack/core';
 import { type CommandReport, diagnostic, resolveDshHomeValue } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import {
@@ -22,6 +23,18 @@ export type ListedProfile =
       profile: string;
       status: 'tracked';
       pack: { name: string; version: string };
+      /**
+       * The UI needs immutable pack facts for its read-only detail panel.  This projection is
+       * intentionally narrower than installed metadata: source locators may contain an absolute
+       * local path, whereas manifest identity and the validated effective lock are safe facts to
+       * render as text.  Provenance therefore remains explicitly empty until a non-sensitive
+       * provenance contract exists.
+       */
+      packDetails?: {
+        manifest: { name: string; version: string; manifestDigest: string };
+        provenance: readonly [];
+        lock: PackLock;
+      };
       installedAt: string;
     }
   | { profile: string; status: 'untracked' }
@@ -173,6 +186,16 @@ export async function listProfiles(input: ListInput): Promise<ListReport> {
       pack: {
         name: metadataState.metadata.pack.name,
         version: metadataState.metadata.pack.version,
+      },
+      packDetails: {
+        manifest: {
+          name: metadataState.metadata.pack.name,
+          version: metadataState.metadata.pack.version,
+          manifestDigest: metadataState.metadata.pack.manifestDigest,
+        },
+        // Do not forward metadata.source: it can include a user-specific absolute path.
+        provenance: [],
+        lock: metadataState.metadata.effectiveLock,
       },
       installedAt: metadataState.metadata.installedAt,
     });
