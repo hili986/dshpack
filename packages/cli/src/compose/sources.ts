@@ -5,7 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { type Diagnostic, inspectSkill, scanSecrets } from '@dshpack/core';
 
 import {
-  materializeSource,
+  materializeSourceForCompose,
   SourceError,
   sourceReferenceFromProvenance,
 } from '../adapters/source.js';
@@ -31,7 +31,7 @@ export interface ComposeMaterializedSource {
 
 export interface ComposeSourceDependencies {
   exportProfile?: typeof exportProfile;
-  materialize?: typeof materializeSource;
+  materialize?: typeof materializeSourceForCompose;
   readPack?: typeof readValidatedPack;
 }
 
@@ -83,6 +83,58 @@ async function conventionalLicense(root: string): Promise<string> {
     }
   }
   return 'UNLICENSED';
+}
+
+async function hasRootPack(root: string): Promise<boolean> {
+  try {
+    const metadata = await lstat(join(root, 'pack.yml'));
+    return metadata.isFile() && !metadata.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function noSkillSource(
+  root: string,
+  from: string,
+  cleanup: () => Promise<void>,
+  license: string,
+  diagnostics: readonly Diagnostic[],
+): ComposeMaterializedSource {
+  const files: [] = [];
+  return {
+    cleanup,
+    diagnostics: [
+      ...diagnostics,
+      diagnostic(
+        'W_COMPOSE_NO_SKILL_SOURCE',
+        'warning',
+        'source 不含可组合的 pack.yml 或 .agents/skills/<id>/SKILL.md，已跳过其部署内容。',
+        '该来源已通过既有安全预检，但不会向组合产物贡献文件。',
+        root,
+      ),
+    ],
+    from,
+    license,
+    material: {
+      manifest: {
+        formatVersion: 0,
+        name: 'empty-conventional-source',
+        version: '0.0.0',
+        description: 'Safe source without deployable skills.',
+        author: 'external-source',
+        license,
+        dsh: { tested: ['0.1.0-rc.6'] },
+        plugins: [],
+        mcp: [],
+        defaults: { permissionPreset: 'workspace-write' },
+      },
+      paths: files,
+      files,
+      sourceFiles: files,
+      manifestDigest: digest('sha256', Buffer.from('[]')),
+    },
+  };
 }
 
 /**
@@ -238,6 +290,13 @@ async function validated(
         material: conventional.material,
       };
     }
+    if (
+      !(await hasRootPack(root)) &&
+      source.diagnostics.length > 0 &&
+      source.diagnostics.every(({ code }) => code === 'E_LAYOUT_REQUIRED')
+    ) {
+      return noSkillSource(root, from, cleanup, await conventionalLicense(root), diagnostics);
+    }
     await cleanup();
     return { diagnostics: [...diagnostics, ...source.diagnostics], exitCode: source.exitCode };
   }
@@ -299,7 +358,7 @@ export async function materializeComposeSource(
   if (selection.from.startsWith('profile:'))
     return materializeProfile(selection, composeFile, dshHome, dependencies);
   try {
-    const materialized = await (dependencies.materialize ?? materializeSource)(
+    const materialized = await (dependencies.materialize ?? materializeSourceForCompose)(
       normalizeReference(selection.from, composeFile),
     );
     const from =

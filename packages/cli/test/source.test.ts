@@ -411,6 +411,19 @@ describe('materializeSource', () => {
     );
   });
 
+  it('makes a GitHub resolver rate limit actionable to a human', async () => {
+    const failure = await expectSourceError(
+      materialize('github:owner/repo', {
+        download: async () => ({ statusCode: 403 }),
+      }),
+      20,
+      'SOURCE_GITHUB_RESOLVE_RATE_LIMIT',
+    );
+
+    expect(failure.message).toContain('限流');
+    expect(failure.hint).toContain('40 位 SHA');
+  });
+
   it('normalizes a safe protocol-relative redirect without permitting a scheme downgrade', async () => {
     const bytes = archive();
     const seen: string[] = [];

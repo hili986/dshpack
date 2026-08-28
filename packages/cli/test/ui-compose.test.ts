@@ -86,6 +86,124 @@ describe('UI compose preview', () => {
     expect(await snapshot(root)).toBe(before);
   });
 
+  it('reuses preview materialization when composing the same source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
+    roots.push(root);
+    const source = 'github:owner/repo#0123456789abcdef0123456789abcdef01234567';
+    const cached = {
+      cleanup: vi.fn(async () => undefined),
+      from: source,
+      license: 'MIT',
+      material: {
+        manifest: {
+          formatVersion: 0 as const,
+          name: 'notes',
+          version: '1.0.0',
+          description: 'Notes.',
+          author: 'test',
+          license: 'MIT',
+          dsh: { tested: ['0.1.0-rc.6'] },
+          plugins: [],
+          mcp: [],
+          defaults: { permissionPreset: 'workspace-write' as const },
+        },
+        paths: ['skills/notes/SKILL.md'],
+        files: [
+          {
+            path: 'skills/notes/SKILL.md',
+            sha512: 'sha512-test',
+            contentBase64: Buffer.from('# Notes\n').toString('base64'),
+          },
+        ],
+        sourceFiles: [],
+        manifestDigest: 'sha256-test',
+      },
+    };
+    const materialize = vi.fn(async () => cached);
+    const compose = vi.fn(async (input, dependencies) => {
+      expect(dependencies?.materializeSource).toBeTypeOf('function');
+      const reused = await dependencies?.materializeSource(
+        { from: source, skills: ['*'] },
+        input.composeFile,
+        input.dshHome,
+      );
+      expect(reused).toBe(cached);
+      return {
+        diagnostics: [],
+        exitCode: EXIT_CODES.SUCCESS,
+        metadata: { directory: '', dryRun: true, selected: [], sources: [source] },
+      };
+    });
+
+    const preview = await previewCompose(
+      root,
+      {
+        spec: {
+          composeVersion: 0,
+          name: 'cached-preview',
+          version: '1.0.0',
+          description: 'Reuse a verified preview source.',
+          author: 'test',
+          license: 'MIT',
+          include: [{ from: source, skills: ['*'] }],
+          defaults: { permissionPreset: 'workspace-write' },
+        },
+      },
+      { materialize, compose },
+    );
+
+    expect(preview.exitCode).toBe(EXIT_CODES.SUCCESS);
+    expect(materialize).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to a fresh materialization only when compose requests an uncached selection', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
+    roots.push(root);
+    const source = await enginePack({ assets: true });
+    const materialize = vi.fn(async (selection: { readonly from: string }) => {
+      const { materializeComposeSource } = await import('../src/compose/sources.js');
+      return materializeComposeSource(
+        { from: selection.from, skills: ['notes'] },
+        join(root, 'compose.yml'),
+        root,
+      );
+    });
+    const compose = vi.fn(async (input, dependencies) => {
+      const fallback = await dependencies?.materializeSource(
+        { from: source, skills: ['different-selection'] },
+        input.composeFile,
+        input.dshHome,
+      );
+      if ('cleanup' in fallback) await fallback.cleanup();
+      return {
+        diagnostics: [],
+        exitCode: EXIT_CODES.SUCCESS,
+        metadata: { directory: '', dryRun: true, selected: [], sources: [source] },
+      };
+    });
+
+    const preview = await previewCompose(
+      root,
+      {
+        spec: {
+          composeVersion: 0,
+          name: 'uncached-preview',
+          version: '1.0.0',
+          description: 'A custom compose adapter requests a distinct selection.',
+          author: 'test',
+          license: 'MIT',
+          include: [{ from: source, skills: ['notes'] }],
+          defaults: { permissionPreset: 'workspace-write' },
+        },
+      },
+      { materialize: materialize as never, compose: compose as never },
+    );
+
+    expect(preview.exitCode).toBe(EXIT_CODES.SUCCESS);
+    expect(materialize).toHaveBeenCalledOnce();
+    expect(compose).toHaveBeenCalledOnce();
+  });
+
   it('accepts a bare GitHub repository URL in the real preview boundary', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
     roots.push(root);
@@ -199,7 +317,10 @@ describe('UI compose preview', () => {
       exitCode: EXIT_CODES.SUCCESS,
       metadata: { sourceSkills: [] },
     });
-    expect(compose).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+    expect(compose).toHaveBeenCalledWith(
+      expect.objectContaining({ dryRun: true }),
+      expect.objectContaining({ materializeSource: expect.any(Function) }),
+    );
     expect(materialize).toHaveBeenCalledOnce();
   });
 
@@ -385,6 +506,40 @@ describe('UI compose preview', () => {
       metadata: { status: 'installed' },
     });
     expect(noPlan.metadata).not.toHaveProperty('plan');
+  });
+
+  it('rejects an invalid compose-and-install form before it materializes or installs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
+    roots.push(root);
+    const compose = vi.fn();
+    const install = vi.fn();
+
+    const result = await composeAndInstall(
+      root,
+      {
+        profile: 'combined-notes',
+        spec: {
+          composeVersion: 0,
+          name: 'bad-version',
+          version: 'not-semver',
+          description: 'Invalid forms must not reach mutable engines.',
+          author: 'test',
+          license: 'MIT',
+          include: [{ from: './source', skills: ['notes'] }],
+          defaults: { permissionPreset: 'workspace-write' },
+        },
+      },
+      {} as never,
+      'plan',
+      { compose: compose as never, install: install as never },
+    );
+
+    expect(result).toMatchObject({
+      exitCode: EXIT_CODES.CONTRACT,
+      diagnostics: [expect.objectContaining({ code: 'E_UI_COMPOSE_SPEC' })],
+    });
+    expect(compose).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
   });
 
   it('keeps non-conflict compose diagnostics out of the conflict list', async () => {

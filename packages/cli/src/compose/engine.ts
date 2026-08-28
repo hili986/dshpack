@@ -149,6 +149,9 @@ async function writeMaterials(root: string, materials: readonly Material[]): Pro
 }
 
 function licenseDiagnostics(source: ComposeMaterializedSource, declared: string): Diagnostic[] {
+  // An explicitly skipped no-skill source contributes no files or provenance material, so no
+  // license can influence the composed pack or require a confirmation.
+  if (source.material.paths.length === 0) return [];
   if (source.license === undefined || source.license === 'UNLICENSED') {
     return [
       diagnostic(

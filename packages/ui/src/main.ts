@@ -421,6 +421,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let composePreviewRequest = 0;
   let composeResolutions: readonly ComposeResolutionForm[] = [];
   let composeValidation: MessageKey | undefined;
+  let composeValidationFeedback: readonly HTMLParagraphElement[] = [];
   let composeInstallButton: HTMLButtonElement | undefined;
   let editorProfile = '';
   let editorSkills: readonly EditorSkill[] = [];
@@ -547,8 +548,16 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       currentIndex === index ? source : current,
     );
     composeResolutions = [];
-    composeValidation = undefined;
+    clearComposeValidation();
     invalidateComposePreview();
+  }
+
+  function clearComposeValidation(): void {
+    composeValidation = undefined;
+    for (const feedback of composeValidationFeedback) {
+      feedback.className = 'compose-feedback';
+      feedback.textContent = '';
+    }
   }
 
   function invalidateComposePreview(): void {
@@ -569,6 +578,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
 
   function renderComposeScreen(): void {
     activeMount.textContent = '';
+    composeValidationFeedback = [];
     const panel = document.createElement('section');
     const heading = document.createElement('h2');
     const profileLabel = document.createElement('label');
@@ -584,6 +594,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       const feedback = document.createElement('p');
       feedback.className = 'compose-feedback compose-feedback-error';
       feedback.textContent = message(state.locale, key);
+      composeValidationFeedback = [...composeValidationFeedback, feedback];
       return feedback;
     };
 
@@ -596,7 +607,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       const current = event.currentTarget;
       if (current instanceof HTMLInputElement) {
         composeProfile = current.value.trim();
-        composeValidation = undefined;
+        clearComposeValidation();
         invalidateComposePreview();
       }
     });
@@ -628,6 +639,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       remove.addEventListener('click', () => {
         composeSources = composeSources.filter((_, currentIndex) => currentIndex !== index);
         composeResolutions = [];
+        clearComposeValidation();
         invalidateComposePreview();
         renderComposeScreen();
       });
@@ -668,6 +680,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     addSource.addEventListener('click', () => {
       composeSources = [...composeSources, { from: '', skills: [] }];
       composeResolutions = [];
+      clearComposeValidation();
       invalidateComposePreview();
       renderComposeScreen();
     });

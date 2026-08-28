@@ -6,7 +6,7 @@ import { join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Diagnostic } from '@dshpack/core';
 import { EXIT_CODES } from '../exit-codes.js';
-import { inspectAndExtractArchive } from './source-archive.js';
+import { type ArchivePreflightOptions, inspectAndExtractArchive } from './source-archive.js';
 import {
   type DownloadResponse,
   defaultDownload,
@@ -256,6 +256,13 @@ function bareGitHubRepository(reference: string): GitHubRepository | undefined {
 }
 
 function githubResolveFailure(code: string, stage: string): SourceError {
+  if (code === 'SOURCE_GITHUB_RESOLVE_RATE_LIMIT') {
+    return sourceFailure(
+      code,
+      `GitHub source 解析在${stage}遇到 API 限流。`,
+      '稍后重试，或使用 github:owner/repo#<40 位 SHA> 跳过 GitHub API 的 HEAD 解析。',
+    );
+  }
   return sourceFailure(code, `GitHub source 解析在${stage}失败。`, GITHUB_HINT);
 }
 
@@ -485,6 +492,7 @@ async function materializeArchive(
   },
   provenance: SourceProvenance,
   dependencies: SourceDependencies,
+  archiveOptions?: ArchivePreflightOptions,
 ): Promise<MaterializedSource> {
   const makeTempDirectory = dependencies.makeTempDirectory ?? defaultMakeTempDirectory;
   const removeDirectory = dependencies.removeTempDirectory ?? defaultRemoveTempDirectory;
@@ -509,6 +517,7 @@ async function materializeArchive(
       workspace,
       archiveFailure,
       source.githubCommit === undefined ? undefined : { commit: source.githubCommit },
+      archiveOptions,
     );
     return {
       directory: extracted.directory,
@@ -523,9 +532,10 @@ async function materializeArchive(
   }
 }
 
-export async function materializeSource(
+async function materializeSourceWithArchiveOptions(
   reference: string,
-  dependencies: SourceDependencies = {},
+  dependencies: SourceDependencies,
+  archiveOptions?: ArchivePreflightOptions,
 ): Promise<MaterializedSource> {
   if (reference === '') throw sourceFailure('SOURCE_INVALID', 'source 引用不能为空。');
   const bareGitHub = bareGitHubRepository(reference);
@@ -545,6 +555,7 @@ export async function materializeSource(
       { url: parsed.requestUrl, hint: GITHUB_HINT, githubCommit: parsed.commit },
       provenance,
       dependencies,
+      archiveOptions,
     );
   }
   if (reference.startsWith('file:')) {
@@ -561,6 +572,7 @@ export async function materializeSource(
       { localPath: parsed.path, integrity: parsed.integrity },
       { kind: 'file', path: parsed.path, integrity: parsed.integrity },
       dependencies,
+      archiveOptions,
     );
   }
   const remoteProbe = [...reference]
@@ -572,6 +584,7 @@ export async function materializeSource(
       { url: parsed.requestUrl, integrity: parsed.integrity },
       { kind: 'https', url: parsed.requestUrl.href, integrity: parsed.integrity },
       dependencies,
+      archiveOptions,
     );
   }
   const path = resolve(reference);
@@ -589,7 +602,29 @@ export async function materializeSource(
     };
   }
   if (metadata.isFile() && path.endsWith('.dshpack.tgz')) {
-    return materializeArchive({ localPath: path }, { kind: 'archive', path }, dependencies);
+    return materializeArchive(
+      { localPath: path },
+      { kind: 'archive', path },
+      dependencies,
+      archiveOptions,
+    );
   }
   throw sourceFailure('SOURCE_INVALID', '本地 source 必须是普通目录或 .dshpack.tgz 文件。');
+}
+
+export async function materializeSource(
+  reference: string,
+  dependencies: SourceDependencies = {},
+): Promise<MaterializedSource> {
+  return materializeSourceWithArchiveOptions(reference, dependencies);
+}
+
+/** Compose alone may project a conventional skill repository before archive extraction. */
+export async function materializeSourceForCompose(
+  reference: string,
+  dependencies: SourceDependencies = {},
+): Promise<MaterializedSource> {
+  return materializeSourceWithArchiveOptions(reference, dependencies, {
+    selectiveComposeSkills: true,
+  });
 }

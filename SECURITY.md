@@ -47,9 +47,12 @@
 - 权限**绝不**因 pack 内容或任务文本而自动升级。
 - **`compose` 不放宽任何一条来源纪律**：它的 `github:` / `tarball:` 来源走的是 `install` 的同一套获取链，40 位 SHA 与 SRI 一样强制，在 schema 层就拒绝短 SHA、分支名、大写 SHA 与明文 http。来源失败会保留 adapter 自己的分类（篡改的 tarball 是 exit 20，不是通用契约码）——**自动化据退出码决定要不要重试时，这个区别是有意义的**；凭据命中仍压过一切，安全不会被降级为契约噪音。
 - **归档条目按类型处置而非盲目跟随。** symbolic link、hard link、设备和 FIFO 等非普通条目从不部署、从不跟随，并以带条目路径的 warning diagnostic 告知用户跳过了什么；`..`、绝对路径、解析损坏的 header 等仍按整档 `ARCHIVE_UNSAFE` 拒绝。
+- **compose 的非 pack 归档会选择性部署。** 对不含根 `pack.yml` 的来源，compose 仅部署安全 `.agents/skills/<id>/SKILL.md`；没有可组合 skill 时也只给出如实 warning、不会阻断其他来源。每个归档路径仍先做完整安全校验，非 skill 的普通条目不部署、不扫描，并以一条 `E_ARCHIVE_SELECTIVE_SKIPPED` warning 明示跳过的条目数与字节数；单文件、总量和条目数限制只计算部署集合。`install` 不使用这一模式，仍对完整 pack 归档执行全部条目、单文件与总量限制。
 - **`compose` 不修改素材内容，也不改写别人的许可声明**。来源 license 不明时需要显式 `--allow-unknown-license`（`compose` 没有 `--yes`，这是一道硬门）；与新 pack 声明冲突时如实列出并原样写进 `provenance`。同名冲突必须在 `resolve` 里显式解决，否则 exit 30 并列出**全部**冲突——静默地"后来的覆盖先来的"会让 pack 内容取决于 `include` 的书写顺序，而作者不会注意到。`rename` 本身也不能制造新冲突。
 - 本工具只终止自己派生的进程；不做进程树终止（Windows 上那等同 `taskkill /T`，会误杀用户正在运行的 dsh）。
 - **DSH_HOME 及其每一级祖先都不得是 symlink / junction / reparse point**，否则拒绝——链接可在校验与写入之间被换掉，使"路径在根内"的判断失效。判据是**逐级 `lstat`**，不是把路径字符串和 `realpath` 比：Windows 上 8.3 短名（`C:\Users\RUNNER~1\…`）和不同大小写拼法指向的是同一个目录、中间一个链接也没有，字符串却不相等。无法探查的祖先按"有链接"处理（fail closed）。
+
+- **归档原始 header 预检最多解压 256 MiB。** 这是 gzip 展开前的有界 DoS 防线；超过上限会以 `E_ARCHIVE_PREFLIGHT_CAP` 明示已解压字节数与上限，真实 header 损坏仍以 `ARCHIVE_UNSAFE` 拒绝。
 
 ## 凭据处理
 

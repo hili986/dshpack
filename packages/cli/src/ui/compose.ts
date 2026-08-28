@@ -109,6 +109,13 @@ function visibleSelections(
   }));
 }
 
+function sourceKey(selection: {
+  readonly from: string;
+  readonly skills: readonly string[];
+}): string {
+  return JSON.stringify([selection.from, selection.skills]);
+}
+
 function isPinnedGitHubSource(value: string | undefined): value is string {
   return (
     value !== undefined &&
@@ -189,41 +196,68 @@ export async function previewCompose(
         materialize(selection, prepared.composeFile, dshHome),
       ),
     );
+    const cachedBySelection = new Map<string, typeof sources>();
+    for (const [index, source] of sources.entries()) {
+      const selection = prepared.manifest.include[index];
+      if (selection === undefined) continue;
+      const key = sourceKey(selection);
+      const cached = cachedBySelection.get(key) ?? [];
+      cached.push(source);
+      cachedBySelection.set(key, cached);
+    }
+    const handedToCompose = new Set<(typeof sources)[number]>();
     try {
       for (const [index, source] of sources.entries()) {
         if (!isComposeMaterializedSource(source)) continue;
         const selection = prepared.manifest.include[index];
         if (selection !== undefined)
           available.push({
-            from: selection.from,
+            from: input.spec.include[index]?.from ?? selection.from,
             skills: sourceSkills(source, selection).available,
           });
       }
+      const composed = await (dependencies.compose ?? composePack)(
+        {
+          allowUnknownLicense: true,
+          composeFile: prepared.composeFile,
+          dshHome,
+          dryRun: true,
+        },
+        {
+          materializeSource: async (selection, composeFile, composeDshHome) => {
+            const cached = cachedBySelection.get(sourceKey(selection))?.shift();
+            if (cached !== undefined) {
+              handedToCompose.add(cached);
+              return cached;
+            }
+            return materializeComposeSource(selection, composeFile, composeDshHome);
+          },
+        },
+      );
+      const selected = visibleSelections(prepared.manifest, input.spec, composed.metadata.selected);
+      const provenance = selected.map((item) => ({
+        from: item.from,
+        id: item.id,
+        originalId: item.originalId,
+      }));
+      return result(composed.diagnostics, composed.exitCode, {
+        phase: 'preview',
+        sourceSkills: available,
+        selected,
+        provenance,
+        conflicts: composed.diagnostics.filter((item) =>
+          item.code.startsWith('E_COMPOSE_CONFLICT'),
+        ),
+      });
     } finally {
       await Promise.all(
         sources.flatMap((source) =>
-          isComposeMaterializedSource(source) ? [source.cleanup()] : [],
+          isComposeMaterializedSource(source) && !handedToCompose.has(source)
+            ? [source.cleanup()]
+            : [],
         ),
       );
     }
-    const composed = await (dependencies.compose ?? composePack)({
-      composeFile: prepared.composeFile,
-      dshHome,
-      dryRun: true,
-    });
-    const selected = visibleSelections(prepared.manifest, input.spec, composed.metadata.selected);
-    const provenance = selected.map((item) => ({
-      from: item.from,
-      id: item.id,
-      originalId: item.originalId,
-    }));
-    return result(composed.diagnostics, composed.exitCode, {
-      phase: 'preview',
-      sourceSkills: available,
-      selected,
-      provenance,
-      conflicts: composed.diagnostics.filter((item) => item.code.startsWith('E_COMPOSE_CONFLICT')),
-    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

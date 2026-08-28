@@ -221,6 +221,71 @@ describe('browser main shell behavior', () => {
     expect(root.children[0]?.textContent).not.toContain(skipped);
   });
 
+  it('clears corrected compose profile and source validation feedback immediately in both locales', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    fakes.window.location.hash = '#compose';
+
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+
+    profile.value = 'Invalid Profile';
+    profile.fire('input');
+    elementWithText(root, '\u9884\u89c8\u7ec4\u5408')?.fire('click');
+    const chineseProfileError =
+      'Profile \u540d\u79f0\u4f1a\u6210\u4e3a\u76ee\u5f55\u540d\uff0c\u9700\u4f7f\u7528\u5c0f\u5199\u5b57\u6bcd\u3001\u6570\u5b57\u6216\u8fde\u5b57\u7b26\u3002';
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { className?: string }).className ===
+            'compose-feedback compose-feedback-error' &&
+          element.textContent === chineseProfileError &&
+          !element.hidden,
+      ),
+    ).toBe(true);
+
+    profile.value = 'valid-profile';
+    profile.fire('input');
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { className?: string }).className ===
+            'compose-feedback compose-feedback-error' &&
+          element.textContent === chineseProfileError &&
+          !element.hidden,
+      ),
+    ).toBe(false);
+
+    elementWithText(root, 'EN')?.fire('click');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    const englishSourceError = 'Enter at least one source.';
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { className?: string }).className ===
+            'compose-feedback compose-feedback-error' &&
+          element.textContent === englishSourceError &&
+          !element.hidden,
+      ),
+    ).toBe(true);
+
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { className?: string }).className ===
+            'compose-feedback compose-feedback-error' &&
+          element.textContent === englishSourceError &&
+          !element.hidden,
+      ),
+    ).toBe(false);
+  });
+
   it('renders only structurally valid compose diagnostics with their declared severity', async () => {
     const fakes = installBrowserFakes([
       { status: 200, body: statusBody },
