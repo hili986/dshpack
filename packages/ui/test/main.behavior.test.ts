@@ -1770,6 +1770,23 @@ describe('browser main shell behavior', () => {
         sources: readonly { readonly from: string; readonly skills: readonly string[] }[],
         catalog: readonly { readonly from: string; readonly skills: readonly string[] }[],
       ) => readonly string[];
+      readonly previewSkillCatalog?: (
+        response: unknown,
+        sources: readonly { readonly from: string; readonly skills: readonly string[] }[],
+      ) => readonly { readonly from: string; readonly skills: readonly string[] }[];
+      readonly validComposeResolutions?: (
+        resolutions: readonly {
+          readonly id: string;
+          readonly mode: 'prefer' | 'rename';
+          readonly prefer?: string;
+        }[],
+        sources: readonly { readonly from: string; readonly skills: readonly string[] }[],
+        catalog: readonly { readonly from: string; readonly skills: readonly string[] }[],
+      ) => readonly {
+        readonly id: string;
+        readonly mode: 'prefer' | 'rename';
+        readonly prefer?: string;
+      }[];
     };
     const compose = browserMain as unknown as ComposeExports;
     const preview = {
@@ -1854,6 +1871,245 @@ describe('browser main shell behavior', () => {
         acknowledgement: false,
       }),
     ).toEqual(['unresolvedConflicts', 'unknownLicenseNotAcknowledged']);
+  });
+
+  it('fails closed for incomplete or empty-source preview catalogs', () => {
+    type ComposeExports = {
+      readonly previewSkillCatalog?: (
+        response: unknown,
+        sources: readonly { readonly from: string; readonly skills: readonly string[] }[],
+      ) => readonly { readonly from: string; readonly skills: readonly string[] }[];
+    };
+    const compose = browserMain as unknown as ComposeExports;
+    const first = 'github:owner/first';
+    const second = 'github:owner/second';
+    const preview = (sourceSkills: unknown) => ({
+      diagnostics: [],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills },
+    });
+
+    expect(compose.previewSkillCatalog).toBeTypeOf('function');
+    expect(
+      compose.previewSkillCatalog?.(preview(undefined), [{ from: first, skills: [] }]),
+    ).toEqual([]);
+    expect(
+      compose.previewSkillCatalog?.(preview([{ from: first, skills: [3] }]), [
+        { from: first, skills: [] },
+      ]),
+    ).toEqual([]);
+    expect(
+      compose.previewSkillCatalog?.(preview([{ from: first, skills: ['notes'] }]), [
+        { from: first, skills: [] },
+        { from: second, skills: [] },
+      ]),
+    ).toEqual([]);
+    expect(
+      compose.previewSkillCatalog?.(
+        preview([
+          { from: first, skills: ['notes'] },
+          { from: '', skills: ['outline'] },
+        ]),
+        [
+          { from: first, skills: [] },
+          { from: '', skills: [] },
+        ],
+      ),
+    ).toEqual([]);
+    expect(
+      compose.previewSkillCatalog?.(
+        preview([
+          { from: first, skills: ['notes'] },
+          { from: 'github:owner/unexpected', skills: ['outline'] },
+        ]),
+        [
+          { from: first, skills: [] },
+          { from: second, skills: [] },
+        ],
+      ),
+    ).toEqual([]);
+  });
+
+  it('falls back to the first selected conflict participant for an invalid preference', () => {
+    type ComposeExports = {
+      readonly validComposeResolutions?: (
+        resolutions: readonly {
+          readonly id: string;
+          readonly mode: 'prefer' | 'rename';
+          readonly prefer?: string;
+        }[],
+        sources: readonly { readonly from: string; readonly skills: readonly string[] }[],
+        catalog: readonly { readonly from: string; readonly skills: readonly string[] }[],
+      ) => readonly {
+        readonly id: string;
+        readonly mode: 'prefer' | 'rename';
+        readonly prefer?: string;
+      }[];
+    };
+    const compose = browserMain as unknown as ComposeExports;
+    const first = 'github:owner/first';
+    const second = 'github:owner/second';
+    const sources = [
+      { from: first, skills: ['notes'] },
+      { from: second, skills: ['notes'] },
+    ];
+
+    expect(compose.validComposeResolutions).toBeTypeOf('function');
+    expect(
+      compose.validComposeResolutions?.(
+        [
+          { id: 'obsolete', mode: 'rename' },
+          { id: 'notes', mode: 'prefer' },
+          { id: 'notes', mode: 'prefer', prefer: 'github:owner/not-a-participant' },
+        ],
+        sources,
+        sources,
+      ),
+    ).toEqual([
+      { id: 'notes', mode: 'prefer', prefer: first },
+      { id: 'notes', mode: 'prefer', prefer: first },
+    ]);
+  });
+
+  it('keeps compose install disabled after a non-successful preview response', () => {
+    type ComposeExports = {
+      readonly composeInstallDisabledReasons?: (state: {
+        readonly preview: unknown;
+        readonly hasSuccessfulPreview: boolean;
+        readonly previewStale: boolean;
+        readonly previewPending: boolean;
+        readonly resolutions: readonly { readonly id: string }[];
+        readonly acknowledgement: boolean;
+      }) => readonly string[];
+    };
+    const compose = browserMain as unknown as ComposeExports;
+
+    expect(
+      compose.composeInstallDisabledReasons?.({
+        preview: { diagnostics: [], exitCode: 1, metadata: { phase: 'preview' } },
+        hasSuccessfulPreview: true,
+        previewStale: false,
+        previewPending: false,
+        resolutions: [],
+        acknowledgement: true,
+      }),
+    ).toEqual(['notPreviewed']);
+    expect(
+      compose.composeInstallDisabledReasons?.({
+        preview: { diagnostics: [], exitCode: 0, metadata: { phase: 'preview' } },
+        hasSuccessfulPreview: true,
+        previewStale: false,
+        previewPending: false,
+        resolutions: [],
+        acknowledgement: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('defers an add-source rerender until profile IME composition ends', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+
+    const profile = composeTextInputs(root)[1];
+    if (profile === undefined) throw new Error('expected compose profile input');
+    profile.fire('compositionstart');
+    fireComposeTextEvent(profile, 'input', true);
+    elementWithText(root, 'Add source')?.fire('click');
+    expect(
+      descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className === 'compose-source',
+      ),
+    ).toHaveLength(1);
+
+    fireComposeTextEvent(profile, 'compositionend');
+    expect(
+      descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className === 'compose-source',
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('defers an add-source rerender until source IME composition ends', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+
+    const source = composeTextInputs(root)[2];
+    if (source === undefined) throw new Error('expected compose source input');
+    source.fire('compositionstart');
+    fireComposeTextEvent(source, 'input', true);
+    elementWithText(root, 'Add source')?.fire('click');
+    expect(
+      descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className === 'compose-source',
+      ),
+    ).toHaveLength(1);
+
+    fireComposeTextEvent(source, 'compositionend');
+    expect(
+      descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className === 'compose-source',
+      ),
+    ).toHaveLength(2);
+  });
+
+  it('ignores a source compositionend that does not match an active profile composition', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+
+    const profile = composeTextInputs(root)[1];
+    const source = composeTextInputs(root)[2];
+    if (profile === undefined || source === undefined)
+      throw new Error('expected compose profile and source inputs');
+    profile.value = 'ime-profile-draft';
+    fireComposeTextEvent(profile, 'input', true);
+    fireComposeTextEvent(source, 'compositionend');
+
+    expect(composeTextInputs(root)[1]).toBe(profile);
+    fireComposeTextEvent(profile, 'compositionend');
+    expect(composeTextInputs(root)[1]?.value).toBe('ime-profile-draft');
+  });
+
+  it('drops a composing source that is removed before its compositionend', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    const removedSource = composeTextInputs(root)[3];
+    if (removedSource === undefined) throw new Error('expected second compose source input');
+    removedSource.value = 'github:owner/removed';
+    fireComposeTextEvent(removedSource, 'input', true);
+    const remove = descendants(root)
+      .filter((element) => element.textContent === 'Remove source')
+      .at(-1);
+    if (remove === undefined) throw new Error('expected remove-source button');
+    remove.fire('click');
+    fireComposeTextEvent(removedSource, 'compositionend');
+
+    expect(
+      descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className === 'compose-source',
+      ),
+    ).toHaveLength(1);
   });
 
   it('immediately marks a successful compose preview stale after a source change', async () => {

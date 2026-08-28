@@ -126,7 +126,7 @@ function previewMetadata(response: UiResponse | undefined): Record<string, unkno
   return response !== undefined && record(response.metadata) ? response.metadata : {};
 }
 
-function previewSkillCatalog(
+export function previewSkillCatalog(
   response: UiResponse | undefined,
   sources: readonly ComposeSourceForm[],
 ): readonly ComposeSourceSkillCatalogEntry[] {
@@ -211,7 +211,7 @@ function clientConflictParticipantSources(
   return [...participants];
 }
 
-function validComposeResolutions(
+export function validComposeResolutions(
   resolutions: readonly ComposeResolutionForm[],
   sources: readonly ComposeSourceForm[],
   catalog: readonly ComposeSourceSkillCatalogEntry[],

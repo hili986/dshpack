@@ -281,6 +281,39 @@ describe('composePack', () => {
     await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('allows an unknown license in dry run but refuses the same source during write phase', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const sourceMaterial = material('citation', './local-pack', 'UNLICENSED');
+
+    const preview = await composePack(
+      { composeFile: source, output, dryRun: true },
+      dependencies({ './local-pack': sourceMaterial }),
+    );
+    expect(preview).toMatchObject({
+      exitCode: EXIT_CODES.SUCCESS,
+      diagnostics: [expect.objectContaining({ code: 'W_COMPOSE_UNKNOWN_LICENSE' })],
+      metadata: { dryRun: true, sources: ['./local-pack'] },
+    });
+
+    const rejected = await composePack(
+      { composeFile: source, output },
+      dependencies({ './local-pack': sourceMaterial }),
+    );
+    expect(rejected).toMatchObject({
+      exitCode: EXIT_CODES.USER_DECLINED,
+      metadata: { dryRun: false, sources: [] },
+    });
+    expect(rejected.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'W_COMPOSE_UNKNOWN_LICENSE' }),
+        expect.objectContaining({ code: 'E_COMPOSE_UNKNOWN_LICENSE_CONFIRM' }),
+      ]),
+    );
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('writes unknown-license provenance after the dangerous acknowledgement', async () => {
     const root = await temporary();
     const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
@@ -486,6 +519,30 @@ describe('composePack', () => {
 
     expect(report.exitCode).not.toBe(EXIT_CODES.SUCCESS);
     // The pre-existing directory must be left exactly as it was, not merged into or replaced.
+    expect(await readdir(output)).toEqual([]);
+  });
+
+  it('reports an existing target as a non-dry-run write-phase contract refusal', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    await mkdir(output, { recursive: true });
+
+    const report = await composePack(
+      { composeFile: source, output },
+      dependencies({ './local-pack': material('citation', './local-pack') }),
+    );
+
+    expect(report).toMatchObject({
+      exitCode: EXIT_CODES.CONTRACT,
+      diagnostics: [expect.objectContaining({ code: 'E_COMPOSE_OUTPUT' })],
+      metadata: {
+        directory: output,
+        dryRun: false,
+        selected: [{ from: './local-pack', id: 'citation', originalId: 'citation' }],
+        sources: [],
+      },
+    });
     expect(await readdir(output)).toEqual([]);
   });
 
