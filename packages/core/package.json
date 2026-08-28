@@ -1,6 +1,6 @@
 {
   "name": "@dshpack/core",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": false,
   "description": "Side-effect-free core contracts and operations for dshpack.",
   "license": "MIT",
