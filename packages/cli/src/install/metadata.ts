@@ -52,9 +52,7 @@ export function installedMetadata(
       manifestDigest: plan.manifestDigest,
     },
     // Only persisted when non-empty so pre-provenance markers stay byte-compatible.
-    ...(material.manifest.provenance?.length
-      ? { provenance: material.manifest.provenance }
-      : {}),
+    ...(material.manifest.provenance?.length ? { provenance: material.manifest.provenance } : {}),
     planDigest: plan.planDigest,
     installedAt,
     txid,
