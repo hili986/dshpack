@@ -7,6 +7,10 @@ import {
   acceptableGitHubPax,
   inspectAndExtractArchive,
   MAX_RAW_HEADER_BYTES,
+  metadataHeadersSynchronized,
+  metadataHeaderTypes,
+  metadataHeaderTypesFromChunks,
+  rawHeaderSafetyFromChunks,
   rawHeadersSafe,
 } from '../src/adapters/source-archive.js';
 
@@ -43,7 +47,13 @@ function rawArchive(): Buffer {
   return Buffer.concat([header, Buffer.from('x'), Buffer.alloc(511), Buffer.alloc(1024)]);
 }
 
-function tarEntry(input: { name: string; type?: string; data?: Uint8Array | string }): Buffer {
+function tarEntry(input: {
+  name: string;
+  type?: string;
+  data?: Uint8Array | string;
+  linkname?: string;
+  oldFormat?: boolean;
+}): Buffer {
   const data = Buffer.from(input.data ?? '');
   const header = Buffer.alloc(512);
   header.write(input.name, 0, 100, 'utf8');
@@ -53,15 +63,18 @@ function tarEntry(input: { name: string; type?: string; data?: Uint8Array | stri
   header.write(octal(data.byteLength, 12), 124, 12, 'ascii');
   header.write(octal(0, 12), 136, 12, 'ascii');
   header.fill(0x20, 148, 156);
-  header.write(input.type ?? '0', 156, 1, 'ascii');
-  header.write('ustar\0', 257, 6, 'ascii');
-  header.write('00', 263, 2, 'ascii');
+  header.write(input.type ?? (input.oldFormat ? '\0' : '0'), 156, 1, 'ascii');
+  if (input.linkname !== undefined) header.write(input.linkname, 157, 100, 'utf8');
+  if (!input.oldFormat) {
+    header.write('ustar\0', 257, 6, 'ascii');
+    header.write('00', 263, 2, 'ascii');
+  }
   const checksum = header.reduce((sum, byte) => sum + byte, 0);
   header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
   return Buffer.concat([header, data, Buffer.alloc((512 - (data.byteLength % 512)) % 512)]);
 }
 
-function archive(entries: Array<Parameters<typeof tarEntry>[0]>): Buffer {
+function archive(entries: ReadonlyArray<Parameters<typeof tarEntry>[0]>): Buffer {
   return gzipSync(Buffer.concat([...entries.map(tarEntry), Buffer.alloc(1024)]));
 }
 
@@ -127,6 +140,198 @@ function archiveFailure(code: string, message: string): Error & { code: string }
 }
 
 describe('source archive raw-header preflight', () => {
+  it('keeps raw and metadata scanners FIFO-aligned across split header tails', async () => {
+    const raw = rawArchive();
+    const chunks = [raw.subarray(0, 300), raw.subarray(300, 400), raw.subarray(400)];
+
+    await expect(rawHeaderSafetyFromChunks(chunks)).resolves.toEqual({ safe: true });
+    await expect(metadataHeaderTypesFromChunks(chunks)).resolves.toEqual({ safe: true, types: [] });
+  });
+
+  it('classifies every metadata header kind and rejects a split malformed header in both scanners', async () => {
+    const types = ['g', 'x', 'X', 'K', 'L', 'N'] as const;
+    const typed = Buffer.concat([
+      ...types.map((type) => tarEntry({ name: `metadata-${type}`, type, data: 'meta' })),
+      Buffer.alloc(1024),
+    ]);
+    const malformed = rawArchive();
+    malformed[9] = 0;
+    malformed[10] = 'x'.charCodeAt(0);
+
+    await expect(
+      metadataHeaderTypesFromChunks([typed.subarray(0, 300), typed.subarray(300)]),
+    ).resolves.toEqual({
+      safe: true,
+      types,
+    });
+    await expect(
+      rawHeaderSafetyFromChunks([malformed.subarray(0, 300), malformed.subarray(300)]),
+    ).resolves.toEqual({
+      safe: false,
+      reason: 'unsafe',
+    });
+    await expect(
+      metadataHeaderTypesFromChunks([malformed.subarray(0, 300), malformed.subarray(300)]),
+    ).resolves.toEqual({
+      safe: false,
+      reason: 'unsafe',
+    });
+    await expect(metadataHeaderTypesFromChunks([malformed])).resolves.toEqual({
+      safe: false,
+      reason: 'unsafe',
+    });
+  });
+
+  it.each([
+    ['a Windows-style path', [{ name: 'C:\\unsafe.txt', data: 'x' }]],
+    ['a traversal path segment', [{ name: 'safe/../unsafe.txt', data: 'x' }]],
+    [
+      'two GitHub roots',
+      [
+        { name: 'repo-one/', type: '5' },
+        { name: 'repo-two/', type: '5' },
+      ],
+    ],
+    ['a GitHub root file', [{ name: 'repo-file', data: 'x' }]],
+  ] as const)('rejects %s during structure inspection', async (_label, entries) => {
+    const root = await temporaryRoot();
+    const source = join(root, 'unsafe-structure.tgz');
+    await writeFile(source, archive(entries));
+
+    await expect(
+      inspectAndExtractArchive(source, root, archiveFailure, {
+        commit: '0123456789abcdef0123456789abcdef01234567',
+      }),
+    ).rejects.toMatchObject({ code: 'ARCHIVE_UNSAFE' });
+  });
+
+  it('skips non-deployable entries and preserves OldFile bytes', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'old-file-and-link.tgz');
+    await writeFile(
+      source,
+      archive([
+        { name: 'link', type: '2', linkname: 'target' },
+        { name: 'old.txt', oldFormat: true, data: 'old-format' },
+      ]),
+    );
+
+    const extracted = await inspectAndExtractArchive(source, root, archiveFailure);
+
+    expect(extracted.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'E_ARCHIVE_ENTRY_SKIPPED' }),
+    );
+    await expect(lstat(join(extracted.directory, 'old.txt'))).resolves.toMatchObject({
+      isFile: expect.any(Function),
+    });
+  });
+
+  it('keeps a conventional archive whole when its selected projection is a pack', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'selective-pack.tgz');
+    await writeFile(
+      source,
+      archive([
+        { name: 'pack.yml', data: 'formatVersion: 0\n' },
+        { name: 'README.md', data: 'kept because this is a pack' },
+      ]),
+    );
+
+    const extracted = await inspectAndExtractArchive(source, root, archiveFailure, undefined, {
+      selectiveComposeSkills: true,
+    });
+
+    await expect(lstat(join(extracted.directory, 'README.md'))).resolves.toMatchObject({
+      isFile: expect.any(Function),
+    });
+  });
+
+  it('fails closed when tar strict mode rejects a checksum raw scanning cannot assess', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'bad-checksum.tgz');
+    const checksumCorrupt = rawArchive();
+    checksumCorrupt.write('000000\0 ', 148, 8, 'ascii');
+    await writeFile(source, gzipSync(checksumCorrupt));
+
+    await expect(inspectAndExtractArchive(source, root, archiveFailure)).rejects.toMatchObject({
+      code: 'ARCHIVE_UNSAFE',
+    });
+  });
+
+  it('keeps GNU L/K and PAX X metadata in raw FIFO order before refusing their pending headers', async () => {
+    const root = await temporaryRoot();
+    const source = join(root, 'gnu-and-pax-x.tgz');
+    await writeFile(
+      source,
+      archive([
+        { name: 'gnu-longname', type: 'L', data: 'safe.txt\0' },
+        { name: 'gnu-longlink', type: 'K', data: 'target.txt\0' },
+        { name: 'pax-x', type: 'X', data: paxRecord('path', 'safe.txt') },
+        { name: 'safe.txt', data: 'x' },
+      ]),
+    );
+
+    await expect(metadataHeaderTypes(source)).resolves.toEqual({
+      safe: true,
+      types: ['L', 'K', 'X'],
+    });
+    await expect(inspectAndExtractArchive(source, root, archiveFailure)).rejects.toMatchObject({
+      code: 'ARCHIVE_UNSAFE',
+    });
+  });
+
+  it('rejects each unconsumed terminal metadata-header counter', async () => {
+    const root = await temporaryRoot();
+    const cases = [
+      {
+        name: 'global',
+        entry: paxHeader('g', { comment: '0123456789abcdef0123456789abcdef01234567' }),
+      },
+      { name: 'gnu', entry: tarEntry({ name: 'gnu-longname', type: 'L', data: 'safe.txt\0' }) },
+    ];
+
+    for (const { name, entry } of cases) {
+      const source = join(root, `${name}-pending.tgz`);
+      await writeFile(
+        source,
+        gzipSync(
+          Buffer.concat([entry, tarEntry({ name: 'safe.txt', data: 'x' }), Buffer.alloc(1024)]),
+        ),
+      );
+      await expect(inspectAndExtractArchive(source, root, archiveFailure)).rejects.toMatchObject({
+        code: 'ARCHIVE_UNSAFE',
+      });
+    }
+  });
+
+  it('fails closed for every raw/parser metadata FIFO count inequality', () => {
+    expect(metadataHeadersSynchronized(3, 3, 3, 0, 0, 0)).toBe(true);
+    expect(metadataHeadersSynchronized(2, 3, 2, 0, 0, 0)).toBe(false);
+    expect(metadataHeadersSynchronized(3, 3, 2, 0, 0, 0)).toBe(false);
+    expect(metadataHeadersSynchronized(3, 3, 3, 1, 0, 0)).toBe(false);
+    expect(metadataHeadersSynchronized(3, 3, 3, 0, 1, 0)).toBe(false);
+    expect(metadataHeadersSynchronized(3, 3, 3, 0, 0, 1)).toBe(false);
+  });
+
+  it('exposes metadata scanner cap and incomplete-tail failures independently of raw preflight', async () => {
+    const root = await temporaryRoot();
+    const capped = join(root, 'metadata-cap.tgz');
+    const incomplete = join(root, 'metadata-incomplete-tail.tgz');
+    await writeFile(capped, archive([{ name: 'safe.txt', data: 'x' }]));
+    await writeFile(incomplete, gzipSync(Buffer.alloc(1025)));
+
+    await expect(metadataHeaderTypes(capped, 512)).resolves.toMatchObject({
+      safe: false,
+      reason: 'cap',
+      maxExpandedBytes: 512,
+    });
+    await expect(rawHeadersSafe(incomplete)).resolves.toEqual({ safe: false, reason: 'unsafe' });
+    await expect(metadataHeaderTypes(incomplete)).resolves.toEqual({
+      safe: false,
+      reason: 'unsafe',
+    });
+  });
+
   it('reports a decompression cap with its own code and the observed byte count', async () => {
     const root = await temporaryRoot();
     const archive = join(root, 'oversized.dshpack.tgz');

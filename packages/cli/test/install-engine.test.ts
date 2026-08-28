@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SourceError } from '../src/adapters/source.js';
 import { installPack } from '../src/install/engine.js';
 import { inspectMetadata } from '../src/list/contracts.js';
+import { listProfiles } from '../src/list/engine.js';
 import { enginePack, fakeRuntime, snapshot } from './install-engine-fixture.js';
 
 const roots: string[] = [];
@@ -19,6 +20,43 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 describe('install ten-stage engine', () => {
+  it('persists composed provenance in a v1 marker and projects the same public records', async () => {
+    const dshHome = await home();
+    const provenance = [
+      {
+        id: 'fixture-notes',
+        from: 'github:example/fixture-skills#0123456789abcdef0123456789abcdef01234567',
+        originalId: 'notes',
+        license: 'MIT',
+      },
+    ];
+    const installed = await installPack(
+      {
+        source: await enginePack({ provenance }),
+        dshHome,
+        frozen: true,
+        yes: true,
+        interactive: false,
+      },
+      fakeRuntime().runtime,
+    );
+
+    expect(installed.exitCode).toBe(0);
+    const marker = JSON.parse(
+      await readFile(join(dshHome, '.dshpack', 'installed', 'engine-pack.json'), 'utf8'),
+    ) as unknown;
+    expect(marker).toMatchObject({ metadataVersion: 1, provenance });
+    const listed = await listProfiles({ dshHome });
+    expect(listed.exitCode).toBe(0);
+    expect(listed.metadata.profiles).toContainEqual(
+      expect.objectContaining({
+        profile: 'engine-pack',
+        status: 'tracked',
+        packDetails: expect.objectContaining({ provenance }),
+      }),
+    );
+  });
+
   it('keeps skipped archive-entry diagnostics visible in an install plan', async () => {
     const dshHome = await home();
     const source = await enginePack();

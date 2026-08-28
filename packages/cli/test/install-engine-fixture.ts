@@ -37,6 +37,7 @@ export interface EnginePackOptions {
   name?: string;
   mcp?: boolean;
   permissionPreset?: 'workspace-write' | 'danger-full-access';
+  provenance?: PackManifest['provenance'];
   tested?: string[];
   plugin?: { allowBuilds?: boolean; source?: 'npm' | 'tarball'; unverified?: boolean };
 }
@@ -61,6 +62,7 @@ export async function enginePack(options: EnginePackOptions = {}): Promise<strin
     description: 'engine fixture',
     author: 'tester',
     license: 'MIT',
+    ...(options.provenance === undefined ? {} : { provenance: options.provenance }),
     dsh: { tested: options.tested ?? ['0.1.0-rc.6'] },
     plugins:
       options.plugin === undefined

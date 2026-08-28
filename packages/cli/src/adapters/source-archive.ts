@@ -83,12 +83,25 @@ export async function rawHeadersSafe(
   filename: string,
   maxExpandedBytes = MAX_RAW_HEADER_BYTES,
 ): Promise<RawHeaderSafety> {
+  return rawHeaderSafetyFromChunks(
+    createReadStream(filename).pipe(createGunzip()),
+    maxExpandedBytes,
+  );
+}
+
+/**
+ * Raw-scanner seam for deterministic chunk-boundary tests. The production wrapper above passes
+ * the exact gunzip stream, so this contains the unchanged archive safety decision.
+ */
+export async function rawHeaderSafetyFromChunks(
+  chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+  maxExpandedBytes = MAX_RAW_HEADER_BYTES,
+): Promise<RawHeaderSafety> {
   let tail = Buffer.alloc(0);
   let remaining = 0;
   let expanded = 0;
   try {
-    const stream = createReadStream(filename).pipe(createGunzip());
-    for await (const value of stream) {
+    for await (const value of chunks) {
       const chunk = Buffer.from(value);
       expanded += chunk.byteLength;
       if (expanded > maxExpandedBytes)
@@ -143,8 +156,26 @@ function metadataHeaderType(block: Buffer): MetadataHeaderType | undefined {
     : undefined;
 }
 
-async function metadataHeaderTypes(
+/**
+ * Inspect archive metadata header kinds before parser event accounting. Exported for hermetic
+ * archive-fixture regression tests; callers still use it only through preflight.
+ */
+export async function metadataHeaderTypes(
   filename: string,
+  maxExpandedBytes = MAX_RAW_HEADER_BYTES,
+): Promise<MetadataHeaderSafety> {
+  return metadataHeaderTypesFromChunks(
+    createReadStream(filename).pipe(createGunzip()),
+    maxExpandedBytes,
+  );
+}
+
+/**
+ * Metadata-scanner seam paired with `rawHeaderSafetyFromChunks` for raw/parser FIFO fixtures.
+ * Preflight still supplies the same gunzip stream as before.
+ */
+export async function metadataHeaderTypesFromChunks(
+  chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
   maxExpandedBytes = MAX_RAW_HEADER_BYTES,
 ): Promise<MetadataHeaderSafety> {
   let tail = Buffer.alloc(0);
@@ -160,8 +191,7 @@ async function metadataHeaderTypes(
     return true;
   };
   try {
-    const stream = createReadStream(filename).pipe(createGunzip());
-    for await (const value of stream) {
+    for await (const value of chunks) {
       const chunk = Buffer.from(value);
       expanded += chunk.byteLength;
       if (expanded > maxExpandedBytes)
@@ -196,6 +226,28 @@ async function metadataHeaderTypes(
   return tail.byteLength === 0 && remaining === 0
     ? { safe: true, types }
     : { safe: false, reason: 'unsafe' };
+}
+
+/**
+ * The raw scanner and parser must account for exactly the same metadata FIFO. Exported so the
+ * counter invariant can be exercised with synthetic raw/parser observations without weakening
+ * preflight's fail-closed behavior.
+ */
+export function metadataHeadersSynchronized(
+  metaHeaders: number,
+  expectedMetaHeaders: number,
+  consumedMeta: number,
+  pendingGlobalHeaders: number,
+  pendingPaxHeaders: number,
+  pendingOtherMetaHeaders: number,
+): boolean {
+  return (
+    metaHeaders === expectedMetaHeaders &&
+    metaHeaders === consumedMeta &&
+    pendingGlobalHeaders === 0 &&
+    pendingPaxHeaders === 0 &&
+    pendingOtherMetaHeaders === 0
+  );
 }
 
 function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
@@ -542,11 +594,14 @@ async function preflight(
   }
   if (failure !== undefined) throw failure;
   if (
-    metaHeaders !== metadataHeaderSafety.types.length ||
-    metaHeaders !== consumedMeta ||
-    pendingGlobalHeaders !== 0 ||
-    pendingPaxHeaders !== 0 ||
-    pendingOtherMetaHeaders !== 0
+    !metadataHeadersSynchronized(
+      metaHeaders,
+      metadataHeaderSafety.types.length,
+      consumedMeta,
+      pendingGlobalHeaders,
+      pendingPaxHeaders,
+      pendingOtherMetaHeaders,
+    )
   ) {
     throw fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。');
   }
