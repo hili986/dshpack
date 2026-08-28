@@ -259,7 +259,7 @@ else
     console.log(`app=${app.status}`);
     console.log(`appNoToken=${appNoToken.status}`);
     console.log(`appPolicy=${app.policy}`);
-    console.log(`appBytes=${app.body.length}`);
+    console.log(`appBytes=${Buffer.byteLength(app.body)}`);
   ' 2>&1)"; rc=$?
   if [ $rc -ne 0 ]; then bad "ui probe failed (rc=$rc)"; printf '%s\n' "$probe"; else
     check "GET / without a valid token is refused" 'rootNoToken=401' "$probe"
