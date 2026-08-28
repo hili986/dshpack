@@ -51,7 +51,10 @@ export function installedMetadata(
       version: plan.pack.version,
       manifestDigest: plan.manifestDigest,
     },
-    provenance: material.manifest.provenance ?? [],
+    // Only persisted when non-empty so pre-provenance markers stay byte-compatible.
+    ...(material.manifest.provenance?.length
+      ? { provenance: material.manifest.provenance }
+      : {}),
     planDigest: plan.planDigest,
     installedAt,
     txid,
