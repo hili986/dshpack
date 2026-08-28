@@ -170,22 +170,33 @@ function validSkillInput(value: Record<string, unknown>): boolean {
   return typeof value.profile === 'string' && isSafeSkillId(value.skillId);
 }
 
-function validComposeInput(value: Record<string, unknown>, profile: boolean): boolean {
+function validComposePreviewInput(value: Record<string, unknown>): boolean {
   return (
-    exactInputKeys(value, profile ? ['profile', 'spec'] : ['spec']) &&
+    exactInputKeys(value, ['spec']) &&
+    typeof value.spec === 'object' &&
+    value.spec !== null &&
+    !Array.isArray(value.spec)
+  );
+}
+
+function validComposeInput(value: Record<string, unknown>): boolean {
+  return (
+    (exactInputKeys(value, ['profile', 'spec']) ||
+      exactInputKeys(value, ['profile', 'spec', 'allowUnknownLicense'])) &&
     typeof value.spec === 'object' &&
     value.spec !== null &&
     !Array.isArray(value.spec) &&
-    (!profile || typeof value.profile === 'string')
+    typeof value.profile === 'string' &&
+    (value.allowUnknownLicense === undefined || typeof value.allowUnknownLicense === 'boolean')
   );
 }
 
 function validOperationInput(operation: string, value: Record<string, unknown>): boolean {
   switch (operation) {
     case 'composePreview':
-      return validComposeInput(value, false);
+      return validComposePreviewInput(value);
     case 'compose':
-      return validComposeInput(value, true);
+      return validComposeInput(value);
     case 'skillContent':
       return exactInputKeys(value, ['profile', 'skillId']) && validSkillInput(value);
     case 'editSkill':
@@ -775,7 +786,11 @@ function defaultEngines(dshHome: string, suppliedRuntime?: InstallRuntime): UiSe
         case 'compose':
           return composeAndInstall(
             dshHome,
-            input as { profile: string; spec: Parameters<typeof composeAndInstall>[1]['spec'] },
+            input as {
+              profile: string;
+              spec: Parameters<typeof composeAndInstall>[1]['spec'];
+              allowUnknownLicense?: boolean;
+            },
             gatedRuntime,
             invocation.phase,
           );

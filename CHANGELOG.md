@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.4
+
+**未知 license 的预览不再伪失败，写入确认仍是硬闸。** M3.12 将来源许可不明的可解释性与实际写入授权分开。
+
+### 修复
+
+- **`compose --dry-run` 的未知 license 语义**：遇到 unknown/unlicensed source 时保留 `W_COMPOSE_UNKNOWN_LICENSE`，但以 exit 0 完成预览；不再要求 `--allow-unknown-license`。
+- **真正的 compose 写入仍 fail-closed**：不传 `--allow-unknown-license` 时，保留硬拒绝 `E_COMPOSE_UNKNOWN_LICENSE_CONFIRM`，exit 21 (`USER_DECLINED`)；该确认只回答 unknown license 的策略闸门。
+- **组合预览反馈改进**：UI 的显式确认仅进入 compose 写入的 plan/apply 流程，preview 请求始终不带 `allowUnknownLicense`。输入改变后的过期预览说明与来源选择/冲突的即时客户端反馈更清晰；服务端 preview 和 plan/apply 的判定仍为准。
+
 ## 0.5.3
 
 **compose 体验两轮整顿。** 0.5.2 发布后真实使用回收："点击预览没反应"与"界面太乱"两条反馈。

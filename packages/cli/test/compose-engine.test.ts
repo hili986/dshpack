@@ -246,24 +246,48 @@ describe('composePack', () => {
     await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('requires the dangerous license acknowledgement and keeps unknown provenance explicit', async () => {
+  it('keeps an unknown license as a warning during dry run', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    const report = await composePack(
+      { composeFile: source, output, dryRun: true },
+      dependencies({ './local-pack': material('citation', './local-pack', 'UNLICENSED') }),
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SUCCESS);
+    expect(report.diagnostics.map(({ code, severity }) => ({ code, severity }))).toEqual([
+      { code: 'W_COMPOSE_UNKNOWN_LICENSE', severity: 'warning' },
+    ]);
+    await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('requires the dangerous license acknowledgement before writing', async () => {
     const root = await temporary();
     const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
     const output = join(root, 'output');
     const sourceMaterial = material('citation', './local-pack', 'UNLICENSED');
-    const withoutFlag = await composePack(
+    const report = await composePack(
       { composeFile: source, output },
       dependencies({ './local-pack': sourceMaterial }),
     );
-    expect(withoutFlag.exitCode).toBe(EXIT_CODES.USER_DECLINED);
-    expect(withoutFlag.diagnostics).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: 'W_COMPOSE_UNKNOWN_LICENSE' })]),
+    expect(report.exitCode).toBe(EXIT_CODES.USER_DECLINED);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'W_COMPOSE_UNKNOWN_LICENSE', severity: 'warning' }),
+        expect.objectContaining({ code: 'E_COMPOSE_UNKNOWN_LICENSE_CONFIRM', severity: 'error' }),
+      ]),
     );
     await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
+  it('writes unknown-license provenance after the dangerous acknowledgement', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
     const accepted = await composePack(
       { composeFile: source, output, allowUnknownLicense: true },
-      dependencies({ './local-pack': sourceMaterial }),
+      dependencies({ './local-pack': material('citation', './local-pack', 'UNLICENSED') }),
     );
     expect(accepted.exitCode).toBe(EXIT_CODES.SUCCESS);
     const pack = parsePack(await readFile(join(output, 'pack.yml'), 'utf8')).value;

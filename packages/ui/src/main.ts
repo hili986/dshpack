@@ -30,7 +30,12 @@ type BrowserScreen =
   | 'compose'
   | 'skill-editor';
 
-interface ComposeSourceForm {
+export interface ComposeSourceForm {
+  readonly from: string;
+  readonly skills: readonly string[];
+}
+
+export interface ComposeSourceSkillCatalogEntry {
   readonly from: string;
   readonly skills: readonly string[];
 }
@@ -39,6 +44,34 @@ interface ComposeResolutionForm {
   readonly id: string;
   readonly mode: 'prefer' | 'rename';
   readonly prefer?: string;
+}
+
+interface ComposeFocusIntent {
+  readonly kind: 'profile' | 'source';
+  readonly index?: number;
+  readonly selectionDirection: SelectionDirection | null;
+  readonly selectionEnd: number;
+  readonly selectionStart: number;
+}
+
+type ComposeCompositionEnd =
+  | { readonly kind: 'matched'; readonly shouldRender: boolean }
+  | { readonly kind: 'mismatch' | 'none' };
+
+type ComposeInstallDisabledReason =
+  | 'notPreviewed'
+  | 'stalePreview'
+  | 'previewPending'
+  | 'unresolvedConflicts'
+  | 'unknownLicenseNotAcknowledged';
+
+export interface ComposeInstallReadiness {
+  readonly preview: UiResponse | undefined;
+  readonly hasSuccessfulPreview: boolean;
+  readonly previewStale: boolean;
+  readonly previewPending: boolean;
+  readonly resolutions: readonly ComposeResolutionForm[];
+  readonly acknowledgement: boolean;
 }
 
 interface EditorSkill {
@@ -56,10 +89,8 @@ function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function strings(value: unknown): readonly string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
+function inputEventIsComposing(event: Event): boolean {
+  return (event as unknown as { readonly isComposing?: unknown }).isComposing === true;
 }
 
 function composePackName(profile: string): string {
@@ -95,11 +126,50 @@ function previewMetadata(response: UiResponse | undefined): Record<string, unkno
   return response !== undefined && record(response.metadata) ? response.metadata : {};
 }
 
-function previewSkills(response: UiResponse | undefined, index: number): readonly string[] {
+function previewSkillCatalog(
+  response: UiResponse | undefined,
+  sources: readonly ComposeSourceForm[],
+): readonly ComposeSourceSkillCatalogEntry[] {
+  if (!isSuccessfulComposePreview(response)) return [];
   const value = previewMetadata(response).sourceSkills;
   if (!Array.isArray(value)) return [];
-  const source = value[index];
-  return record(source) ? strings(source.skills) : [];
+  const catalog = value.flatMap((source) => {
+    if (
+      !record(source) ||
+      typeof source.from !== 'string' ||
+      !Array.isArray(source.skills) ||
+      !source.skills.every((skill) => typeof skill === 'string')
+    )
+      return [];
+    return [{ from: source.from, skills: source.skills }];
+  });
+  if (catalog.length !== value.length || sources.some((source) => source.from.length === 0))
+    return [];
+  const sourceCounts = new Map<string, number>();
+  for (const source of sources)
+    sourceCounts.set(source.from, (sourceCounts.get(source.from) ?? 0) + 1);
+  const catalogCounts = new Map<string, number>();
+  for (const entry of catalog)
+    catalogCounts.set(entry.from, (catalogCounts.get(entry.from) ?? 0) + 1);
+  return sourceCounts.size === catalogCounts.size &&
+    [...sourceCounts].every(([from, count]) => catalogCounts.get(from) === count)
+    ? catalog
+    : [];
+}
+
+function catalogSkillsForSource(
+  catalog: readonly ComposeSourceSkillCatalogEntry[],
+  source: ComposeSourceForm,
+): readonly string[] | undefined {
+  return catalog.find((entry) => entry.from === source.from)?.skills;
+}
+
+function selectedCatalogSkillsForSource(
+  source: ComposeSourceForm,
+  catalog: readonly ComposeSourceSkillCatalogEntry[],
+): ReadonlySet<string> {
+  const availableSkills = catalogSkillsForSource(catalog, source);
+  return new Set(source.skills.filter((id) => availableSkills?.includes(id) === true));
 }
 
 function previewConflictIds(response: UiResponse | undefined): readonly string[] {
@@ -108,6 +178,54 @@ function previewConflictIds(response: UiResponse | undefined): readonly string[]
   return value.flatMap((item) =>
     record(item) && typeof item.path === 'string' ? [item.path] : [],
   );
+}
+
+export function selectedComposeSkillConflictIds(
+  sources: readonly ComposeSourceForm[],
+  catalog: readonly ComposeSourceSkillCatalogEntry[],
+): readonly string[] {
+  const selectedBySource = new Map<string, Set<string>>();
+  for (const source of sources) {
+    const selected = selectedCatalogSkillsForSource(source, catalog);
+    const selectedForSource = selectedBySource.get(source.from) ?? new Set<string>();
+    for (const id of selected) selectedForSource.add(id);
+    selectedBySource.set(source.from, selectedForSource);
+  }
+  const counts = new Map<string, number>();
+  for (const selected of selectedBySource.values())
+    for (const id of selected) counts.set(id, (counts.get(id) ?? 0) + 1);
+  return [...counts]
+    .filter(([, count]) => count >= 2)
+    .map(([id]) => id)
+    .sort((left, right) => left.localeCompare(right, 'en'));
+}
+
+function clientConflictParticipantSources(
+  id: string,
+  sources: readonly ComposeSourceForm[],
+  catalog: readonly ComposeSourceSkillCatalogEntry[],
+): readonly string[] {
+  const participants = new Set<string>();
+  for (const source of sources)
+    if (selectedCatalogSkillsForSource(source, catalog).has(id)) participants.add(source.from);
+  return [...participants];
+}
+
+function validComposeResolutions(
+  resolutions: readonly ComposeResolutionForm[],
+  sources: readonly ComposeSourceForm[],
+  catalog: readonly ComposeSourceSkillCatalogEntry[],
+): readonly ComposeResolutionForm[] {
+  const conflictIds = new Set(selectedComposeSkillConflictIds(sources, catalog));
+  return resolutions.flatMap((resolution) => {
+    if (!conflictIds.has(resolution.id)) return [];
+    if (resolution.mode === 'rename') return [resolution];
+    const participants = clientConflictParticipantSources(resolution.id, sources, catalog);
+    const prefer = participants.includes(resolution.prefer ?? '')
+      ? resolution.prefer
+      : participants[0];
+    return prefer === undefined ? [] : [{ ...resolution, prefer }];
+  });
 }
 
 function previewResolvedSources(response: UiResponse | undefined): readonly string[] {
@@ -141,6 +259,51 @@ function previewDiagnostics(response: UiResponse | undefined): readonly ComposeD
         return [];
     }
   });
+}
+
+function isSuccessfulComposePreview(response: UiResponse | undefined): boolean {
+  return response?.exitCode === 0 && previewMetadata(response).phase === 'preview';
+}
+
+function previewRequiresUnknownLicenseAcknowledgement(response: UiResponse | undefined): boolean {
+  return (
+    isSuccessfulComposePreview(response) &&
+    previewDiagnostics(response).some((item) => item.code === 'W_COMPOSE_UNKNOWN_LICENSE')
+  );
+}
+
+export function composeInstallDisabledReasons(
+  readiness: ComposeInstallReadiness,
+): readonly ComposeInstallDisabledReason[] {
+  if (readiness.previewPending) return ['previewPending'];
+  if (readiness.previewStale) return ['stalePreview'];
+  if (!readiness.hasSuccessfulPreview || !isSuccessfulComposePreview(readiness.preview))
+    return ['notPreviewed'];
+  const reasons: ComposeInstallDisabledReason[] = [];
+  if (
+    previewConflictIds(readiness.preview).some(
+      (id) => !readiness.resolutions.some((resolution) => resolution.id === id),
+    )
+  )
+    reasons.push('unresolvedConflicts');
+  if (previewRequiresUnknownLicenseAcknowledgement(readiness.preview) && !readiness.acknowledgement)
+    reasons.push('unknownLicenseNotAcknowledged');
+  return reasons;
+}
+
+function composeInstallDisabledReasonMessage(reason: ComposeInstallDisabledReason): MessageKey {
+  switch (reason) {
+    case 'notPreviewed':
+      return 'composeInstallNotPreviewed';
+    case 'stalePreview':
+      return 'composeInstallStale';
+    case 'previewPending':
+      return 'composeInstallPending';
+    case 'unresolvedConflicts':
+      return 'composeInstallUnresolvedConflicts';
+    case 'unknownLicenseNotAcknowledged':
+      return 'composeInstallUnknownLicense';
+  }
 }
 
 function archiveEntryDiagnostics(
@@ -435,10 +598,17 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let composeSources: readonly ComposeSourceForm[] = [{ from: '', skills: [] }];
   let composeProfile = '';
   let composePreview: UiResponse | undefined;
+  let composeSkillCatalog: readonly ComposeSourceSkillCatalogEntry[] = [];
+  let composeHasSuccessfulPreview = false;
+  let composePreviewStale = false;
   let composePreviewRevision = 0;
   let composePreviewRequest = 0;
   let composePreviewPending = false;
   let composeResolutions: readonly ComposeResolutionForm[] = [];
+  let composeAcknowledgement = false;
+  let composeFocus: ComposeFocusIntent | undefined;
+  let composeComposition: HTMLInputElement | undefined;
+  let composeRenderDeferred = false;
   let composeValidation: MessageKey | undefined;
   let composeValidationFeedback: readonly HTMLParagraphElement[] = [];
   let composeInstallButton: HTMLButtonElement | undefined;
@@ -560,16 +730,85 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   }
 
   function renderIfActive(screen: BrowserScreen): void {
-    if (activeScreen === screen) renderActiveScreen();
+    if (activeScreen !== screen) return;
+    if (screen === 'compose' && composeComposition !== undefined) {
+      composeRenderDeferred = true;
+      return;
+    }
+    renderActiveScreen();
   }
 
-  function composeSourceUpdate(index: number, source: ComposeSourceForm): void {
+  function composeFocusIntent(
+    kind: ComposeFocusIntent['kind'],
+    input: HTMLInputElement,
+    index?: number,
+  ): ComposeFocusIntent {
+    return {
+      kind,
+      ...(index === undefined ? {} : { index }),
+      selectionDirection: input.selectionDirection,
+      selectionEnd: input.selectionEnd ?? input.value.length,
+      selectionStart: input.selectionStart ?? input.value.length,
+    };
+  }
+
+  function rerenderComposeWithFocus(intent: ComposeFocusIntent): void {
+    composeFocus = intent;
+    renderIfActive('compose');
+  }
+
+  function composeProfileUpdate(input: HTMLInputElement): boolean {
+    const profile = input.value.trim();
+    if (profile === composeProfile) return false;
+    const focus = composeFocusIntent('profile', input);
+    composeProfile = profile;
+    clearComposeValidation();
+    invalidateComposePreview();
+    rerenderComposeWithFocus(focus);
+    return true;
+  }
+
+  function composeSourceInputUpdate(index: number, input: HTMLInputElement): boolean {
+    const source = composeSources[index];
+    if (source === undefined) return false;
+    const from = input.value.trim();
+    if (from === source.from) return false;
+    composeSourceUpdate(
+      index,
+      { from, skills: [] },
+      true,
+      composeFocusIntent('source', input, index),
+    );
+    return true;
+  }
+
+  function beginComposeComposition(input: HTMLInputElement): void {
+    composeComposition = input;
+  }
+
+  function endComposeComposition(input: HTMLInputElement): ComposeCompositionEnd {
+    if (composeComposition === undefined) return { kind: 'none' };
+    if (composeComposition !== input) return { kind: 'mismatch' };
+    composeComposition = undefined;
+    const shouldRender = composeRenderDeferred;
+    composeRenderDeferred = false;
+    return { kind: 'matched', shouldRender };
+  }
+
+  function composeSourceUpdate(
+    index: number,
+    source: ComposeSourceForm,
+    clearSkillCatalog = false,
+    focus?: ComposeFocusIntent,
+  ): void {
     composeSources = composeSources.map((current, currentIndex) =>
       currentIndex === index ? source : current,
     );
     composeResolutions = [];
     clearComposeValidation();
-    invalidateComposePreview();
+    invalidateComposePreview(clearSkillCatalog);
+    if (focus !== undefined) rerenderComposeWithFocus(focus);
+    else renderIfActive('compose');
   }
 
   function clearComposeValidation(): void {
@@ -580,31 +819,50 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     }
   }
 
-  function invalidateComposePreview(): void {
+  function invalidateComposePreview(clearSkillCatalog = false): void {
     composePreviewRevision += 1;
     composePreview = undefined;
+    composePreviewStale = composeHasSuccessfulPreview;
+    composeAcknowledgement = false;
+    if (clearSkillCatalog) composeSkillCatalog = [];
     if (composeInstallButton !== undefined) composeInstallButton.disabled = true;
+  }
+
+  function composeResolutionUpdate(resolutions: readonly ComposeResolutionForm[]): void {
+    composeResolutions = resolutions;
+    clearComposeValidation();
+    invalidateComposePreview();
+    renderIfActive('compose');
   }
 
   function composeInstallReady(): boolean {
     return (
-      composePreview?.exitCode === 0 &&
-      previewMetadata(composePreview).phase === 'preview' &&
-      !previewConflictIds(composePreview).some(
-        (id) => !composeResolutions.some((item) => item.id === id),
-      )
+      composeInstallDisabledReasons({
+        preview: composePreview,
+        hasSuccessfulPreview: composeHasSuccessfulPreview,
+        previewStale: composePreviewStale,
+        previewPending: composePreviewPending,
+        resolutions: composeResolutions,
+        acknowledgement: composeAcknowledgement,
+      }).length === 0
     );
   }
 
   function renderComposeScreen(): void {
+    if (composeComposition !== undefined) {
+      composeRenderDeferred = true;
+      return;
+    }
     activeMount.textContent = '';
     composeValidationFeedback = [];
+    const focusIntent = composeFocus;
+    composeFocus = undefined;
+    let focusTarget: HTMLInputElement | undefined;
     const panel = document.createElement('section');
     const heading = document.createElement('h2');
     const profileLabel = document.createElement('label');
     const profile = document.createElement('input');
     const preview = document.createElement('button');
-    const pendingFeedback = document.createElement('p');
     const install = document.createElement('button');
     const addSource = document.createElement('button');
     const sources = document.createElement('section');
@@ -624,15 +882,27 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     profile.type = 'text';
     profile.placeholder = 'my-research-kit';
     profile.value = composeProfile;
+    profile.addEventListener('compositionstart', (event) => {
+      const current = event.currentTarget;
+      if (current instanceof HTMLInputElement) beginComposeComposition(current);
+    });
     profile.addEventListener('input', (event) => {
       const current = event.currentTarget;
-      if (current instanceof HTMLInputElement) {
-        composeProfile = current.value.trim();
-        clearComposeValidation();
-        invalidateComposePreview();
+      if (inputEventIsComposing(event)) {
+        if (current instanceof HTMLInputElement) beginComposeComposition(current);
+        return;
       }
+      if (current instanceof HTMLInputElement) composeProfileUpdate(current);
+    });
+    profile.addEventListener('compositionend', (event) => {
+      const current = event.currentTarget;
+      if (!(current instanceof HTMLInputElement)) return;
+      const compositionEnd = endComposeComposition(current);
+      if (compositionEnd.kind !== 'matched') return;
+      if (!composeProfileUpdate(current) && compositionEnd.shouldRender) renderIfActive('compose');
     });
     profileLabel.append(profile);
+    if (focusIntent?.kind === 'profile') focusTarget = profile;
     const profileFeedback =
       composeValidation === 'validationComposeProfile'
         ? validationFeedback(composeValidation)
@@ -644,18 +914,35 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       const sourceInput = document.createElement('input');
       const remove = document.createElement('button');
       const skillsHeading = document.createElement('h3');
-      const skills = previewSkills(composePreview, index);
+      const catalogSkills = catalogSkillsForSource(composeSkillCatalog, source);
+      const skills = catalogSkills ?? [];
       card.className = 'compose-source';
       sourceInput.type = 'text';
       sourceInput.placeholder = message(state.locale, 'placeholderComposeSource');
       sourceInput.value = source.from;
       sourceLabel.textContent = `${message(state.locale, 'composeSource')} ${String(index + 1)}`;
+      sourceInput.addEventListener('compositionstart', (event) => {
+        const current = event.currentTarget;
+        if (current instanceof HTMLInputElement) beginComposeComposition(current);
+      });
       sourceInput.addEventListener('input', (event) => {
         const current = event.currentTarget;
-        if (current instanceof HTMLInputElement)
-          composeSourceUpdate(index, { ...source, from: current.value.trim() });
+        if (inputEventIsComposing(event)) {
+          if (current instanceof HTMLInputElement) beginComposeComposition(current);
+          return;
+        }
+        if (current instanceof HTMLInputElement) composeSourceInputUpdate(index, current);
+      });
+      sourceInput.addEventListener('compositionend', (event) => {
+        const current = event.currentTarget;
+        if (!(current instanceof HTMLInputElement)) return;
+        const compositionEnd = endComposeComposition(current);
+        if (compositionEnd.kind !== 'matched') return;
+        if (!composeSourceInputUpdate(index, current) && compositionEnd.shouldRender)
+          renderIfActive('compose');
       });
       sourceLabel.append(sourceInput);
+      if (focusIntent?.kind === 'source' && focusIntent.index === index) focusTarget = sourceInput;
       remove.type = 'button';
       remove.textContent = message(state.locale, 'composeRemoveSource');
       remove.disabled = composeSources.length === 1;
@@ -663,7 +950,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         composeSources = composeSources.filter((_, currentIndex) => currentIndex !== index);
         composeResolutions = [];
         clearComposeValidation();
-        invalidateComposePreview();
+        invalidateComposePreview(true);
         renderComposeScreen();
       });
       skillsHeading.textContent = message(state.locale, 'composeSourceSkills');
@@ -691,7 +978,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         skillLabel.append(checked, skillText);
         card.append(skillLabel);
       }
-      if (composePreview !== undefined && skills.length === 0) {
+      if (catalogSkills !== undefined && skills.length === 0) {
         const noSkills = document.createElement('p');
         noSkills.className = 'compose-feedback compose-feedback-info';
         noSkills.textContent = message(state.locale, 'composeNoSkills');
@@ -714,13 +1001,38 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       composeSources = [...composeSources, { from: '', skills: [] }];
       composeResolutions = [];
       clearComposeValidation();
-      invalidateComposePreview();
+      invalidateComposePreview(true);
       renderComposeScreen();
     });
 
-    const conflictIds = previewConflictIds(composePreview);
-    if (conflictIds.length > 0) conflicts.textContent = message(state.locale, 'composeConflicts');
-    for (const id of conflictIds) {
+    if (previewRequiresUnknownLicenseAcknowledgement(composePreview)) {
+      const acknowledgement = document.createElement('label');
+      const checked = document.createElement('input');
+      const text = document.createElement('span');
+      checked.type = 'checkbox';
+      checked.checked = composeAcknowledgement;
+      checked.addEventListener('change', (event) => {
+        const current = event.currentTarget;
+        if (!(current instanceof HTMLInputElement)) return;
+        composeAcknowledgement = current.checked;
+        renderIfActive('compose');
+      });
+      text.textContent = message(state.locale, 'composeUnknownLicenseAcknowledgement');
+      acknowledgement.className = 'compose-skill-option';
+      acknowledgement.append(checked, text);
+      conflicts.append(acknowledgement);
+    }
+
+    const clientConflictIds = selectedComposeSkillConflictIds(composeSources, composeSkillCatalog);
+    if (clientConflictIds.length > 0) {
+      const heading = document.createElement('p');
+      const hint = document.createElement('p');
+      heading.textContent = message(state.locale, 'composeConflicts');
+      hint.className = 'compose-feedback compose-feedback-info';
+      hint.textContent = message(state.locale, 'composeClientConflictHint');
+      conflicts.append(heading, hint);
+    }
+    for (const id of clientConflictIds) {
       const card = document.createElement('section');
       const label = document.createElement('p');
       const prefer = document.createElement('input');
@@ -730,42 +1042,47 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       const preferText = document.createElement('span');
       const renameText = document.createElement('span');
       const resolution = composeResolutions.find((item) => item.id === id);
+      const participants = clientConflictParticipantSources(
+        id,
+        composeSources,
+        composeSkillCatalog,
+      );
+      const preferredSource = participants.includes(resolution?.prefer ?? '')
+        ? resolution?.prefer
+        : participants[0];
       label.textContent = id;
       prefer.type = 'radio';
       prefer.checked = resolution?.mode === 'prefer';
       prefer.addEventListener('change', () => {
-        composeResolutions = [
+        composeResolutionUpdate([
           ...composeResolutions.filter((item) => item.id !== id),
-          { id, mode: 'prefer', prefer: resolution?.prefer ?? composeSources[0]?.from ?? '' },
-        ];
-        renderComposeScreen();
+          { id, mode: 'prefer', prefer: preferredSource ?? '' },
+        ]);
       });
       rename.type = 'radio';
       rename.checked = resolution?.mode === 'rename';
       rename.addEventListener('change', () => {
-        composeResolutions = [
+        composeResolutionUpdate([
           ...composeResolutions.filter((item) => item.id !== id),
           { id, mode: 'rename' },
-        ];
-        renderComposeScreen();
+        ]);
       });
       preferText.textContent = message(state.locale, 'composeResolvePrefer');
       renameText.textContent = message(state.locale, 'composeResolveRename');
       sourceLabel.textContent = message(state.locale, 'composePreferSource');
-      for (const source of composeSources) {
+      for (const from of participants) {
         const option = document.createElement('option');
-        option.value = source.from;
-        option.textContent = source.from;
-        option.selected = source.from === (resolution?.prefer ?? composeSources[0]?.from);
+        option.value = from;
+        option.textContent = from;
+        option.selected = from === preferredSource;
         sourceSelect.append(option);
       }
       sourceSelect.disabled = resolution?.mode !== 'prefer';
       sourceSelect.addEventListener('change', () => {
-        composeResolutions = [
+        composeResolutionUpdate([
           ...composeResolutions.filter((item) => item.id !== id),
           { id, mode: 'prefer', prefer: sourceSelect.value },
-        ];
-        renderComposeScreen();
+        ]);
       });
       card.append(label, prefer, preferText, rename, renameText);
       card.append(sourceLabel, sourceSelect);
@@ -776,13 +1093,28 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     preview.textContent = message(state.locale, 'composePreview');
     preview.disabled = composePreviewPending;
     preview.addEventListener('click', () => void requestComposePreview());
+    const pendingFeedback = document.createElement('p');
     if (composePreviewPending) {
       pendingFeedback.className = 'compose-feedback compose-feedback-info';
       pendingFeedback.textContent = message(state.locale, 'composePreviewPending');
     }
+    const disabledReasons = composeInstallDisabledReasons({
+      preview: composePreview,
+      hasSuccessfulPreview: composeHasSuccessfulPreview,
+      previewStale: composePreviewStale,
+      previewPending: composePreviewPending,
+      resolutions: composeResolutions,
+      acknowledgement: composeAcknowledgement,
+    });
+    const disabledFeedback = disabledReasons.map((reason) => {
+      const feedback = document.createElement('p');
+      feedback.className = 'compose-feedback compose-feedback-info';
+      feedback.textContent = message(state.locale, composeInstallDisabledReasonMessage(reason));
+      return feedback;
+    });
     install.type = 'button';
     install.textContent = message(state.locale, 'composeInstall');
-    install.disabled = !composeInstallReady();
+    install.disabled = disabledReasons.length > 0;
     composeInstallButton = install;
     install.addEventListener('click', () => {
       if (install.disabled || !composeInstallReady()) {
@@ -793,6 +1125,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         freshPlanRequest('compose', {
           profile: composeProfile,
           spec: composeSpec(composeProfile, composeSources, composeResolutions),
+          ...(composeAcknowledgement ? { allowUnknownLicense: true } : {}),
         }),
       );
     });
@@ -851,9 +1184,28 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       preview,
       ...(composePreviewPending ? [pendingFeedback] : []),
       diagnostics,
+      ...disabledFeedback,
       install,
     );
     activeMount.append(panel);
+    if (focusIntent !== undefined && focusTarget !== undefined) {
+      if (typeof focusTarget.focus === 'function') focusTarget.focus();
+      if (typeof focusTarget.setSelectionRange === 'function') {
+        const selectionStart = Math.min(focusIntent.selectionStart, focusTarget.value.length);
+        const selectionEnd = Math.min(
+          Math.max(selectionStart, focusIntent.selectionEnd),
+          focusTarget.value.length,
+        );
+        if (focusIntent.selectionDirection === null)
+          focusTarget.setSelectionRange(selectionStart, selectionEnd);
+        else
+          focusTarget.setSelectionRange(
+            selectionStart,
+            selectionEnd,
+            focusIntent.selectionDirection,
+          );
+      }
+    }
   }
 
   function trackedProfiles(): readonly string[] {
@@ -1023,7 +1375,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         );
         return;
       case 'compose':
-        renderComposeScreen();
+        if (composeComposition === undefined) renderComposeScreen();
         return;
       case 'skill-editor':
         renderSkillEditor();
@@ -1038,7 +1390,12 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   }
 
   function showCurrentHash(): void {
-    activeScreen = screenFromHash(window.location.hash);
+    const screen = screenFromHash(window.location.hash);
+    if (screen !== 'compose') {
+      composeComposition = undefined;
+      composeRenderDeferred = false;
+    }
+    activeScreen = screen;
     refreshTargetCopy();
     renderActiveScreen();
     loadActiveScreen();
@@ -1124,9 +1481,17 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       const result = await postApi(token, request, state.locale);
       if (revision !== composePreviewRevision || requestId !== composePreviewRequest) return;
       composePreview = result.response;
+      composeSkillCatalog = previewSkillCatalog(composePreview, composeSources);
+      composeHasSuccessfulPreview = isSuccessfulComposePreview(composePreview);
+      composePreviewStale = false;
+      if (!previewRequiresUnknownLicenseAcknowledgement(composePreview))
+        composeAcknowledgement = false;
       composeValidation = undefined;
-      const ids = new Set(previewConflictIds(composePreview));
-      composeResolutions = composeResolutions.filter((item) => ids.has(item.id));
+      composeResolutions = validComposeResolutions(
+        composeResolutions,
+        composeSources,
+        composeSkillCatalog,
+      );
     } finally {
       composePreviewPending = false;
       renderIfActive('compose');

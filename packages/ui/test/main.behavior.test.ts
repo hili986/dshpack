@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import * as browserMain from '../src/main.js';
 import { startBrowserUi } from '../src/main.js';
 import {
   descendants,
@@ -96,6 +97,35 @@ function planWith(
 
 function inputs(root: FakeElement): readonly FakeInputElement[] {
   return descendants(root).filter(
+    (element): element is FakeInputElement => element instanceof FakeInputElement,
+  );
+}
+
+function composeTextInputs(root: FakeElement): readonly FakeInputElement[] {
+  return inputs(root).filter((input) => input.type === 'text');
+}
+
+function fireComposeTextEvent(
+  input: FakeInputElement,
+  type: 'compositionend' | 'input',
+  isComposing = false,
+): void {
+  const listeners = (
+    input as unknown as {
+      readonly listeners: ReadonlyMap<string, readonly ((event: Event) => void)[]>;
+    }
+  ).listeners.get(type);
+  const event = { currentTarget: input, isComposing, target: input, type } as unknown as Event;
+  for (const listener of listeners ?? []) listener(event);
+}
+
+function skillCheckbox(card: FakeElement, skill: string): FakeInputElement | undefined {
+  const option = descendants(card).find(
+    (element) =>
+      (element as unknown as { readonly className?: string }).className ===
+        'compose-skill-option' && element.textContent === skill,
+  );
+  return option?.children.find(
     (element): element is FakeInputElement => element instanceof FakeInputElement,
   );
 }
@@ -453,7 +483,26 @@ describe('browser main shell behavior', () => {
               { from: first, id: 'notes', originalId: 'notes' },
               { from: second, id: 'notes', originalId: 'notes' },
             ],
-            conflicts: [{ path: 'skills/notes' }],
+            conflicts: [{ path: 'notes' }],
+          },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [
+              { from: first, skills: ['notes'] },
+              { from: second, skills: ['notes'] },
+            ],
+            selected: [
+              { from: first, id: 'notes', originalId: 'notes' },
+              { from: second, id: 'notes', originalId: 'notes' },
+            ],
+            conflicts: [{ path: 'notes' }],
           },
         },
       },
@@ -482,7 +531,25 @@ describe('browser main shell behavior', () => {
     elementWithText(root, '预览组合')?.fire('click');
     await settle();
 
-    expect(visibleText(root)).toContain('skills/notes');
+    let sourceCards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const firstNotes =
+      sourceCards[0] === undefined ? undefined : skillCheckbox(sourceCards[0], 'notes');
+    if (firstNotes === undefined) throw new Error('expected first notes checkbox');
+    firstNotes.checked = true;
+    firstNotes.fire('change');
+    sourceCards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const secondNotes =
+      sourceCards[1] === undefined ? undefined : skillCheckbox(sourceCards[1], 'notes');
+    if (secondNotes === undefined) throw new Error('expected second notes checkbox');
+    secondNotes.checked = true;
+    secondNotes.fire('change');
+    expect(visibleText(root)).toContain('notes');
     expect(elementWithText(root, '组装并安装')?.disabled).toBe(true);
     const prefer = inputs(root).find((input) => input.type === 'radio');
     if (prefer === undefined) throw new Error('expected conflict preference');
@@ -496,6 +563,8 @@ describe('browser main shell behavior', () => {
     expect(sourceSelect.value).toBe(first);
     sourceSelect.value = second;
     sourceSelect.fire('change');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
     const install = elementWithText(root, '组装并安装');
     expect(install?.disabled).toBe(false);
     install?.fire('click');
@@ -508,10 +577,10 @@ describe('browser main shell behavior', () => {
         profile: 'merged-notes',
         spec: {
           include: [
-            { from: first, skills: ['*'] },
-            { from: second, skills: ['*'] },
+            { from: first, skills: ['notes'] },
+            { from: second, skills: ['notes'] },
           ],
-          resolve: [{ id: 'skills/notes', prefer: second }],
+          resolve: [{ id: 'notes', prefer: second }],
         },
       },
     });
@@ -707,6 +776,14 @@ describe('browser main shell behavior', () => {
     const pending =
       'Previewing: resolving sources and downloading archives; this may take tens of seconds…';
     expect(visibleText(root)).toContain(pending);
+    expect(
+      descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className ===
+            'compose-feedback compose-feedback-info' &&
+          element.textContent === 'Preview is still in progress.',
+      ),
+    ).toHaveLength(1);
     expect(elementWithText(root, 'Preview composition')?.disabled).toBe(true);
 
     preview.resolve({
@@ -1483,6 +1560,7 @@ describe('browser main shell behavior', () => {
 
   it('keeps every compose diagnostic visible, resolves conflicts, and refreshes selected skills', async () => {
     const sourceUrl = 'https://github.com/dsh-packs/web-dev';
+    const secondSourceUrl = 'https://github.com/dsh-packs/research-writing';
     const previewBody = {
       diagnostics: [
         { code: 'E_PREVIEW', severity: 'error', message: 'preview error' },
@@ -1496,10 +1574,10 @@ describe('browser main shell behavior', () => {
         phase: 'preview',
         sourceSkills: [
           { from: sourceUrl, skills: ['notes'] },
-          { from: sourceUrl, skills: 3 },
+          { from: secondSourceUrl, skills: ['notes'] },
         ],
-        selected: [null, { from: sourceUrl, id: 'notes', originalId: 'notes' }],
-        conflicts: [null, { path: 'skills/notes/SKILL.md' }],
+        selected: [null, { from: secondSourceUrl, id: 'notes', originalId: 'notes' }],
+        conflicts: [null, { path: 'notes' }],
       },
     };
     const fakes = installBrowserFakes([
@@ -1527,7 +1605,7 @@ describe('browser main shell behavior', () => {
     profile.fire('input');
     source.value = sourceUrl;
     source.fire('input');
-    secondSource.value = sourceUrl;
+    secondSource.value = secondSourceUrl;
     secondSource.fire('input');
     elementWithText(root, 'Preview composition')?.fire('click');
     await settle();
@@ -1539,19 +1617,28 @@ describe('browser main shell behavior', () => {
     expect(firstPreview).not.toContain('must not render');
     expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
 
-    const selectedSkill = inputs(root).find((input) => input.type === 'checkbox');
-    if (selectedSkill === undefined) throw new Error('expected source skill');
-    selectedSkill.checked = true;
-    selectedSkill.fire('change');
-    elementWithText(root, 'Preview composition')?.fire('click');
-    await settle();
-    const deselectedSkill = inputs(root).find((input) => input.type === 'checkbox');
-    if (deselectedSkill === undefined) throw new Error('expected refreshed source skill');
-    expect(deselectedSkill.checked).toBe(true);
-    deselectedSkill.checked = false;
-    deselectedSkill.fire('change');
-    elementWithText(root, 'Preview composition')?.fire('click');
-    await settle();
+    let sourceCards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const firstNotes =
+      sourceCards[0] === undefined ? undefined : skillCheckbox(sourceCards[0], 'notes');
+    if (firstNotes === undefined) throw new Error('expected first source skill');
+    firstNotes.checked = true;
+    firstNotes.fire('change');
+    sourceCards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const refreshedFirstNotes =
+      sourceCards[0] === undefined ? undefined : skillCheckbox(sourceCards[0], 'notes');
+    if (refreshedFirstNotes === undefined) throw new Error('expected refreshed first source skill');
+    expect(refreshedFirstNotes.checked).toBe(true);
+    const secondNotes =
+      sourceCards[1] === undefined ? undefined : skillCheckbox(sourceCards[1], 'notes');
+    if (secondNotes === undefined) throw new Error('expected second source skill');
+    secondNotes.checked = true;
+    secondNotes.fire('change');
 
     const radios = () => inputs(root).filter((input) => input.type === 'radio');
     const prefer = radios()[0];
@@ -1574,6 +1661,8 @@ describe('browser main shell behavior', () => {
         .filter((element) => element.tagName === 'select')
         .at(-1)?.disabled,
     ).toBe(true);
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
     expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
 
     elementWithText(root, 'Compose and install')?.fire('click');
@@ -1665,5 +1754,1249 @@ describe('browser main shell behavior', () => {
     await settle();
     const content = textareas(root)[0];
     expect(content?.value).toBe('');
+  });
+
+  it('keeps compose readiness reasons ordered and computes only repeated selected skills', () => {
+    type ComposeExports = {
+      readonly composeInstallDisabledReasons?: (state: {
+        readonly preview: unknown;
+        readonly hasSuccessfulPreview: boolean;
+        readonly previewStale: boolean;
+        readonly previewPending: boolean;
+        readonly resolutions: readonly { readonly id: string }[];
+        readonly acknowledgement: boolean;
+      }) => readonly string[];
+      readonly selectedComposeSkillConflictIds?: (
+        sources: readonly { readonly from: string; readonly skills: readonly string[] }[],
+        catalog: readonly { readonly from: string; readonly skills: readonly string[] }[],
+      ) => readonly string[];
+    };
+    const compose = browserMain as unknown as ComposeExports;
+    const preview = {
+      diagnostics: [{ code: 'W_COMPOSE_UNKNOWN_LICENSE', severity: 'warning', message: 'license' }],
+      exitCode: 0,
+      metadata: { phase: 'preview', conflicts: [{ path: 'notes' }] },
+    };
+    const catalog = [
+      { from: 'one', skills: ['notes'] },
+      { from: 'two', skills: ['notes', 'unrelated'] },
+    ];
+
+    expect(compose.selectedComposeSkillConflictIds).toBeTypeOf('function');
+    expect(
+      compose.selectedComposeSkillConflictIds?.(
+        [
+          { from: 'one', skills: ['notes'] },
+          { from: 'two', skills: ['notes', 'unrelated'] },
+        ],
+        catalog,
+      ),
+    ).toEqual(['notes']);
+    expect(
+      compose.selectedComposeSkillConflictIds?.(
+        [
+          { from: 'same', skills: ['notes'] },
+          { from: 'same', skills: ['notes'] },
+        ],
+        [{ from: 'same', skills: ['notes'] }],
+      ),
+    ).toEqual([]);
+    expect(
+      compose.selectedComposeSkillConflictIds?.(
+        [
+          { from: 'one', skills: ['notes'] },
+          { from: 'two', skills: ['notes'] },
+        ],
+        [
+          { from: 'one', skills: ['notes'] },
+          { from: 'two', skills: [] },
+        ],
+      ),
+    ).toEqual([]);
+
+    expect(
+      compose.composeInstallDisabledReasons?.({
+        preview: undefined,
+        hasSuccessfulPreview: false,
+        previewStale: false,
+        previewPending: false,
+        resolutions: [],
+        acknowledgement: false,
+      }),
+    ).toEqual(['notPreviewed']);
+    expect(
+      compose.composeInstallDisabledReasons?.({
+        preview,
+        hasSuccessfulPreview: true,
+        previewStale: true,
+        previewPending: false,
+        resolutions: [],
+        acknowledgement: false,
+      }),
+    ).toEqual(['stalePreview']);
+    expect(
+      compose.composeInstallDisabledReasons?.({
+        preview,
+        hasSuccessfulPreview: true,
+        previewStale: false,
+        previewPending: true,
+        resolutions: [],
+        acknowledgement: false,
+      }),
+    ).toEqual(['previewPending']);
+    expect(
+      compose.composeInstallDisabledReasons?.({
+        preview,
+        hasSuccessfulPreview: true,
+        previewStale: false,
+        previewPending: false,
+        resolutions: [],
+        acknowledgement: false,
+      }),
+    ).toEqual(['unresolvedConflicts', 'unknownLicenseNotAcknowledged']);
+  });
+
+  it('immediately marks a successful compose preview stale after a source change', async () => {
+    const sourceUrl = 'https://github.com/dsh-packs/web-dev';
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [{ from: sourceUrl, skills: ['notes'] }],
+            selected: [],
+            conflicts: [],
+          },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'stale-preview';
+    profile.fire('input');
+    source.value = sourceUrl;
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    source.value = 'https://github.com/dsh-packs/research-writing';
+    source.fire('input');
+    const stale = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className ===
+          'compose-feedback compose-feedback-info' &&
+        element.textContent === 'Source configuration changed; preview composition again.',
+    );
+    expect(stale).toHaveLength(1);
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+  });
+
+  it('shows only the pending compose reason while a stale replacement preview is in flight', async () => {
+    const sourceUrl = 'https://github.com/dsh-packs/web-dev';
+    const deferred = deferredResponse();
+    const document = new FakeDocument();
+    const window = new FakeWindow('http://127.0.0.1/?token=memory-token#overview');
+    const calls: Array<{ readonly input: unknown; readonly init?: RequestInit }> = [];
+    const previewBody = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: {
+        phase: 'preview',
+        sourceSkills: [{ from: sourceUrl, skills: ['notes'] }],
+        selected: [],
+        conflicts: [],
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+        calls.push(init === undefined ? { input } : { input, init });
+        if (calls.length === 1) return { status: 200, json: async () => statusBody } as Response;
+        if (calls.length === 2) return { status: 200, json: async () => previewBody } as Response;
+        return deferred.promise;
+      }),
+    );
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('HTMLInputElement', FakeInputElement);
+    vi.stubGlobal('HTMLSelectElement', FakeElement);
+    vi.stubGlobal('HTMLTextAreaElement', FakeTextAreaElement);
+    const root = document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    window.location.hash = '#compose';
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'pending-replacement';
+    profile.fire('input');
+    source.value = sourceUrl;
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    source.value = 'https://github.com/dsh-packs/research-writing';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(visibleText(root)).toContain(
+      'Previewing: resolving sources and downloading archives; this may take tens of seconds…',
+    );
+    expect(visibleText(root)).not.toContain(
+      'Source configuration changed; preview composition again.',
+    );
+  });
+
+  it('marks profile, skill, source addition, and source removal stale immediately', async () => {
+    const first = 'https://github.com/dsh-packs/web-dev';
+    const second = 'https://github.com/dsh-packs/research-writing';
+    const preview = (
+      sourceSkills: readonly { readonly from: string; readonly skills: readonly string[] }[],
+    ) => ({
+      diagnostics: [],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills, selected: [], conflicts: [] },
+    });
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: preview([{ from: first, skills: ['notes'] }]) },
+      { status: 200, body: preview([{ from: first, skills: ['notes'] }]) },
+      { status: 200, body: preview([{ from: first, skills: ['notes'] }]) },
+      {
+        status: 200,
+        body: preview([
+          { from: first, skills: ['notes'] },
+          { from: second, skills: ['notes'] },
+        ]),
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    let composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'all-stale-inputs';
+    profile.fire('input');
+    source.value = first;
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    const expectStale = (): void => {
+      expect(
+        descendants(root).filter(
+          (element) =>
+            (element as unknown as { readonly className?: string }).className ===
+              'compose-feedback compose-feedback-info' &&
+            element.textContent === 'Source configuration changed; preview composition again.',
+        ),
+      ).toHaveLength(1);
+      expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+    };
+    const changedProfile = composeTextInputs(root)[1];
+    if (changedProfile === undefined) throw new Error('expected profile after preview');
+    changedProfile.value = 'all-stale-inputs-next';
+    changedProfile.fire('input');
+    expectStale();
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    const cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const notes = cards[0] === undefined ? undefined : skillCheckbox(cards[0], 'notes');
+    if (notes === undefined) throw new Error('expected skill checkbox');
+    notes.checked = true;
+    notes.fire('change');
+    expectStale();
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    elementWithText(root, 'Add source')?.fire('click');
+    expectStale();
+    composeInputs = composeTextInputs(root);
+    const addedSource = composeInputs[3];
+    if (addedSource === undefined) throw new Error('expected added source');
+    addedSource.value = second;
+    addedSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    const remove = descendants(root)
+      .filter((element) => element.tagName === 'button' && element.textContent === 'Remove source')
+      .at(-1);
+    if (remove === undefined) throw new Error('expected removable source');
+    remove.fire('click');
+    expectStale();
+  });
+
+  it('updates client conflict controls from selected skills without another preview request', async () => {
+    const first = 'https://github.com/dsh-packs/web-dev';
+    const second = 'https://github.com/dsh-packs/research-writing';
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [
+              { from: first, skills: ['notes'] },
+              { from: second, skills: ['notes', 'unrelated'] },
+            ],
+            selected: [],
+            conflicts: [],
+          },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const firstSource = composeInputs[2];
+    const secondSource = composeInputs[3];
+    if (profile === undefined || firstSource === undefined || secondSource === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'client-conflicts';
+    profile.fire('input');
+    firstSource.value = first;
+    firstSource.fire('input');
+    secondSource.value = second;
+    secondSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    let cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const firstNotes = cards[0] === undefined ? undefined : skillCheckbox(cards[0], 'notes');
+    if (firstNotes === undefined) throw new Error('expected first notes checkbox');
+    firstNotes.checked = true;
+    firstNotes.fire('change');
+
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const secondNotes = cards[1] === undefined ? undefined : skillCheckbox(cards[1], 'notes');
+    if (secondNotes === undefined) throw new Error('expected second notes checkbox');
+    secondNotes.checked = true;
+    secondNotes.fire('change');
+    expect(requestBodies(fakes.calls)).toHaveLength(2);
+    expect(visibleText(root)).toContain(
+      'Client-side selection feedback; preview results remain authoritative.',
+    );
+    expect(visibleText(root)).toContain('notes');
+    expect(inputs(root).filter((input) => input.type === 'radio')).toHaveLength(2);
+
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const unrelated = cards[1] === undefined ? undefined : skillCheckbox(cards[1], 'unrelated');
+    if (unrelated === undefined) throw new Error('expected unrelated checkbox');
+    unrelated.checked = true;
+    unrelated.fire('change');
+    expect(visibleText(root)).not.toContain('skills/unrelated');
+
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const clearFirstNotes = cards[0] === undefined ? undefined : skillCheckbox(cards[0], 'notes');
+    if (clearFirstNotes === undefined) throw new Error('expected first notes checkbox again');
+    clearFirstNotes.checked = false;
+    clearFirstNotes.fire('change');
+    expect(inputs(root).filter((input) => input.type === 'radio')).toHaveLength(0);
+    expect(requestBodies(fakes.calls)).toHaveLength(2);
+  });
+
+  it('rejects partial and failed preview catalogs rather than aligning skills by source position', async () => {
+    const first = 'https://github.com/dsh-packs/web-dev';
+    const second = 'https://github.com/dsh-packs/research-writing';
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [{ from: first, skills: ['notes'] }],
+            selected: [],
+            conflicts: [],
+          },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 1,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [
+              { from: first, skills: ['notes'] },
+              { from: second, skills: ['notes'] },
+            ],
+            selected: [],
+            conflicts: [],
+          },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    let composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const firstSource = composeInputs[2];
+    const secondSource = composeInputs[3];
+    if (profile === undefined || firstSource === undefined || secondSource === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'catalog-identity';
+    profile.fire('input');
+    firstSource.value = second;
+    firstSource.fire('input');
+    secondSource.value = first;
+    secondSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    let cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    expect(cards.every((card) => skillCheckbox(card, 'notes') === undefined)).toBe(true);
+
+    composeInputs = composeTextInputs(root);
+    const restoredFirstSource = composeInputs[2];
+    const restoredSecondSource = composeInputs[3];
+    if (restoredFirstSource === undefined || restoredSecondSource === undefined)
+      throw new Error('expected source inputs after partial preview');
+    restoredFirstSource.value = first;
+    restoredFirstSource.fire('input');
+    restoredSecondSource.value = second;
+    restoredSecondSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    expect(cards.every((card) => skillCheckbox(card, 'notes') === undefined)).toBe(true);
+    expect(inputs(root).filter((input) => input.type === 'radio')).toHaveLength(0);
+  });
+
+  it('requires unknown-license acknowledgement and sends it only with the compose plan', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [
+            {
+              code: 'W_COMPOSE_UNKNOWN_LICENSE',
+              severity: 'warning',
+              message: 'license is unknown',
+            },
+          ],
+          exitCode: 0,
+          metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+        },
+      },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'acknowledged-license';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls)[1]?.input).not.toHaveProperty('allowUnknownLicense');
+    expect(visibleText(root)).toContain('Unknown license has not been acknowledged.');
+    const acknowledgementLabel = descendants(root).find(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className ===
+          'compose-skill-option' &&
+        element.textContent ===
+          'I acknowledge that some sources do not declare a license and agree to continue composing.',
+    );
+    const acknowledgement = acknowledgementLabel?.children.find(
+      (element): element is FakeInputElement => element instanceof FakeInputElement,
+    );
+    if (acknowledgement === undefined) throw new Error('expected acknowledgement checkbox');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+    acknowledgement.checked = true;
+    acknowledgement.fire('change');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)?.input).toMatchObject({
+      allowUnknownLicense: true,
+    });
+  });
+
+  it('clears unknown-license acknowledgement after a later preview no longer warns', async () => {
+    const warningPreview = {
+      diagnostics: [
+        { code: 'W_COMPOSE_UNKNOWN_LICENSE', severity: 'warning', message: 'license is unknown' },
+      ],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+    };
+    const normalPreview = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: warningPreview },
+      { status: 200, body: normalPreview },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'reset-license-acknowledgement';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    const acknowledgement = descendants(root)
+      .find(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className ===
+            'compose-skill-option' &&
+          element.textContent ===
+            'I acknowledge that some sources do not declare a license and agree to continue composing.',
+      )
+      ?.children.find(
+        (element): element is FakeInputElement => element instanceof FakeInputElement,
+      );
+    if (acknowledgement === undefined) throw new Error('expected acknowledgement checkbox');
+    acknowledgement.checked = true;
+    acknowledgement.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className ===
+            'compose-skill-option' &&
+          element.textContent ===
+            'I acknowledge that some sources do not declare a license and agree to continue composing.',
+      ),
+    ).toBe(false);
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)?.input).not.toHaveProperty('allowUnknownLicense');
+  });
+
+  it('rejects duplicate-count and malformed preview catalogs before rendering selectable skills', async () => {
+    const sourceUrl = 'https://github.com/dsh-packs/web-dev';
+    const preview = (sourceSkills: unknown) => ({
+      diagnostics: [],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills, selected: [], conflicts: [] },
+    });
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: preview([{ from: sourceUrl, skills: ['notes'] }]) },
+      {
+        status: 200,
+        body: preview([
+          { from: sourceUrl, skills: ['notes'] },
+          { from: sourceUrl, skills: ['notes'] },
+          { from: sourceUrl, skills: ['notes'] },
+        ]),
+      },
+      {
+        status: 200,
+        body: preview([
+          { from: sourceUrl, skills: ['notes'] },
+          { from: sourceUrl, skills: 3 },
+        ]),
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const firstSource = composeInputs[2];
+    const secondSource = composeInputs[3];
+    if (profile === undefined || firstSource === undefined || secondSource === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'duplicate-catalog';
+    profile.fire('input');
+    firstSource.value = sourceUrl;
+    firstSource.fire('input');
+    secondSource.value = sourceUrl;
+    secondSource.fire('input');
+
+    const expectNoCatalogSkills = (): void => {
+      const cards = descendants(root).filter(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className === 'compose-source',
+      );
+      expect(cards).toHaveLength(2);
+      expect(cards.every((card) => skillCheckbox(card, 'notes') === undefined)).toBe(true);
+      expect(inputs(root).filter((input) => input.type === 'radio')).toHaveLength(0);
+    };
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expectNoCatalogSkills();
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expectNoCatalogSkills();
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expectNoCatalogSkills();
+  });
+
+  it('offers preferred sources only from selected catalog-backed conflict participants', async () => {
+    const first = 'https://github.com/dsh-packs/web-dev';
+    const second = 'https://github.com/dsh-packs/research-writing';
+    const third = 'https://github.com/dsh-packs/ops-runbook';
+    const preview = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: {
+        phase: 'preview',
+        sourceSkills: [
+          { from: first, skills: ['unrelated'] },
+          { from: second, skills: ['notes'] },
+          { from: third, skills: ['notes'] },
+        ],
+        selected: [],
+        conflicts: [{ path: 'notes' }],
+      },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: preview },
+      { status: 200, body: preview },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    elementWithText(root, 'Add source')?.fire('click');
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const firstSource = composeInputs[2];
+    const secondSource = composeInputs[3];
+    const thirdSource = composeInputs[4];
+    if (
+      profile === undefined ||
+      firstSource === undefined ||
+      secondSource === undefined ||
+      thirdSource === undefined
+    )
+      throw new Error('expected compose inputs');
+    profile.value = 'participant-preference';
+    profile.fire('input');
+    firstSource.value = first;
+    firstSource.fire('input');
+    secondSource.value = second;
+    secondSource.fire('input');
+    thirdSource.value = third;
+    thirdSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    let cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const secondNotes = cards[1] === undefined ? undefined : skillCheckbox(cards[1], 'notes');
+    if (secondNotes === undefined) throw new Error('expected second notes checkbox');
+    secondNotes.checked = true;
+    secondNotes.fire('change');
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const thirdNotes = cards[2] === undefined ? undefined : skillCheckbox(cards[2], 'notes');
+    if (thirdNotes === undefined) throw new Error('expected third notes checkbox');
+    thirdNotes.checked = true;
+    thirdNotes.fire('change');
+    const prefer = inputs(root).find((input) => input.type === 'radio');
+    if (prefer === undefined) throw new Error('expected participant preference');
+    prefer.checked = true;
+    prefer.fire('change');
+    const sourceSelect = descendants(root)
+      .filter((element) => element.tagName === 'select')
+      .at(-1);
+    if (sourceSelect === undefined) throw new Error('expected participant source selector');
+    expect(sourceSelect.value).toBe(second);
+    expect(sourceSelect.children.map((option) => option.value)).toEqual([second, third]);
+    sourceSelect.value = third;
+    sourceSelect.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)?.input).toMatchObject({
+      spec: { resolve: [{ id: 'notes', prefer: third }] },
+    });
+  });
+
+  it('does not leak a checked unknown-license acknowledgement through an invalid preview', async () => {
+    const warningPreview = {
+      diagnostics: [
+        { code: 'W_COMPOSE_UNKNOWN_LICENSE', severity: 'warning', message: 'license is unknown' },
+      ],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+    };
+    const invalidPreview = {
+      diagnostics: [{ code: 'E_COMPOSE', severity: 'error', message: 'preview failed' }],
+      exitCode: 1,
+      metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+    };
+    const normalPreview = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: warningPreview },
+      { status: 200, body: invalidPreview },
+      { status: 200, body: normalPreview },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'invalid-preview-clears-ack';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    const acknowledgement = descendants(root)
+      .find(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className ===
+            'compose-skill-option' &&
+          element.textContent ===
+            'I acknowledge that some sources do not declare a license and agree to continue composing.',
+      )
+      ?.children.find(
+        (element): element is FakeInputElement => element instanceof FakeInputElement,
+      );
+    if (acknowledgement === undefined) throw new Error('expected acknowledgement checkbox');
+    acknowledgement.checked = true;
+    acknowledgement.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className ===
+            'compose-skill-option' &&
+          element.textContent ===
+            'I acknowledge that some sources do not declare a license and agree to continue composing.',
+      ),
+    ).toBe(false);
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)?.input).not.toHaveProperty('allowUnknownLicense');
+  });
+
+  it('keeps profile and source text input continuous across immediate compose rerenders', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+
+    let composeInputs = composeTextInputs(root);
+    const firstProfile = composeInputs[1];
+    if (firstProfile === undefined) throw new Error('expected profile input');
+    firstProfile.value = 'a';
+    firstProfile.fire('input');
+    composeInputs = composeTextInputs(root);
+    const secondProfile = composeInputs[1];
+    if (secondProfile === undefined) throw new Error('expected rerendered profile input');
+    expect(secondProfile).not.toBe(firstProfile);
+    secondProfile.value = 'ab';
+    secondProfile.fire('input');
+
+    composeInputs = composeTextInputs(root);
+    const firstSource = composeInputs[2];
+    if (firstSource === undefined) throw new Error('expected source input');
+    firstSource.value = 'github:owner/a';
+    firstSource.fire('input');
+    composeInputs = composeTextInputs(root);
+    const secondSource = composeInputs[2];
+    if (secondSource === undefined) throw new Error('expected rerendered source input');
+    expect(secondSource).not.toBe(firstSource);
+    secondSource.value = 'github:owner/ab';
+    secondSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'composePreview',
+      input: { spec: { name: 'ab-ui', include: [{ from: 'github:owner/ab', skills: ['*'] }] } },
+    });
+  });
+
+  it('commits composed profile and source text only at compositionend', async () => {
+    const firstSource = 'https://github.com/dsh-packs/web-dev';
+    const secondSource = 'https://github.com/dsh-packs/research-writing';
+    const preview = (from: string): JsonReport => ({
+      status: 200,
+      body: {
+        diagnostics: [],
+        exitCode: 0,
+        metadata: {
+          phase: 'preview',
+          sourceSkills: [{ from, skills: ['notes'] }],
+          selected: [],
+          conflicts: [],
+        },
+      },
+    });
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      preview(firstSource),
+      preview(firstSource),
+      preview(secondSource),
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+
+    let composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    if (profile === undefined) throw new Error('expected profile input');
+    profile.value = 'ime-profile';
+    profile.fire('input');
+    composeInputs = composeTextInputs(root);
+    const source = composeInputs[2];
+    if (source === undefined) throw new Error('expected source input');
+    source.value = firstSource;
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    const composingProfile = composeTextInputs(root)[1];
+    if (composingProfile === undefined) throw new Error('expected current profile input');
+    composingProfile.value = 'ime-profile-next';
+    fireComposeTextEvent(composingProfile, 'input', true);
+    expect(composeTextInputs(root)[1]).toBe(composingProfile);
+    expect(visibleText(root)).not.toContain(
+      'Source configuration changed; preview composition again.',
+    );
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    fireComposeTextEvent(composingProfile, 'compositionend');
+    expect(visibleText(root)).toContain('Source configuration changed; preview composition again.');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'composePreview',
+      input: { spec: { name: 'ime-profile-next' } },
+    });
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    const composingSource = composeTextInputs(root)[2];
+    if (composingSource === undefined) throw new Error('expected current source input');
+    composingSource.value = secondSource;
+    fireComposeTextEvent(composingSource, 'input', true);
+    expect(composeTextInputs(root)[2]).toBe(composingSource);
+    expect(visibleText(root)).not.toContain(
+      'Source configuration changed; preview composition again.',
+    );
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    fireComposeTextEvent(composingSource, 'compositionend');
+    expect(visibleText(root)).toContain('Source configuration changed; preview composition again.');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'composePreview',
+      input: { spec: { include: [{ from: secondSource, skills: ['*'] }] } },
+    });
+  });
+
+  it('keeps a composing profile mounted while its pending preview resolves', async () => {
+    const deferredPreview = deferredResponse();
+    const document = new FakeDocument();
+    const window = new FakeWindow('http://127.0.0.1/?token=memory-token#overview');
+    const calls: Array<{ readonly input: unknown; readonly init?: RequestInit }> = [];
+    const source = 'https://github.com/dsh-packs/web-dev';
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+      calls.push(init === undefined ? { input } : { input, init });
+      if (calls.length === 1) return { status: 200, json: async () => statusBody } as Response;
+      if (calls.length === 2) return deferredPreview.promise;
+      return {
+        status: 200,
+        json: async () => ({
+          diagnostics: [],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [{ from: source, skills: ['notes'] }],
+            selected: [],
+            conflicts: [],
+          },
+        }),
+      } as Response;
+    });
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('HTMLInputElement', FakeInputElement);
+    vi.stubGlobal('HTMLSelectElement', FakeElement);
+    vi.stubGlobal('HTMLTextAreaElement', FakeTextAreaElement);
+    const root = document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    window.location.hash = '#compose';
+
+    let composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    if (profile === undefined) throw new Error('expected profile input');
+    profile.value = 'async-ime';
+    profile.fire('input');
+    composeInputs = composeTextInputs(root);
+    const sourceInput = composeInputs[2];
+    if (sourceInput === undefined) throw new Error('expected source input');
+    sourceInput.value = source;
+    sourceInput.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    const composingProfile = composeTextInputs(root)[1];
+    if (composingProfile === undefined) throw new Error('expected pending profile input');
+    const draft = 'async-ime-draft';
+    composingProfile.value = draft;
+    fireComposeTextEvent(composingProfile, 'input', true);
+    deferredPreview.resolve({
+      status: 200,
+      json: async () => ({
+        diagnostics: [],
+        exitCode: 0,
+        metadata: {
+          phase: 'preview',
+          sourceSkills: [{ from: source, skills: ['notes'] }],
+          selected: [],
+          conflicts: [],
+        },
+      }),
+    } as Response);
+    await settle();
+
+    expect(composeTextInputs(root)[1]).toBe(composingProfile);
+    expect(composeTextInputs(root)[1]?.value).toBe(draft);
+    expect(visibleText(root)).toContain(
+      'Previewing: resolving sources and downloading archives; this may take tens of seconds…',
+    );
+    expect(visibleText(root)).not.toContain(
+      'Source configuration changed; preview composition again.',
+    );
+
+    fireComposeTextEvent(composingProfile, 'compositionend');
+    expect(visibleText(root)).toContain('Source configuration changed; preview composition again.');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(requestBodies(calls).at(-1)).toMatchObject({
+      operation: 'composePreview',
+      input: { spec: { name: draft } },
+    });
+  });
+
+  it.each([
+    ['profile', 1, 'detached-profile-draft'],
+    ['source', 2, 'https://github.com/dsh-packs/research-writing'],
+  ] as const)(
+    'ignores a detached %s compositionend after leaving compose',
+    async (kind, inputIndex, draft) => {
+      const profileName = 'detached-composition';
+      const source = 'https://github.com/dsh-packs/web-dev';
+      const preview = {
+        diagnostics: [],
+        exitCode: 0,
+        metadata: {
+          phase: 'preview',
+          sourceSkills: [{ from: source, skills: ['notes'] }],
+          selected: [],
+          conflicts: [],
+        },
+      };
+      const fakes = installBrowserFakes([
+        { status: 200, body: statusBody },
+        { status: 200, body: preview },
+        { status: 200, body: preview },
+      ]);
+      const root = fakes.document.createElement('main');
+      startBrowserUi(root as unknown as HTMLElement);
+      await settle();
+      elementWithText(root, 'EN')?.fire('click');
+      fakes.window.location.hash = '#compose';
+
+      let composeInputs = composeTextInputs(root);
+      const profile = composeInputs[1];
+      if (profile === undefined) throw new Error('expected profile input');
+      profile.value = profileName;
+      profile.fire('input');
+      composeInputs = composeTextInputs(root);
+      const sourceInput = composeInputs[2];
+      if (sourceInput === undefined) throw new Error('expected source input');
+      sourceInput.value = source;
+      sourceInput.fire('input');
+      elementWithText(root, 'Preview composition')?.fire('click');
+      await settle();
+      expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+      const detachedInput = composeTextInputs(root)[inputIndex];
+      if (detachedInput === undefined) throw new Error(`expected ${kind} input`);
+      detachedInput.value = draft;
+      fireComposeTextEvent(detachedInput, 'input', true);
+      fakes.window.location.hash = '#overview';
+      fireComposeTextEvent(detachedInput, 'compositionend');
+      fakes.window.location.hash = '#compose';
+
+      expect(composeTextInputs(root)[inputIndex]?.value).toBe(
+        kind === 'profile' ? profileName : source,
+      );
+      expect(visibleText(root)).not.toContain(
+        'Source configuration changed; preview composition again.',
+      );
+      expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+      elementWithText(root, 'Preview composition')?.fire('click');
+      await settle();
+      expect(requestBodies(fakes.calls).at(-1)).toMatchObject(
+        kind === 'profile'
+          ? { operation: 'composePreview', input: { spec: { name: profileName } } }
+          : {
+              operation: 'composePreview',
+              input: { spec: { include: [{ from: source, skills: ['*'] }] } },
+            },
+      );
+    },
+  );
+
+  it('stales a fresh preview after changing a resolution while retaining it for the next preview', async () => {
+    const first = 'https://github.com/dsh-packs/web-dev';
+    const second = 'https://github.com/dsh-packs/research-writing';
+    const preview = {
+      diagnostics: [],
+      exitCode: 0,
+      metadata: {
+        phase: 'preview',
+        sourceSkills: [
+          { from: first, skills: ['notes', 'unrelated'] },
+          { from: second, skills: ['notes'] },
+        ],
+        selected: [],
+        conflicts: [{ path: 'notes' }],
+      },
+    };
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      { status: 200, body: preview },
+      { status: 200, body: preview },
+      { status: 200, body: preview },
+      { status: 200, body: preview },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, 'Add source')?.fire('click');
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const firstSource = composeInputs[2];
+    const secondSource = composeInputs[3];
+    if (profile === undefined || firstSource === undefined || secondSource === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'resolution-stale';
+    profile.fire('input');
+    firstSource.value = first;
+    firstSource.fire('input');
+    secondSource.value = second;
+    secondSource.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    let cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const firstNotes = cards[0] === undefined ? undefined : skillCheckbox(cards[0], 'notes');
+    if (firstNotes === undefined) throw new Error('expected first notes checkbox');
+    firstNotes.checked = true;
+    firstNotes.fire('change');
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const secondNotes = cards[1] === undefined ? undefined : skillCheckbox(cards[1], 'notes');
+    if (secondNotes === undefined) throw new Error('expected second notes checkbox');
+    secondNotes.checked = true;
+    secondNotes.fire('change');
+    const prefer = inputs(root).find((input) => input.type === 'radio');
+    if (prefer === undefined) throw new Error('expected preference radio');
+    prefer.checked = true;
+    prefer.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    const sourceSelect = descendants(root)
+      .filter((element) => element.tagName === 'select')
+      .at(-1);
+    if (sourceSelect === undefined) throw new Error('expected preference source selector');
+    sourceSelect.value = second;
+    sourceSelect.fire('change');
+    expect(visibleText(root)).toContain('Source configuration changed; preview composition again.');
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls)).toHaveLength(3);
+
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'composePreview',
+      input: { spec: { resolve: [{ id: 'notes', prefer: second }] } },
+    });
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(false);
+
+    cards = descendants(root).filter(
+      (element) =>
+        (element as unknown as { readonly className?: string }).className === 'compose-source',
+    );
+    const unrelated = cards[0] === undefined ? undefined : skillCheckbox(cards[0], 'unrelated');
+    if (unrelated === undefined) throw new Error('expected unrelated checkbox');
+    unrelated.checked = true;
+    unrelated.fire('change');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)).toMatchObject({
+      operation: 'composePreview',
+      input: { spec: { resolve: [] } },
+    });
+    expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
+  });
+
+  it('omits unknown-license consent from a normal compose plan', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+        },
+      },
+      { status: 200, body: planBody },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+    elementWithText(root, 'EN')?.fire('click');
+    fakes.window.location.hash = '#compose';
+    const composeInputs = composeTextInputs(root);
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'normal-license';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+    elementWithText(root, 'Compose and install')?.fire('click');
+    await settle();
+    expect(requestBodies(fakes.calls).at(-1)?.input).not.toHaveProperty('allowUnknownLicense');
   });
 });

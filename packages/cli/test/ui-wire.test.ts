@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 import type {
+  UiComposeInput,
+  UiComposePreviewInput,
   UiComposeSpec,
   UiDangerousPermission,
   UiRequest,
@@ -16,29 +18,33 @@ const permission = {
   subject: '@scope/plugin@1.2.3',
 } as const satisfies UiDangerousPermission;
 
+const composeInput = {
+  profile: 'combined-notes',
+  allowUnknownLicense: true,
+  spec: {
+    composeVersion: 0,
+    name: 'combined-notes',
+    version: '1.0.0',
+    description: 'Combined notes skills.',
+    author: 'dshpack test',
+    license: 'MIT',
+    include: [{ from: './source', skills: ['notes'] }],
+    defaults: { permissionPreset: 'workspace-write' },
+  },
+} as const satisfies UiComposeInput;
+
 const writeInputs = {
   install: { source: './pack' },
   uninstall: { profile: 'example' },
   update: { profile: 'example' },
   restore: { profile: 'example' },
   gc: {},
-  compose: {
-    profile: 'combined-notes',
-    spec: {
-      composeVersion: 0,
-      name: 'combined-notes',
-      version: '1.0.0',
-      description: 'Combined notes skills.',
-      author: 'dshpack test',
-      license: 'MIT',
-      include: [{ from: './source', skills: ['notes'] }],
-      defaults: { permissionPreset: 'workspace-write' },
-    },
-  },
+  compose: composeInput,
   editSkill: { profile: 'combined-notes', skillId: 'notes', content: '# Notes\n' },
 } as const;
 
 const composeSpec = writeInputs.compose.spec satisfies UiComposeSpec;
+const composePreviewInput = { spec: composeSpec } as const satisfies UiComposePreviewInput;
 
 describe('UI wire contract', () => {
   it('represents every write as an itemized plan or digest-bound apply request', () => {
@@ -70,7 +76,7 @@ describe('UI wire contract', () => {
 
   it('keeps compose preview and skill content as path-free read contracts', () => {
     const requests: UiRequest[] = [
-      { operation: 'composePreview', input: { spec: composeSpec } },
+      { operation: 'composePreview', input: composePreviewInput },
       { operation: 'skillContent', input: { profile: 'combined-notes', skillId: 'notes' } },
     ];
 
@@ -117,6 +123,14 @@ acceptRequest({
   operation: 'skillContent',
   // @ts-expect-error clients submit an id, never a filesystem path
   input: { profile: 'combined-notes', path: 'skills/notes/SKILL.md' },
+});
+acceptRequest({
+  operation: 'composePreview',
+  input: {
+    spec: composeSpec,
+    // @ts-expect-error license consent belongs only to the compose write input
+    allowUnknownLicense: true,
+  },
 });
 // @ts-expect-error apply must bind the reviewed plan digest
 acceptRequest({ operation: 'gc', phase: 'apply', input: {}, authorizedDangerousPermissions: [] });

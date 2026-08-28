@@ -118,6 +118,7 @@ export type UiGcInput = Omit<GcInput, 'dshHome' | 'dryRun'>;
 export interface UiComposeInput {
   readonly profile: string;
   readonly spec: UiComposeSpec;
+  readonly allowUnknownLicense?: boolean;
 }
 export interface UiEditSkillInput extends UiSkillContentInput {
   readonly content: string;

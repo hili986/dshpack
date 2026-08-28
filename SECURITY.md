@@ -48,7 +48,7 @@
 - **`compose` 不放宽任何一条来源纪律**：它的 `github:` / `tarball:` 来源走的是 `install` 的同一套获取链，40 位 SHA 与 SRI 一样强制，在 schema 层就拒绝短 SHA、分支名、大写 SHA 与明文 http。来源失败会保留 adapter 自己的分类（篡改的 tarball 是 exit 20，不是通用契约码）——**自动化据退出码决定要不要重试时，这个区别是有意义的**；凭据命中仍压过一切，安全不会被降级为契约噪音。
 - **归档条目按类型处置而非盲目跟随。** symbolic link、hard link、设备和 FIFO 等非普通条目从不部署、从不跟随，并以带条目路径的 warning diagnostic 告知用户跳过了什么；`..`、绝对路径、解析损坏的 header 等仍按整档 `ARCHIVE_UNSAFE` 拒绝。
 - **compose 的非 pack 归档会选择性部署。** 对不含根 `pack.yml` 的来源，compose 仅部署安全 `.agents/skills/<id>/SKILL.md`；没有可组合 skill 时也只给出如实 warning、不会阻断其他来源。每个归档路径仍先做完整安全校验，非 skill 的普通条目不部署、不扫描，并以一条 `E_ARCHIVE_SELECTIVE_SKIPPED` warning 明示跳过的条目数与字节数；单文件、总量和条目数限制只计算部署集合。`install` 不使用这一模式，仍对完整 pack 归档执行全部条目、单文件与总量限制。
-- **`compose` 不修改素材内容，也不改写别人的许可声明**。来源 license 不明时需要显式 `--allow-unknown-license`（`compose` 没有 `--yes`，这是一道硬门）；与新 pack 声明冲突时如实列出并原样写进 `provenance`。同名冲突必须在 `resolve` 里显式解决，否则 exit 30 并列出**全部**冲突——静默地"后来的覆盖先来的"会让 pack 内容取决于 `include` 的书写顺序，而作者不会注意到。`rename` 本身也不能制造新冲突。
+- **`compose` 不修改素材内容，也不改写别人的许可声明**。来源 license 不明时，只有实际 compose 写入需要显式 `--allow-unknown-license`（`compose` 没有 `--yes`，这是一道硬门）；`--dry-run` 与 `composePreview` 仅保留 `W_COMPOSE_UNKNOWN_LICENSE` warning。与新 pack 声明冲突时如实列出并原样写进 `provenance`。同名冲突必须在 `resolve` 里显式解决，否则 exit 30 并列出**全部**冲突——静默地"后来的覆盖先来的"会让 pack 内容取决于 `include` 的书写顺序，而作者不会注意到。`rename` 本身也不能制造新冲突。
 - 本工具只终止自己派生的进程；不做进程树终止（Windows 上那等同 `taskkill /T`，会误杀用户正在运行的 dsh）。
 - **DSH_HOME 及其每一级祖先都不得是 symlink / junction / reparse point**，否则拒绝——链接可在校验与写入之间被换掉，使"路径在根内"的判断失效。判据是**逐级 `lstat`**，不是把路径字符串和 `realpath` 比：Windows 上 8.3 短名（`C:\Users\RUNNER~1\…`）和不同大小写拼法指向的是同一个目录、中间一个链接也没有，字符串却不相等。无法探查的祖先按"有链接"处理（fail closed）。
 
@@ -77,6 +77,7 @@
 - **样式是完全静态的。** 唯一的 `<style>` 块随 `index.html` 内置，无外部资源；UI 源码不得出现 `.style` 属性写入或 `setAttribute('style', …)`——持有 token 的页面上，动态 CSS 是与外链同族的外泄通道。
 - **浏览器 bundle 是可审计的。** 零运行时依赖（不引 React / Vue / Vite），由仓内既有构建器打成约 36 kB 的单文件。这是刻意的设计约束：用户要审计"我点的那个授权开关到底做了什么"时，应该读得懂发给他的那份产物。
 - **`composePreview` 是真正的只读操作。** 它只在私有临时目录中校验和组装；UI 接受本地目录、裸或固定 SHA 的 `github:`、GitHub 仓库 URL，以及带完整性信息的 `tarball:` 来源；裸 GitHub 输入会先解析为固定 SHA，preview、plan 与 provenance 只展示或保存该 pin。可导出 profile 的 `profile:` 来源仍被拒绝。测试对 `DSH_HOME` 做字节快照，任何目标写入都会失败。真正的 compose 安装仍复用 install 的 journal 事务和原有两步确认。
+- **未知 license 的 opt-in 不是安全闸门的豁免。** `--allow-unknown-license`（及 UI 中对应的显式确认）只确认实际 compose 写入前的 unknown license 策略闸门；它不改变仍为只读的 `composePreview`，也不放宽凭据扫描、路径闭合和安全本地来源校验、归档非普通条目的处理、token 校验、两阶段计划摘要，或逐项危险权限授权等任何安全闸门。
 - **Skill 编辑没有浏览器可控路径。** 请求只能携带 `profile`、安全字符的 `skillId` 与内容；`/`、`\\`、`..` 一律拒绝，服务端自行 resolve `skills/<skillId>/SKILL.md`，并再次证明目录和文件仍在 skills 根内、且不是链接或特殊文件。内容超过 256 KiB 在 plan 前硬拒。编辑不会改写 pack 的 installed metadata，所以它永远是用户本地 drift，而不是伪造的 pack 归属。
 
 ## 失败后的机器状态

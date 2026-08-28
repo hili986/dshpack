@@ -272,7 +272,7 @@ export async function composePack(
       originalId: originalSkillId(originalPath),
     }));
     const unknownLicense = diagnostics.some(({ code }) => code === 'W_COMPOSE_UNKNOWN_LICENSE');
-    if (unknownLicense && input.allowUnknownLicense !== true) {
+    if (unknownLicense && input.dryRun !== true && input.allowUnknownLicense !== true) {
       diagnostics.push(
         diagnostic(
           'E_COMPOSE_UNKNOWN_LICENSE_CONFIRM',
@@ -281,7 +281,7 @@ export async function composePack(
           '显式传入 --allow-unknown-license 以确认继续。',
         ),
       );
-      return result(output, input.dryRun === true, selected, diagnostics, EXIT_CODES.USER_DECLINED);
+      return result(output, false, selected, diagnostics, EXIT_CODES.USER_DECLINED);
     }
 
     if (input.dryRun === true)

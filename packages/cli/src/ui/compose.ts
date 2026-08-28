@@ -218,7 +218,6 @@ export async function previewCompose(
       }
       const composed = await (dependencies.compose ?? composePack)(
         {
-          allowUnknownLicense: true,
           composeFile: prepared.composeFile,
           dshHome,
           dryRun: true,
@@ -278,6 +277,7 @@ export async function composeAndInstall(
     const output = join(root, 'pack');
     await mkdir(root, { recursive: true, mode: 0o700 });
     const composed = await (dependencies.compose ?? composePack)({
+      allowUnknownLicense: input.allowUnknownLicense === true,
       composeFile: prepared.composeFile,
       dshHome,
       output,

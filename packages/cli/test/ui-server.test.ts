@@ -1107,6 +1107,128 @@ describe('M3 UI compose and skill operations', () => {
   } as const;
   const required = [{ kind: 'force', subject: 'combined-notes' }] as const;
 
+  it('allows the compose-only license acknowledgement through the write gateway', async () => {
+    const dshHome = await temporaryHome();
+    const runWrite = vi.fn(async ({ operation, phase }) => report({ operation, phase }));
+    const handle = await startUiServer({ dshHome, engines: inertEngines({ runWrite }) });
+    try {
+      const input = { ...composeInput, allowUnknownLicense: true } as const;
+      const planned = await post(
+        origin(handle.url),
+        {
+          operation: 'compose',
+          phase: 'plan',
+          input,
+          authorizedDangerousPermissions: [],
+        },
+        handle.token,
+      );
+      expect(planned).toMatchObject({ status: 200, body: { exitCode: EXIT_CODES.SUCCESS } });
+      expect(runWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: 'compose',
+          phase: 'plan',
+          input: expect.objectContaining({ allowUnknownLicense: true, dshHome }),
+        }),
+      );
+      const planDigest = (planned.body.metadata as JsonObject).planDigest as string;
+      const applied = await post(
+        origin(handle.url),
+        {
+          operation: 'compose',
+          phase: 'apply',
+          input,
+          authorizedDangerousPermissions: [],
+          planDigest,
+        },
+        handle.token,
+      );
+      expect(applied).toMatchObject({ status: 200, body: { exitCode: EXIT_CODES.SUCCESS } });
+      expect(runWrite).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          operation: 'compose',
+          phase: 'apply',
+          input: expect.objectContaining({ allowUnknownLicense: true, dshHome }),
+        }),
+      );
+
+      for (const request of [
+        {
+          operation: 'compose',
+          phase: 'plan',
+          input: { ...composeInput, allowUnknownLicense: 'true' },
+          authorizedDangerousPermissions: [],
+        },
+        {
+          operation: 'compose',
+          phase: 'plan',
+          input: { ...composeInput, unexpected: true },
+          authorizedDangerousPermissions: [],
+        },
+        {
+          operation: 'composePreview',
+          input: { spec: composeInput.spec, allowUnknownLicense: true },
+        },
+      ]) {
+        const denied = await post(origin(handle.url), request, handle.token);
+        expect(denied).toMatchObject({
+          status: 400,
+          body: { diagnostics: [expect.objectContaining({ code: 'E_UI_REQUEST' })] },
+        });
+      }
+      expect(runWrite).toHaveBeenCalledTimes(3);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('forwards the license acknowledgement to the default compose engine', async () => {
+    const dshHome = await temporaryHome();
+    const source = await enginePack({ assets: true });
+    const manifestPath = join(source, 'pack.yml');
+    const manifest = await readFile(manifestPath, 'utf8');
+    const unlicensed = manifest.replace('license: MIT', 'license: UNLICENSED');
+    expect(unlicensed).not.toBe(manifest);
+    await writeFile(manifestPath, unlicensed);
+    const lockPath = join(source, 'pack.lock.yml');
+    const lock = await readFile(lockPath, 'utf8');
+    await writeFile(
+      lockPath,
+      lock.replace(
+        /manifestSha256: .+/u,
+        `manifestSha256: sha256-${createHash('sha256').update(unlicensed).digest('base64url')}`,
+      ),
+    );
+    const handle = await startUiServer({
+      dshHome,
+      runtime: createNodeInstallRuntime(dshHome),
+    });
+    try {
+      const response = await post(
+        origin(handle.url),
+        {
+          operation: 'compose',
+          phase: 'plan',
+          input: {
+            ...composeInput,
+            allowUnknownLicense: true,
+            spec: { ...composeInput.spec, include: [{ from: source, skills: ['notes'] }] },
+          },
+          authorizedDangerousPermissions: [],
+        },
+        handle.token,
+      );
+      expect(response.status).toBe(200);
+      expect(response.body.diagnostics).toEqual(
+        expect.not.arrayContaining([
+          expect.objectContaining({ code: 'E_COMPOSE_UNKNOWN_LICENSE_CONFIRM' }),
+        ]),
+      );
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each([
     ['compose', composeInput],
     ['editSkill', editInput],

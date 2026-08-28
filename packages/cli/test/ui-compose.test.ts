@@ -260,7 +260,7 @@ describe('UI compose preview', () => {
   it('fails closed for invalid form data and source materialization while always cleaning the preview root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
     roots.push(root);
-    const compose = vi.fn(async () => ({
+    const compose = vi.fn(async (_input: unknown) => ({
       diagnostics: [],
       exitCode: EXIT_CODES.SUCCESS,
       metadata: { directory: '', dryRun: true, selected: [] },
@@ -321,7 +321,62 @@ describe('UI compose preview', () => {
       expect.objectContaining({ dryRun: true }),
       expect.objectContaining({ materializeSource: expect.any(Function) }),
     );
+    expect(compose.mock.calls[0]?.[0]).not.toHaveProperty('allowUnknownLicense');
     expect(materialize).toHaveBeenCalledOnce();
+  });
+
+  it('passes an explicit unknown-license acknowledgement to compose write calls only', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshpack-ui-compose-test-'));
+    roots.push(root);
+    const input = {
+      profile: 'combined-notes',
+      spec: {
+        composeVersion: 0,
+        name: 'combined-notes',
+        version: '1.0.0',
+        description: 'Check the compose write consent boundary.',
+        author: 'dshpack test',
+        license: 'MIT',
+        include: [{ from: './source', skills: ['notes'] }],
+        defaults: { permissionPreset: 'workspace-write' },
+      },
+    } as const;
+    const compose = vi.fn(async () => ({
+      diagnostics: [],
+      exitCode: EXIT_CODES.SUCCESS,
+      metadata: { directory: '', dryRun: false, selected: [] },
+    }));
+    const install = vi.fn(async () => ({
+      diagnostics: [],
+      exitCode: EXIT_CODES.SUCCESS,
+      metadata: {},
+    }));
+
+    await composeAndInstall(root, { ...input, allowUnknownLicense: true }, {} as never, 'plan', {
+      compose: compose as never,
+      install: install as never,
+    });
+    await composeAndInstall(root, input, {} as never, 'plan', {
+      compose: compose as never,
+      install: install as never,
+    });
+    await composeAndInstall(root, { ...input, allowUnknownLicense: false }, {} as never, 'plan', {
+      compose: compose as never,
+      install: install as never,
+    });
+
+    expect(compose).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ allowUnknownLicense: true }),
+    );
+    expect(compose).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ allowUnknownLicense: false }),
+    );
+    expect(compose).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ allowUnknownLicense: false }),
+    );
   });
 
   it('uses a stable compose plan digest and delegates both plan and apply to install', async () => {
