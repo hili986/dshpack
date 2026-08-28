@@ -15,6 +15,7 @@ import {
   presetExists,
 } from '../src/list/contracts.js';
 import { listProfiles } from '../src/list/engine.js';
+import { settingsContribution } from '../src/metadata/state-storage.js';
 
 const homes: string[] = [];
 const SHA256_A = `sha256-${createHash('sha256').update('list fixture A').digest('base64url')}`;
@@ -73,6 +74,30 @@ function marker(name: string) {
   };
 }
 
+function fullMarker(
+  name: string,
+  provenance: readonly { id: string; from: string; originalId: string; license: string }[],
+) {
+  return {
+    ...marker(name),
+    metadataVersion: 1,
+    provenance,
+    assets: [
+      {
+        id: name,
+        kind: 'profile',
+        target: `profiles/${name}`,
+        action: 'create',
+        identity: '1:2:3',
+        files: [{ path: 'package.json', sha256: SHA256_A, bytes: 1 }],
+      },
+    ],
+    settingsContribution: settingsContribution({}),
+    generation: 1,
+    installedBy: 'dshpack@0.5.4',
+  };
+}
+
 async function installed(root: string, name: string, value: unknown): Promise<void> {
   const directory = join(root, '.dshpack', 'installed');
   await mkdir(directory, { recursive: true });
@@ -128,6 +153,71 @@ describe('listProfiles', () => {
       { profile: 'untracked', status: 'untracked' },
     ]);
     expect(await snapshot(root)).toEqual(before);
+  });
+
+  it('projects all nine public provenance records for a composed a11 pack', async () => {
+    const root = await home();
+    const webDev = 'github:dsh-packs/web-dev#3414f1af3fd674998cea81716586f4716a538f50';
+    const researchWriting = 'profile:research-writing';
+    const provenance = [
+      {
+        id: 'academic-writing',
+        from: researchWriting,
+        originalId: 'academic-writing',
+        license: 'MIT',
+      },
+      { id: 'browser-testing', from: webDev, originalId: 'browser-testing', license: 'MIT' },
+      {
+        id: 'citation-verification',
+        from: researchWriting,
+        originalId: 'citation-verification',
+        license: 'MIT',
+      },
+      { id: 'commit-convention', from: webDev, originalId: 'commit-convention', license: 'MIT' },
+      { id: 'frontend-design', from: webDev, originalId: 'frontend-design', license: 'MIT' },
+      {
+        id: 'literature-review',
+        from: researchWriting,
+        originalId: 'literature-review',
+        license: 'MIT',
+      },
+      { id: 'paper-outline', from: researchWriting, originalId: 'paper-outline', license: 'MIT' },
+      { id: 'peer-review', from: researchWriting, originalId: 'peer-review', license: 'MIT' },
+      { id: 'web-research', from: webDev, originalId: 'web-research', license: 'MIT' },
+    ];
+    await profile(root, 'a11');
+    await installed(root, 'a11', fullMarker('a11', provenance));
+
+    const report = await listProfiles({ dshHome: root });
+
+    expect(report.metadata.profiles).toContainEqual(
+      expect.objectContaining({
+        profile: 'a11',
+        status: 'tracked',
+        packDetails: expect.objectContaining({ provenance }),
+      }),
+    );
+  });
+
+  it('does not project a local provenance path through the Pack details response', async () => {
+    const root = await home();
+    const localSource = resolve('/private-composed-pack');
+    await profile(root, 'private-pack');
+    await installed(
+      root,
+      'private-pack',
+      fullMarker('private-pack', [
+        { id: 'private-skill', from: localSource, originalId: 'private-skill', license: 'MIT' },
+      ]),
+    );
+
+    const report = await listProfiles({ dshHome: root });
+    const details = report.metadata.profiles.find(
+      (profile) => profile.status === 'tracked' && profile.profile === 'private-pack',
+    );
+
+    expect(details).toMatchObject({ packDetails: { provenance: [] } });
+    expect(JSON.stringify(report)).not.toContain(localSource);
   });
 
   it('lists a real dsh home the way dsh reads it, not the way a name check guesses', async () => {

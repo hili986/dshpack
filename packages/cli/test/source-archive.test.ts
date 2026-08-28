@@ -290,7 +290,10 @@ describe('source archive raw-header preflight', () => {
     const commit = '0123456789abcdef0123456789abcdef01234567';
     await mkdir(fullWorkspace);
     await mkdir(composeWorkspace);
-    await writeFile(source, paxArchive({ global: { comment: commit }, entries: githubPaxEntries(commit) }));
+    await writeFile(
+      source,
+      paxArchive({ global: { comment: commit }, entries: githubPaxEntries(commit) }),
+    );
 
     const full = await inspectAndExtractArchive(source, fullWorkspace, archiveFailure, { commit });
     await expect(lstat(join(full.directory, 'README.md'))).resolves.toMatchObject({
@@ -412,9 +415,9 @@ describe('source archive raw-header preflight', () => {
       commit,
     });
 
-    await expect(lstat(join(extracted.directory, longPath.slice('repo-commit/'.length)))).resolves.toMatchObject(
-      { isFile: expect.any(Function) },
-    );
+    await expect(
+      lstat(join(extracted.directory, longPath.slice('repo-commit/'.length))),
+    ).resolves.toMatchObject({ isFile: expect.any(Function) });
   });
 
   it('admits a per-entry PAX bag whose comment differs, the pin living in the global header', async () => {
@@ -429,7 +432,9 @@ describe('source archive raw-header preflight', () => {
           {
             name: 'repo-commit/',
             type: '5',
-            xHeaders: [{ comment: 'ffffffffffffffffffffffffffffffffffffffff', path: 'repo-commit/' }],
+            xHeaders: [
+              { comment: 'ffffffffffffffffffffffffffffffffffffffff', path: 'repo-commit/' },
+            ],
           },
           { name: 'repo-commit/README.md', data: 'x', xHeaders: [{ comment: commit }] },
         ],

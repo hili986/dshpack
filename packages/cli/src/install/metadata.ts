@@ -51,6 +51,7 @@ export function installedMetadata(
       version: plan.pack.version,
       manifestDigest: plan.manifestDigest,
     },
+    provenance: material.manifest.provenance ?? [],
     planDigest: plan.planDigest,
     installedAt,
     txid,

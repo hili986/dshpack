@@ -2,6 +2,11 @@
 
 ## 0.5.5
 
+**M3.14：组合 Pack 的 provenance 不再因路径形态被静默丢弃；Pack/漂移详情页也不再把“尚未选择上下文”与“健康的零漂移”伪装成空白。**
+
+- **provenance 贯通**：compose 对每个已选 skill 写入 `id` / `from` / `originalId` / `license`，并随 v1 安装标记投影到 `list` 的 Pack 详情；只显示 `github:` 与 `profile:` 的非本机来源，本机路径仍不穿过 UI 服务边界。
+- **空态可解释**：直达 Pack 或漂移页会给出下一步引导；diff 成功且本地漂移、上游差异、生效不一致三项均为空时，明确说明“无漂移：本地内容与锁定一致”。中英双语、既有授权模型与两步确认均未改变。
+
 **GitHub codeload 的逐条目 PAX provenance 钉可验证地通过，其他扩展元数据仍 fail closed。** M3.13 只容忍 GitHub 固定 commit 产生的同值 `comment`，不改变部署集合、归档扫描或确认模型。
 
 ### 修复

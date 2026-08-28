@@ -1,5 +1,5 @@
 import type { Dirent } from 'node:fs';
-import type { PackLock } from '@dshpack/core';
+import type { PackLock, PackManifest } from '@dshpack/core';
 import { type CommandReport, diagnostic, resolveDshHomeValue } from '../commands/shared.js';
 import { EXIT_CODES, type ExitCode } from '../exit-codes.js';
 import {
@@ -27,12 +27,11 @@ export type ListedProfile =
        * The UI needs immutable pack facts for its read-only detail panel.  This projection is
        * intentionally narrower than installed metadata: source locators may contain an absolute
        * local path, whereas manifest identity and the validated effective lock are safe facts to
-       * render as text.  Provenance therefore remains explicitly empty until a non-sensitive
-       * provenance contract exists.
+       * render as text.  Only compose's non-local provenance references are projected.
        */
       packDetails?: {
         manifest: { name: string; version: string; manifestDigest: string };
-        provenance: readonly [];
+        provenance: NonNullable<PackManifest['provenance']>;
         lock: PackLock;
       };
       installedAt: string;
@@ -70,6 +69,16 @@ function entries(result: SafePathResult<Dirent<string>[]>): Dirent<string>[] | u
 
 function sortNames(names: Iterable<string>): string[] {
   return [...names].sort();
+}
+
+function publicProvenance(metadata: {
+  metadataVersion: number;
+  provenance?: NonNullable<PackManifest['provenance']>;
+}): NonNullable<PackManifest['provenance']> {
+  if (metadata.metadataVersion !== 1) return [];
+  return (metadata.provenance ?? []).filter(
+    ({ from }) => from.startsWith('github:') || from.startsWith('profile:'),
+  );
 }
 
 /**
@@ -194,7 +203,7 @@ export async function listProfiles(input: ListInput): Promise<ListReport> {
           manifestDigest: metadataState.metadata.pack.manifestDigest,
         },
         // Do not forward metadata.source: it can include a user-specific absolute path.
-        provenance: [],
+        provenance: publicProvenance(metadataState.metadata),
         lock: metadataState.metadata.effectiveLock,
       },
       installedAt: metadataState.metadata.installedAt,

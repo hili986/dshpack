@@ -1086,6 +1086,63 @@ describe('browser main shell behavior', () => {
     expect(fakes.window.location.hash).toBe('#pack');
   });
 
+  it('guides a direct Pack-tab visit before overview supplies pack details', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#pack';
+
+    expect(visibleText(root)).toContain('请先在总览中选择 Profile 并点击“查看 Pack”。');
+    expect(
+      descendants(root).some(
+        (element) =>
+          (element as unknown as { readonly className?: string }).className ===
+            'compose-feedback compose-feedback-info' &&
+          element.textContent === '请先在总览中选择 Profile 并点击“查看 Pack”。',
+      ),
+    ).toBe(true);
+  });
+
+  it('guides a direct drift-tab visit when no Profile target is set', async () => {
+    const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#profile-diff';
+    await settle();
+
+    expect(visibleText(root)).toContain('请先在总览中选择 Profile 并点击“查看漂移”。');
+  });
+
+  it('explains that a successful empty drift comparison is healthy', async () => {
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [],
+          exitCode: 0,
+          metadata: { effectiveMismatch: [], localDrift: [], upstreamDelta: [] },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#profile-diff';
+    const profile = inputs(root).find((input) => input.type === 'text');
+    if (profile === undefined) throw new Error('missing drift Profile input');
+    profile.value = 'alpha';
+    elementWithText(root, '加载漂移对比')?.fire('click');
+    await settle();
+
+    expect(visibleText(root)).toContain('无漂移：本地内容与锁定一致。');
+  });
+
   it('requests list with an empty input and views row packDetails without replacing it from a write plan', async () => {
     const fakes = installBrowserFakes([
       { status: 200, body: statusBody },

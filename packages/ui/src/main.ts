@@ -593,6 +593,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let activeScreen: BrowserScreen = screenFromHash(window.location.hash);
   let overviewData: unknown;
   let diffData: unknown;
+  let diffSucceeded = false;
   let doctorData: unknown;
   let packData: unknown;
   let composeSources: readonly ComposeSourceForm[] = [{ from: '', skills: [] }];
@@ -713,6 +714,21 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   function setMessageKey(key: MessageKey): void {
     clientMessageKey = key;
     notice.textContent = message(state.locale, key);
+  }
+
+  function infoFeedback(key: MessageKey): HTMLParagraphElement {
+    const feedback = document.createElement('p');
+    feedback.className = 'compose-feedback compose-feedback-info';
+    feedback.textContent = message(state.locale, key);
+    return feedback;
+  }
+
+  function hasNoDrift(): boolean {
+    const currentDiff = diffData;
+    if (!diffSucceeded || !record(currentDiff)) return false;
+    return ['localDrift', 'upstreamDelta', 'effectiveMismatch'].every(
+      (key) => Array.isArray(currentDiff[key]) && currentDiff[key].length === 0,
+    );
   }
 
   function requestFromCurrentForm(): UiWriteRequest | undefined {
@@ -1352,6 +1368,9 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
           renderBrowserView({ kind: 'profile-diff', data: diffData, locale: state.locale }),
           handleReadControl,
         );
+        if (target.value.trim().length === 0)
+          activeMount.append(infoFeedback('guideDiffFromOverview'));
+        else if (hasNoDrift()) activeMount.append(infoFeedback('noDrift'));
         return;
       case 'doctor':
         mountBrowserView(
@@ -1366,6 +1385,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
           renderBrowserView({ kind: 'pack', data: packData, locale: state.locale }),
           handleReadControl,
         );
+        if (packData === undefined) activeMount.append(infoFeedback('guidePackFromOverview'));
         return;
       case 'write-review':
         mountBrowserView(
@@ -1444,7 +1464,8 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   async function refreshDiff(): Promise<void> {
     const profile = target.value.trim();
     if (profile.length === 0) {
-      diffData = {};
+      diffData = undefined;
+      diffSucceeded = false;
       setMessageKey('validationMissingDiffProfile');
       renderIfActive('profile-diff');
       return;
@@ -1453,8 +1474,10 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       operation: 'diff',
       input: { profile, checkUpdates: true },
     } as const satisfies UiRequest;
+    diffSucceeded = false;
     const result = await postApi(token, request, state.locale);
     diffData = result.response.metadata;
+    diffSucceeded = result.status >= 200 && result.status < 300 && result.response.exitCode === 0;
     renderIfActive('profile-diff');
   }
 

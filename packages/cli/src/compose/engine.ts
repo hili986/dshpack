@@ -311,15 +311,20 @@ export async function composePack(
       return result(output, false, selected, diagnostics, EXIT_CODES.CONTRACT);
     }
 
-    const provenance = conflicts.items
-      .filter(({ sourcePath }) => sourcePath === '' || sourcePath === 'SKILL.md')
-      .map(({ from, id, license, originalPath }) => ({
-        id,
-        from,
-        originalId: originalSkillId(originalPath),
-        license: license === undefined ? 'UNLICENSED' : license,
-      }))
-      .sort((left, right) => left.id.localeCompare(right.id, 'en'));
+    const provenanceBySkill = new Map(
+      conflicts.items.map(({ from, id, license, originalPath }) => [
+        `${from}\u0000${id}`,
+        {
+          id,
+          from,
+          originalId: originalSkillId(originalPath),
+          license: license === undefined ? 'UNLICENSED' : license,
+        },
+      ]),
+    );
+    const provenance = [...provenanceBySkill.values()].sort((left, right) =>
+      left.id.localeCompare(right.id, 'en'),
+    );
     const manifest: PackManifest = {
       formatVersion: 0,
       name: compose.name,

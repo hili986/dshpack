@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { type PackLock, validateLockValue, validatePackPath } from '@dshpack/core';
+import {
+  type PackLock,
+  type PackManifest,
+  validateLockValue,
+  validatePackPath,
+} from '@dshpack/core';
 import { valid } from 'semver';
 import { isAgentPresetLeafKey } from '../adapters/settings.js';
 import { assertPortableSnapshotPath, portableSnapshotPathKey } from '../install/snapshot-path.js';
@@ -23,6 +28,7 @@ const GITHUB_REPO = /^[A-Za-z0-9._-]+$/u;
 const TXID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 const IDENTITY = /^\d+:\d+:\d+$/u;
+const PROVENANCE_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 
 /**
  * Accept only the one base64url spelling of a 32-byte SHA-256 SRI value.
@@ -119,6 +125,8 @@ export interface SettingsContribution {
 
 export interface InstalledMetadataV1 extends Omit<InstalledMetadataV0, 'metadataVersion'> {
   metadataVersion: 1;
+  /** Optional so existing v1 markers remain readable after provenance projection was introduced. */
+  provenance?: NonNullable<PackManifest['provenance']>;
   assets: readonly MetadataAsset[];
   /** Optional for backwards-compatible v1 markers written before update deferral existed. */
   deferredAssets?: readonly DeferredMetadataAsset[];
@@ -285,6 +293,25 @@ function validPluginFact(value: unknown): boolean {
   if ('commit' in resolved)
     return integrity.kind === 'git-commit' && resolved.commit === integrity.value;
   return integrity.kind === 'sha512';
+}
+
+function validProvenance(value: unknown): value is NonNullable<PackManifest['provenance']> {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isRecord(item) &&
+        exactKeys(item, ['id', 'from', 'originalId', 'license']) &&
+        typeof item.id === 'string' &&
+        PROVENANCE_ID.test(item.id) &&
+        typeof item.from === 'string' &&
+        item.from.length > 0 &&
+        typeof item.originalId === 'string' &&
+        PROVENANCE_ID.test(item.originalId) &&
+        typeof item.license === 'string' &&
+        item.license.length > 0,
+    )
+  );
 }
 
 function validInstalledAt(value: unknown): value is string {
@@ -573,47 +600,29 @@ export function isValidSettingsContribution(value: unknown): value is SettingsCo
 function validV1(value: unknown): value is InstalledMetadataV1 {
   const profile = isRecord(value) && typeof value.profile === 'string' ? value.profile : '';
   const hasDeferredAssets = isRecord(value) && value.deferredAssets !== undefined;
+  const hasProvenance = isRecord(value) && value.provenance !== undefined;
+  const keys = [
+    'metadataVersion',
+    'profile',
+    'pack',
+    'planDigest',
+    'installedAt',
+    'txid',
+    'source',
+    'defaults',
+    'plugins',
+    'effectiveLock',
+    'sideEffects',
+    'assets',
+    'settingsContribution',
+    'generation',
+    'installedBy',
+    ...(hasDeferredAssets ? ['deferredAssets'] : []),
+    ...(hasProvenance ? ['provenance'] : []),
+  ];
   if (
     !isRecord(value) ||
-    !exactKeys(
-      value,
-      hasDeferredAssets
-        ? [
-            'metadataVersion',
-            'profile',
-            'pack',
-            'planDigest',
-            'installedAt',
-            'txid',
-            'source',
-            'defaults',
-            'plugins',
-            'effectiveLock',
-            'sideEffects',
-            'assets',
-            'deferredAssets',
-            'settingsContribution',
-            'generation',
-            'installedBy',
-          ]
-        : [
-            'metadataVersion',
-            'profile',
-            'pack',
-            'planDigest',
-            'installedAt',
-            'txid',
-            'source',
-            'defaults',
-            'plugins',
-            'effectiveLock',
-            'sideEffects',
-            'assets',
-            'settingsContribution',
-            'generation',
-            'installedBy',
-          ],
-    ) ||
+    !exactKeys(value, keys) ||
     value.metadataVersion !== 1 ||
     !Array.isArray(value.assets) ||
     (value.assets.length === 0 &&
@@ -624,6 +633,7 @@ function validV1(value: unknown): value is InstalledMetadataV1 {
     (hasDeferredAssets &&
       (!Array.isArray(value.deferredAssets) ||
         !value.deferredAssets.every((asset) => validDeferredAsset(asset, profile)))) ||
+    (hasProvenance && !validProvenance(value.provenance)) ||
     !isValidSettingsContribution(value.settingsContribution) ||
     typeof value.generation !== 'number' ||
     !Number.isSafeInteger(value.generation) ||
@@ -652,6 +662,7 @@ function validV1(value: unknown): value is InstalledMetadataV1 {
     generation: _generation,
     installedBy: _installedBy,
     settingsContribution: _settings,
+    provenance: _provenance,
     ...base
   } = value;
   return validV0({ ...base, metadataVersion: 0 });

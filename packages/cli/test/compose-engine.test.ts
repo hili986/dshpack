@@ -207,6 +207,78 @@ describe('composePack', () => {
     expect(installed.exitCode).toBe(EXIT_CODES.SUCCESS);
   });
 
+  it('records every selected conventional skill from both sources in provenance', async () => {
+    const root = await temporary();
+    const webDev = 'github:dsh-packs/web-dev#3414f1af3fd674998cea81716586f4716a538f50';
+    const researchWriting = 'profile:research-writing';
+    const source = await composeFile(root, [
+      {
+        from: webDev,
+        skills: ['browser-testing', 'commit-convention', 'frontend-design', 'web-research'],
+      },
+      {
+        from: researchWriting,
+        skills: [
+          'academic-writing',
+          'citation-verification',
+          'literature-review',
+          'paper-outline',
+          'peer-review',
+        ],
+      },
+    ]);
+    const output = join(root, 'output');
+
+    const report = await composePack(
+      { composeFile: source, output },
+      dependencies({
+        [webDev]: material(
+          ['browser-testing', 'commit-convention', 'frontend-design', 'web-research'],
+          webDev,
+        ),
+        [researchWriting]: material(
+          [
+            'academic-writing',
+            'citation-verification',
+            'literature-review',
+            'paper-outline',
+            'peer-review',
+          ],
+          researchWriting,
+        ),
+      }),
+    );
+
+    expect(report.exitCode).toBe(EXIT_CODES.SUCCESS);
+    const pack = parsePack(await readFile(join(output, 'pack.yml'), 'utf8')).value;
+    expect(pack?.provenance).toEqual([
+      {
+        id: 'academic-writing',
+        from: researchWriting,
+        originalId: 'academic-writing',
+        license: 'MIT',
+      },
+      { id: 'browser-testing', from: webDev, originalId: 'browser-testing', license: 'MIT' },
+      {
+        id: 'citation-verification',
+        from: researchWriting,
+        originalId: 'citation-verification',
+        license: 'MIT',
+      },
+      { id: 'commit-convention', from: webDev, originalId: 'commit-convention', license: 'MIT' },
+      { id: 'frontend-design', from: webDev, originalId: 'frontend-design', license: 'MIT' },
+      {
+        id: 'literature-review',
+        from: researchWriting,
+        originalId: 'literature-review',
+        license: 'MIT',
+      },
+      { id: 'paper-outline', from: researchWriting, originalId: 'paper-outline', license: 'MIT' },
+      { id: 'peer-review', from: researchWriting, originalId: 'peer-review', license: 'MIT' },
+      { id: 'web-research', from: webDev, originalId: 'web-research', license: 'MIT' },
+    ]);
+  });
+
   it('fails closed for every missing skill and lists source choices before creating the target', async () => {
     const root = await temporary();
     const source = await composeFile(root, [{ from: './local-pack', skills: ['missing'] }]);
