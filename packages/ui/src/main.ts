@@ -143,6 +143,24 @@ function previewDiagnostics(response: UiResponse | undefined): readonly ComposeD
   });
 }
 
+function archiveEntryDiagnostics(
+  diagnostics: readonly ComposeDiagnostic[],
+): readonly ComposeDiagnostic[] {
+  return diagnostics.filter((item) => item.code === 'E_ARCHIVE_ENTRY_SKIPPED');
+}
+
+function diagnosticFeedbackClass(item: ComposeDiagnostic): string {
+  return item.severity === 'error'
+    ? 'compose-feedback compose-feedback-error'
+    : item.severity === 'warning'
+      ? 'compose-feedback compose-feedback-warning'
+      : 'compose-feedback compose-feedback-info';
+}
+
+function resolvedSourceDisplay(from: string): string {
+  return from.replace(/#([0-9a-f]{40})$/iu, (_match, sha: string) => `#${sha.slice(0, 7)}`);
+}
+
 function editorSkillsFromDiff(value: unknown): readonly EditorSkill[] {
   if (!record(value)) return [];
   const drift = new Set(
@@ -626,6 +644,8 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       const sourceInput = document.createElement('input');
       const remove = document.createElement('button');
       const skillsHeading = document.createElement('h3');
+      const skills = previewSkills(composePreview, index);
+      card.className = 'compose-source';
       sourceInput.type = 'text';
       sourceInput.placeholder = message(state.locale, 'placeholderComposeSource');
       sourceInput.value = source.from;
@@ -650,8 +670,9 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       card.append(sourceLabel);
       if (composeValidation === 'validationComposeSource' && source.from.length === 0)
         card.append(validationFeedback(composeValidation));
-      card.append(remove, skillsHeading);
-      for (const skill of previewSkills(composePreview, index)) {
+      card.append(remove);
+      if (skills.length > 0) card.append(skillsHeading);
+      for (const skill of skills) {
         const skillLabel = document.createElement('label');
         const checked = document.createElement('input');
         const skillText = document.createElement('span');
@@ -666,15 +687,24 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
           composeSourceUpdate(index, { ...source, skills });
         });
         skillText.textContent = skill;
+        skillLabel.className = 'compose-skill-option';
         skillLabel.append(checked, skillText);
         card.append(skillLabel);
+      }
+      if (composePreview !== undefined && skills.length === 0) {
+        const noSkills = document.createElement('p');
+        noSkills.className = 'compose-feedback compose-feedback-info';
+        noSkills.textContent = message(state.locale, 'composeNoSkills');
+        card.append(noSkills);
       }
       sources.append(card);
     }
 
     for (const from of previewResolvedSources(composePreview)) {
       const resolved = document.createElement('p');
-      resolved.textContent = from;
+      resolved.className = 'compose-resolved';
+      resolved.title = from;
+      resolved.textContent = resolvedSourceDisplay(from);
       resolvedSources.append(resolved);
     }
 
@@ -689,7 +719,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     });
 
     const conflictIds = previewConflictIds(composePreview);
-    conflicts.textContent = message(state.locale, 'composeConflicts');
+    if (conflictIds.length > 0) conflicts.textContent = message(state.locale, 'composeConflicts');
     for (const id of conflictIds) {
       const card = document.createElement('section');
       const label = document.createElement('p');
@@ -767,15 +797,47 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       );
     });
     const diagnostics = document.createElement('section');
-    for (const item of previewDiagnostics(composePreview)) {
+    const previewedDiagnostics = previewDiagnostics(composePreview);
+    const skippedEntries = archiveEntryDiagnostics(previewedDiagnostics);
+    if (skippedEntries.length > 0) {
+      const grouped = document.createElement('details');
+      const summary = document.createElement('summary');
+      const code = document.createElement('code');
+      const paths = document.createElement('ul');
+      const severity = skippedEntries.some((item) => item.severity === 'error')
+        ? 'error'
+        : skippedEntries.some((item) => item.severity === 'warning')
+          ? 'warning'
+          : 'info';
+      grouped.className = diagnosticFeedbackClass({
+        code: 'E_ARCHIVE_ENTRY_SKIPPED',
+        message: '',
+        severity,
+      });
+      summary.textContent = `${message(state.locale, 'composeArchiveEntriesSkipped').replace(
+        '{count}',
+        String(skippedEntries.length),
+      )} `;
+      code.title = message(state.locale, 'composeDiagnosticCode');
+      code.textContent = 'E_ARCHIVE_ENTRY_SKIPPED';
+      summary.append(code);
+      for (const item of skippedEntries) {
+        const path = document.createElement('li');
+        path.textContent = item.message;
+        paths.append(path);
+      }
+      grouped.append(summary, paths);
+      diagnostics.append(grouped);
+    }
+    for (const item of previewedDiagnostics) {
+      if (item.code === 'E_ARCHIVE_ENTRY_SKIPPED') continue;
       const feedback = document.createElement('p');
-      feedback.className =
-        item.severity === 'error'
-          ? 'compose-feedback compose-feedback-error'
-          : item.severity === 'warning'
-            ? 'compose-feedback compose-feedback-warning'
-            : 'compose-feedback compose-feedback-info';
-      feedback.textContent = `${item.code}: ${item.message}`;
+      const code = document.createElement('code');
+      feedback.className = diagnosticFeedbackClass(item);
+      feedback.textContent = `${item.message} `;
+      code.title = message(state.locale, 'composeDiagnosticCode');
+      code.textContent = item.code;
+      feedback.append(code);
       diagnostics.append(feedback);
     }
     panel.append(

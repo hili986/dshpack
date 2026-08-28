@@ -44,6 +44,9 @@ const classes: readonly BrowserViewClass[] = [
   'severity-error',
   'callout',
   'review-status',
+  'compose-source',
+  'compose-skill-option',
+  'compose-resolved',
 ];
 
 function document(): FakeDocument {

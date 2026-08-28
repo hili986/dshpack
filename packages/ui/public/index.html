@@ -87,6 +87,14 @@
       .compose-feedback-error { background: #fdecec; color: #b42318; }
       .compose-feedback-warning { background: #fff4df; color: #9a6700; }
       .compose-feedback-info { background: #eef4ff; color: #1849a9; }
+      .compose-feedback code { margin-left: .375rem; color: currentColor; font-size: .75rem; font-weight: 500; opacity: .72; }
+      .compose-source { display: grid; gap: .75rem; padding: 1rem; border: 1px solid #d7dfeb; border-radius: .75rem; background: #f8fafc; }
+      .compose-source + .compose-source { margin-top: .75rem; }
+      .compose-source > * { margin: 0; }
+      .compose-source h3 { color: #475467; font-size: .875rem; }
+      .compose-skill-option { display: flex; align-items: center; gap: .5rem; color: #344054; font-size: .875rem; font-weight: 500; }
+      .compose-skill-option input[type="checkbox"] { width: auto; min-height: auto; padding: 0; }
+      .compose-resolved { margin: .25rem 0; color: #667085; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .75rem; overflow-wrap: anywhere; }
       details { padding: .875rem 1rem; }
       details summary { cursor: pointer; font-weight: 700; }
       details > :not(summary) { margin-top: .875rem; }
@@ -118,6 +126,8 @@
         .compose-feedback-error { background: #4c2023; color: #ffb4ab; }
         .compose-feedback-warning { background: #4b3414; color: #ffe1a8; }
         .compose-feedback-info { background: #19355e; color: #c7dbff; }
+        .compose-source { border-color: #344054; background: #243244; }
+        .compose-source h3, .compose-skill-option, .compose-resolved { color: #a8b6c9; }
         code.status-badge { background: #344054; color: #d0d9e8; }
       }
     </style>

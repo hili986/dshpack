@@ -45,7 +45,10 @@ export type BrowserViewClass =
   | 'severity-warning'
   | 'severity-error'
   | 'callout'
-  | 'review-status';
+  | 'review-status'
+  | 'compose-source'
+  | 'compose-skill-option'
+  | 'compose-resolved';
 
 export type BrowserControlKind = 'button' | 'checkbox';
 export type BrowserControlAction =

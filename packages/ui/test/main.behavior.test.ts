@@ -221,6 +221,98 @@ describe('browser main shell behavior', () => {
     expect(root.children[0]?.textContent).not.toContain(skipped);
   });
 
+  it('groups archive-entry diagnostics while retaining paths and quiets empty compose sections', async () => {
+    const firstSource = 'https://github.com/dsh-packs/web-dev';
+    const secondSource = 'https://github.com/dsh-packs/research-writing';
+    const pinned = 'github:owner/repo#0123456789abcdef0123456789abcdef01234567';
+    const skippedPaths = [
+      'Skipped non-regular archive entry: .claude/skills/link-a.',
+      'Skipped non-regular archive entry: .claude/skills/link-b.',
+      'Skipped non-regular archive entry: .claude/skills/link-c.',
+    ];
+    const fakes = installBrowserFakes([
+      { status: 200, body: statusBody },
+      {
+        status: 200,
+        body: {
+          diagnostics: [
+            ...skippedPaths.map((message) => ({
+              code: 'E_ARCHIVE_ENTRY_SKIPPED',
+              severity: 'warning',
+              message,
+            })),
+            { code: 'W_PREVIEW', severity: 'warning', message: 'regular warning' },
+          ],
+          exitCode: 0,
+          metadata: {
+            phase: 'preview',
+            sourceSkills: [
+              { from: firstSource, skills: ['notes'] },
+              { from: secondSource, skills: [] },
+            ],
+            selected: [{ from: pinned, id: 'notes', originalId: 'notes' }],
+            conflicts: [],
+          },
+        },
+      },
+    ]);
+    const root = fakes.document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    fakes.window.location.hash = '#compose';
+    elementWithText(root, '添加来源')?.fire('click');
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    const second = composeInputs[3];
+    if (profile === undefined || source === undefined || second === undefined)
+      throw new Error('expected compose inputs');
+    profile.value = 'readable-compose';
+    profile.fire('input');
+    source.value = firstSource;
+    source.fire('input');
+    second.value = secondSource;
+    second.fire('input');
+    elementWithText(root, '预览组合')?.fire('click');
+    await settle();
+
+    const sourceCards = descendants(root).filter(
+      (element) => (element as unknown as { className?: string }).className === 'compose-source',
+    );
+    expect(sourceCards).toHaveLength(2);
+    const skillOption = descendants(root).find(
+      (element) =>
+        (element as unknown as { className?: string }).className === 'compose-skill-option',
+    );
+    expect(skillOption?.children[0]?.tagName).toBe('input');
+    expect(skillOption?.children[0]?.type).toBe('checkbox');
+    expect(inputs(root).filter((input) => input.type === 'checkbox')).toHaveLength(1);
+
+    const archiveCodes = descendants(root).filter(
+      (element) => element.tagName === 'code' && element.textContent === 'E_ARCHIVE_ENTRY_SKIPPED',
+    );
+    expect(archiveCodes).toHaveLength(1);
+    expect(visibleText(root)).toContain('已跳过 3 个非普通归档条目');
+    const archiveDetails = descendants(root).find(
+      (element) =>
+        element.tagName === 'details' && element.textContent.includes(skippedPaths[0] ?? ''),
+    );
+    expect(archiveDetails?.textContent).toContain(skippedPaths[0]);
+    expect(archiveDetails?.textContent).toContain(skippedPaths[1]);
+    expect(archiveDetails?.textContent).toContain(skippedPaths[2]);
+    expect(visibleText(root)).toContain('regular warning');
+    expect(sourceCards[1]?.textContent).not.toContain('该来源的 Skills');
+    expect(sourceCards[1]?.textContent).toContain('该来源没有可组合的 skills');
+    expect(visibleText(root)).not.toContain('冲突裁决');
+
+    const resolved = descendants(root).find(
+      (element) => (element as unknown as { className?: string }).className === 'compose-resolved',
+    ) as unknown as { readonly textContent: string; readonly title?: string } | undefined;
+    expect(resolved?.textContent).toBe('github:owner/repo#0123456');
+    expect(resolved?.title).toBe(pinned);
+  });
+
   it('clears corrected compose profile and source validation feedback immediately in both locales', async () => {
     const fakes = installBrowserFakes([{ status: 200, body: statusBody }]);
     const root = fakes.document.createElement('main');
@@ -321,13 +413,15 @@ describe('browser main shell behavior', () => {
     elementWithText(root, '预览组合')?.fire('click');
     await settle();
 
-    const feedback = descendants(root).filter((element) =>
-      (element as unknown as { className?: string }).className?.startsWith('compose-feedback'),
+    const feedback = descendants(root).filter(
+      (element) =>
+        (element as unknown as { className?: string }).className?.startsWith('compose-feedback') &&
+        element.textContent.includes('PREVIEW'),
     );
     expect(feedback.map((element) => element.textContent)).toEqual([
-      'E_PREVIEW: preview error',
-      'W_PREVIEW: preview warning',
-      'I_PREVIEW: preview info',
+      'preview error E_PREVIEW',
+      'preview warning W_PREVIEW',
+      'preview info I_PREVIEW',
     ]);
     expect(
       feedback.map((element) => (element as unknown as { className?: string }).className),
@@ -458,7 +552,7 @@ describe('browser main shell behavior', () => {
     source.fire('input');
     elementWithText(root, '预览组合')?.fire('click');
     await settle();
-    expect(visibleText(root)).toContain(pinned);
+    expect(visibleText(root)).toContain('github:dsh-packs/web-dev#0123456');
 
     const skill = inputs(root).find((input) => input.type === 'checkbox');
     if (skill === undefined) throw new Error('expected preview skill checkbox');
@@ -629,7 +723,7 @@ describe('browser main shell behavior', () => {
 
     expect(elementWithText(root, 'Preview composition')?.disabled).toBe(false);
     expect(visibleText(root)).not.toContain(pending);
-    expect(visibleText(root)).toContain('W_PENDING_DONE: preview completed');
+    expect(visibleText(root)).toContain('preview completed W_PENDING_DONE');
   });
 
   it('walks the English skill editor flow and loads external content through textarea.value', async () => {
@@ -1439,9 +1533,9 @@ describe('browser main shell behavior', () => {
     await settle();
 
     const firstPreview = visibleText(root);
-    expect(firstPreview).toContain('E_PREVIEW: preview error');
-    expect(firstPreview).toContain('W_PREVIEW: preview warning');
-    expect(firstPreview).toContain('I_PREVIEW: preview info');
+    expect(firstPreview).toContain('preview error E_PREVIEW');
+    expect(firstPreview).toContain('preview warning W_PREVIEW');
+    expect(firstPreview).toContain('preview info I_PREVIEW');
     expect(firstPreview).not.toContain('must not render');
     expect(elementWithText(root, 'Compose and install')?.disabled).toBe(true);
 

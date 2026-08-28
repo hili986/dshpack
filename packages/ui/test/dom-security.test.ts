@@ -59,6 +59,20 @@ describe('browser DOM shell trust boundary', () => {
       expect(source).not.toMatch(/(?:\.style\b|setAttribute\(\s*['"]style['"])/u);
   });
 
+  it('keeps compose presentation classes in the fixed renderer allowlist', async () => {
+    const [view, dom, html] = await Promise.all([
+      source('view.ts'),
+      source('dom.ts'),
+      publicAsset('index.html'),
+    ]);
+
+    for (const className of ['compose-source', 'compose-skill-option', 'compose-resolved']) {
+      expect(view).toContain(`'${className}'`);
+      expect(dom).toContain(`case '${className}'`);
+      expect(html).toContain(`.${className}`);
+    }
+  });
+
   it('initializes the four read views and a single plan-review-apply flow', async () => {
     const main = await source('main.ts');
 

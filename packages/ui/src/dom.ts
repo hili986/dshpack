@@ -74,6 +74,9 @@ function trustedClass(value: BrowserViewClass): BrowserViewClass | undefined {
     case 'severity-error':
     case 'callout':
     case 'review-status':
+    case 'compose-source':
+    case 'compose-skill-option':
+    case 'compose-resolved':
       return value;
     default:
       return undefined;
