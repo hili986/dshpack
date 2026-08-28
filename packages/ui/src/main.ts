@@ -419,6 +419,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let composePreview: UiResponse | undefined;
   let composePreviewRevision = 0;
   let composePreviewRequest = 0;
+  let composePreviewPending = false;
   let composeResolutions: readonly ComposeResolutionForm[] = [];
   let composeValidation: MessageKey | undefined;
   let composeValidationFeedback: readonly HTMLParagraphElement[] = [];
@@ -427,6 +428,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
   let editorSkills: readonly EditorSkill[] = [];
   let editorSkillId = '';
   let editorContent = '';
+  let editorPending: 'skills' | 'content' | undefined;
 
   root.textContent = '';
   const controls = document.createElement('section');
@@ -584,6 +586,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     const profileLabel = document.createElement('label');
     const profile = document.createElement('input');
     const preview = document.createElement('button');
+    const pendingFeedback = document.createElement('p');
     const install = document.createElement('button');
     const addSource = document.createElement('button');
     const sources = document.createElement('section');
@@ -741,7 +744,12 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
 
     preview.type = 'button';
     preview.textContent = message(state.locale, 'composePreview');
+    preview.disabled = composePreviewPending;
     preview.addEventListener('click', () => void requestComposePreview());
+    if (composePreviewPending) {
+      pendingFeedback.className = 'compose-feedback compose-feedback-info';
+      pendingFeedback.textContent = message(state.locale, 'composePreviewPending');
+    }
     install.type = 'button';
     install.textContent = message(state.locale, 'composeInstall');
     install.disabled = !composeInstallReady();
@@ -779,6 +787,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       addSource,
       conflicts,
       preview,
+      ...(composePreviewPending ? [pendingFeedback] : []),
       diagnostics,
       install,
     );
@@ -821,6 +830,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       profile.append(option);
     }
     profile.value = editorProfile;
+    profile.disabled = editorPending !== undefined;
     profile.addEventListener('change', (event) => {
       const current = event.currentTarget;
       if (!(current instanceof HTMLSelectElement)) return;
@@ -836,6 +846,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     for (const entry of editorSkills) {
       const item = document.createElement('button');
       item.type = 'button';
+      item.disabled = editorPending !== undefined;
       item.textContent = entry.drift
         ? `${entry.id} (${message(state.locale, 'editorDrift')})`
         : entry.id;
@@ -849,6 +860,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     skillLabel.textContent = message(state.locale, 'editorNewSkill');
     skill.type = 'text';
     skill.value = editorSkillId;
+    skill.disabled = editorPending !== undefined;
     skill.addEventListener('input', (event) => {
       const current = event.currentTarget;
       if (current instanceof HTMLInputElement) editorSkillId = current.value.trim();
@@ -856,10 +868,12 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     skillLabel.append(skill);
     load.type = 'button';
     load.textContent = message(state.locale, 'editorLoadSkill');
+    load.disabled = editorPending !== undefined;
     load.addEventListener('click', () => void loadEditorContent());
 
     contentLabel.textContent = message(state.locale, 'editorContent');
     editor.value = editorContent;
+    editor.disabled = editorPending !== undefined;
     editor.addEventListener('input', (event) => {
       const current = event.currentTarget;
       if (current instanceof HTMLTextAreaElement) editorContent = current.value;
@@ -867,6 +881,7 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     contentLabel.append(editor);
     save.type = 'button';
     save.textContent = message(state.locale, 'editorSave');
+    save.disabled = editorPending !== undefined;
     save.addEventListener('click', () => {
       if (!safeProfile(editorProfile)) {
         setMessageKey('validationEditorProfile');
@@ -884,7 +899,27 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
         }),
       );
     });
-    panel.append(heading, profileLabel, skills, skillLabel, load, contentLabel, save);
+    const pendingKey =
+      editorPending === 'skills'
+        ? 'editorSkillsPending'
+        : editorPending === 'content'
+          ? 'editorContentPending'
+          : undefined;
+    const pendingFeedback = document.createElement('p');
+    if (pendingKey !== undefined) {
+      pendingFeedback.className = 'compose-feedback compose-feedback-info';
+      pendingFeedback.textContent = message(state.locale, pendingKey);
+    }
+    panel.append(
+      heading,
+      profileLabel,
+      ...(pendingKey === undefined ? [] : [pendingFeedback]),
+      skills,
+      skillLabel,
+      load,
+      contentLabel,
+      save,
+    );
     activeMount.append(panel);
   }
 
@@ -1021,13 +1056,19 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
     } as const satisfies UiRequest;
     const revision = composePreviewRevision;
     const requestId = ++composePreviewRequest;
-    const result = await postApi(token, request, state.locale);
-    if (revision !== composePreviewRevision || requestId !== composePreviewRequest) return;
-    composePreview = result.response;
-    composeValidation = undefined;
-    const ids = new Set(previewConflictIds(composePreview));
-    composeResolutions = composeResolutions.filter((item) => ids.has(item.id));
+    composePreviewPending = true;
     renderIfActive('compose');
+    try {
+      const result = await postApi(token, request, state.locale);
+      if (revision !== composePreviewRevision || requestId !== composePreviewRequest) return;
+      composePreview = result.response;
+      composeValidation = undefined;
+      const ids = new Set(previewConflictIds(composePreview));
+      composeResolutions = composeResolutions.filter((item) => ids.has(item.id));
+    } finally {
+      composePreviewPending = false;
+      renderIfActive('compose');
+    }
   }
 
   async function loadEditorSkills(): Promise<void> {
@@ -1036,9 +1077,15 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       operation: 'diff',
       input: { profile: editorProfile },
     } as const satisfies UiRequest;
-    const result = await postApi(token, request, state.locale);
-    editorSkills = editorSkillsFromDiff(result.response.metadata);
+    editorPending = 'skills';
     renderIfActive('skill-editor');
+    try {
+      const result = await postApi(token, request, state.locale);
+      editorSkills = editorSkillsFromDiff(result.response.metadata);
+    } finally {
+      editorPending = undefined;
+      renderIfActive('skill-editor');
+    }
   }
 
   async function loadEditorContent(): Promise<void> {
@@ -1054,10 +1101,16 @@ export function startBrowserUi(root: HTMLElement): BrowserUiController {
       operation: 'skillContent',
       input: { profile: editorProfile, skillId: editorSkillId },
     } as const satisfies UiRequest;
-    const result = await postApi(token, request, state.locale);
-    const metadata = previewMetadata(result.response);
-    editorContent = typeof metadata.content === 'string' ? metadata.content : '';
+    editorPending = 'content';
     renderIfActive('skill-editor');
+    try {
+      const result = await postApi(token, request, state.locale);
+      const metadata = previewMetadata(result.response);
+      editorContent = typeof metadata.content === 'string' ? metadata.content : '';
+    } finally {
+      editorPending = undefined;
+      renderIfActive('skill-editor');
+    }
   }
 
   async function submitPlan(request: UiWriteRequest): Promise<void> {

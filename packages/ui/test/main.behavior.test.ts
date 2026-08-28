@@ -574,6 +574,64 @@ describe('browser main shell behavior', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('shows compose preview pending feedback until it resolves', async () => {
+    const preview = deferredResponse();
+    const document = new FakeDocument();
+    const window = new FakeWindow('http://127.0.0.1/?token=memory-token#overview');
+    const calls: Array<{ readonly input: unknown; readonly init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+      calls.push(init === undefined ? { input } : { input, init });
+      if (calls.length === 1)
+        return {
+          status: 200,
+          json: async () => statusBody,
+        } as Response;
+      return preview.promise;
+    });
+    vi.stubGlobal('window', window);
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('HTMLInputElement', FakeInputElement);
+    vi.stubGlobal('HTMLSelectElement', FakeElement);
+    vi.stubGlobal('HTMLTextAreaElement', FakeTextAreaElement);
+    const root = document.createElement('main');
+    startBrowserUi(root as unknown as HTMLElement);
+    await settle();
+
+    elementWithText(root, 'EN')?.fire('click');
+    window.location.hash = '#compose';
+    const composeInputs = inputs(root).filter((input) => input.type === 'text');
+    const profile = composeInputs[1];
+    const source = composeInputs[2];
+    if (profile === undefined || source === undefined) throw new Error('expected compose inputs');
+    profile.value = 'pending-preview';
+    profile.fire('input');
+    source.value = 'https://github.com/dsh-packs/web-dev';
+    source.fire('input');
+    elementWithText(root, 'Preview composition')?.fire('click');
+    await settle();
+
+    const pending =
+      'Previewing: resolving sources and downloading archives; this may take tens of seconds…';
+    expect(visibleText(root)).toContain(pending);
+    expect(elementWithText(root, 'Preview composition')?.disabled).toBe(true);
+
+    preview.resolve({
+      status: 200,
+      json: async () => ({
+        diagnostics: [
+          { code: 'W_PENDING_DONE', severity: 'warning', message: 'preview completed' },
+        ],
+        exitCode: 0,
+        metadata: { phase: 'preview', sourceSkills: [], selected: [], conflicts: [] },
+      }),
+    } as Response);
+    await settle();
+
+    expect(elementWithText(root, 'Preview composition')?.disabled).toBe(false);
+    expect(visibleText(root)).not.toContain(pending);
+    expect(visibleText(root)).toContain('W_PENDING_DONE: preview completed');
+  });
+
   it('walks the English skill editor flow and loads external content through textarea.value', async () => {
     const fakes = installBrowserFakes([
       { status: 200, body: statusBody },
