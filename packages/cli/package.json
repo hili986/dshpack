@@ -1,6 +1,6 @@
 {
   "name": "dshpack",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": false,
   "description": "CLI for packaging and managing DSH distributions.",
   "license": "MIT",

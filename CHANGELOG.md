@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.3
+
+**compose 体验两轮整顿。** 0.5.2 发布后真实使用回收："点击预览没反应"与"界面太乱"两条反馈。
+
+### 修复
+
+- **进行中反馈（M3.10）**：点击"预览组合"立即 pending——按钮 disable + 双语提示"预览中：解析来源并下载归档，可能需要数十秒…"；`try/finally` 无条件恢复，revision 防过期守卫语义不变。skill editor 的 skills/content 加载同模式闭合；write-review 未动。
+- **复选框布局 bug（M3.11）**：全局 `input { width: 100% }` 把 skill 复选框撑成整行大方块；`.compose-skill-option` 覆盖为行内对齐。
+
+### 新增（M3.11，纯呈现层，服务端诊断一字未动）
+
+- 来源卡片容器化（`.compose-source`，明暗双态），表单节奏统一。
+- 同类 `E_ARCHIVE_ENTRY_SKIPPED` 折叠为一条可展开 `<details>`——SECURITY.md 的可见性承诺以可展开全量保留；诊断人话在前、裸 code 降级为弱化尾缀。
+- 空 skills/空冲突不再渲染空标题；resolved source 的 40 位 SHA 截断显示 7 位，完整串在 `title`。
+- 新类进静态类名 union 三重闭合（view.ts 类型 + dom.ts 白名单 + CSS），白名单测试同步。
+
+### 安全
+
+- M3.10/M3.11 共两条 Claude 自制 mutant（删 pending 置位、放宽 SHA 截断正则）红绿实测；授权模型/token/两步确认原样。
+
 ## 0.5.2
 
 **大仓库可组合，预检上限可见。** 用户拿 dsh-desktop（12.6 MB、含大二进制）实测撞出的两轮。

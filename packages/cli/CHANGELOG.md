@@ -1,5 +1,25 @@
 # dshpack
 
+## 0.5.3
+
+### Patch Changes
+
+- **compose 体验两轮整顿（M3.10 + M3.11）。** 0.5.2 发布后真实使用回收：点击预览"没反应"与界面"太乱"两条反馈。
+  
+  ### M3.10：进行中反馈
+  
+  - 点击"预览组合"立即进入 pending：按钮 disable + 双语提示"预览中：解析来源并下载归档，可能需要数十秒…"；`try/finally` 无条件恢复，revision 防过期守卫语义不变。
+  - skill editor 的 skills/content 加载同模式闭合；write-review 流程未动。
+  
+  ### M3.11：可读性整顿（纯呈现层，服务端诊断一字未动）
+  
+  - 修复复选框被全局 `input { width: 100% }` 撑成整行方块的布局 bug（`.compose-skill-option`）。
+  - 来源卡片容器化（`.compose-source`，明暗双态），表单节奏统一。
+  - 同类 `E_ARCHIVE_ENTRY_SKIPPED` 折叠为一条可展开 `<details>`（SECURITY.md 的可见性承诺以可展开全量保留）；诊断人话在前、裸 code 降级为弱化尾缀。
+  - 空 skills/空冲突不再渲染空标题；resolved source 的 40 位 SHA 截断显示 7 位，完整串在 `title`。
+  - 新类进静态类名 union 三重闭合（view.ts 类型 + dom.ts 白名单 + CSS），白名单测试同步。
+- @dshpack/core@0.5.3
+
 ## 0.5.2
 
 ### Patch Changes
