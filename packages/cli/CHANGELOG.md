@@ -1,5 +1,13 @@
 # dshpack
 
+## 0.5.5
+
+### Patch Changes
+
+- e7c22ec: Allow only commit-pinned GitHub codeload per-entry PAX `comment` metadata while preserving fail-closed archive validation for every other extended header.
+- aaeefbb: Fix composed-pack provenance projection and explain direct Pack/Drift tabs plus a clean drift result in the browser UI.
+- @dshpack/core@0.5.5
+
 ## 0.5.4
 
 ### Patch Changes
