@@ -683,4 +683,51 @@ describe('composePack', () => {
     await expect(readdir(output)).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await readdir(root)).filter((name) => name.includes('dshpack-compose-'))).toEqual([]);
   });
+
+  it('reports an unreadable compose file as a contract failure in dry run too', async () => {
+    const root = await temporary();
+    const report = await composePack({
+      composeFile: join(root, 'missing-compose.yml'),
+      dryRun: true,
+    });
+
+    expect(report.exitCode).toBe(EXIT_CODES.CONTRACT);
+    expect(report.metadata.dryRun).toBe(true);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'E_COMPOSE_READ' })]),
+    );
+  });
+
+  it('refuses at the staged-write re-scan when the injected scanner flags what the first scan missed', async () => {
+    const root = await temporary();
+    const source = await composeFile(root, [{ from: './local-pack', skills: ['citation'] }]);
+    const output = join(root, 'output');
+    let calls = 0;
+    const report = await composePack(
+      { composeFile: source, output },
+      {
+        ...dependencies({ './local-pack': material('citation', './local-pack') }),
+        secretScanner: () => {
+          calls += 1;
+          if (calls === 1) return [];
+          return [
+            {
+              code: 'E_SECRET_HIGH_ENTROPY',
+              severity: 'error',
+              message: 'Staged content resembles a credential.',
+              hint: 'Remove it from the source.',
+              evidence: 'local',
+              path: 'skills/citation/SKILL.md',
+            },
+          ];
+        },
+      },
+    );
+
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(report.exitCode).toBe(EXIT_CODES.SECURITY);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'E_SECRET_HIGH_ENTROPY' })]),
+    );
+  });
 });

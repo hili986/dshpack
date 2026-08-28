@@ -42,6 +42,8 @@ export interface ComposeDependencies {
   generateLock?: typeof generateAndWriteLock;
   materializeSource?: typeof materializeComposeSource;
   validate?: typeof validateLocalPack;
+  /** Test seam: the staged-write re-scan is defense-in-depth and unreachable with the real scanner. */
+  secretScanner?: typeof scanSecrets;
 }
 
 interface Material {
@@ -110,9 +112,12 @@ function originalSkillId(path: string): string {
   return entry.endsWith('.md') ? entry.slice(0, -3) : entry;
 }
 
-function scan(materials: readonly Material[]): Diagnostic[] {
+function scan(
+  materials: readonly Material[],
+  scanner: typeof scanSecrets = scanSecrets,
+): Diagnostic[] {
   return materials.flatMap(({ bytes, path }) =>
-    scanSecrets({ path, content: Buffer.from(bytes).toString('utf8') }).filter(
+    scanner({ path, content: Buffer.from(bytes).toString('utf8') }).filter(
       ({ code }) => !(path === 'pack.lock.yml' && code === 'E_SECRET_HIGH_ENTROPY'),
     ),
   );
@@ -333,7 +338,8 @@ export async function composePack(
       { path: 'patch/cordis.patch.yml', bytes: Buffer.from('[]\n') },
       ...conflicts.items.map((item) => ({ bytes: item.bytes, path: materialPath(item) })),
     ];
-    const firstScan = scan(materials);
+    const scanner = dependencies.secretScanner ?? scanSecrets;
+    const firstScan = scan(materials, scanner);
     if (firstScan.length > 0)
       return result(output, false, selected, [...diagnostics, ...firstScan], EXIT_CODES.SECURITY);
 
@@ -341,7 +347,7 @@ export async function composePack(
     try {
       await mkdir(staging, { mode: 0o700 });
       await writeMaterials(staging, materials);
-      const beforeLock = scan(await collect(staging));
+      const beforeLock = scan(await collect(staging), scanner);
       if (beforeLock.length > 0)
         return result(
           output,
@@ -359,7 +365,7 @@ export async function composePack(
           [...diagnostics, ...locked.diagnostics],
           locked.exitCode,
         );
-      const postLock = scan(await collect(staging));
+      const postLock = scan(await collect(staging), scanner);
       if (postLock.length > 0)
         return result(output, false, selected, [...diagnostics, ...postLock], EXIT_CODES.SECURITY);
       const validated = await (dependencies.validate ?? validateLocalPack)(staging, {
