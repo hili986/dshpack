@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.5
+
+**GitHub codeload 的逐条目 PAX provenance 钉可验证地通过，其他扩展元数据仍 fail closed。** M3.13 只容忍 GitHub 固定 commit 产生的同值 `comment`，不改变部署集合、归档扫描或确认模型。
+
+### 修复
+
+- **GitHub codeload per-entry PAX 窄放宽（M3.13）**：仅当来源已固定 GitHub commit、条目携带 global 头且 comment==pin、且有效 per-entry PAX 键集合 ⊆ 显式白名单（stat-bag：时间/属主/mode/设备号/charset/`path`/`size` 等）时才接受；`path` 为标准长路径机制，其值仍完整经过既有路径硬校验，provenance 钉在 global 头。install 全量提取与 compose 选择性提取共用此预检；白名单外 PAX 键、缺/错 global pin、非 GitHub 归档、未消费的 metadata、重复 global PAX 仍以 `ARCHIVE_UNSAFE` 拒绝。
+
+### 安全
+
+- 为 tar parser 的 metadata 事件和原始 header type 建立有界 FIFO 对齐；连续相同 per-entry PAX 可正确记账，global PAX 仍仅保留原先的一次消费语义。路径安全、凭据扫描、条目与字节上限、授权模型/token/两步确认均未改变。
+
 ## 0.5.4
 
 **未知 license 的预览不再伪失败，写入确认仍是硬闸。** M3.12 将来源许可不明的可解释性与实际写入授权分开。

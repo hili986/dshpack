@@ -52,6 +52,18 @@ export type RawHeaderSafety =
     }
   | { readonly safe: false; readonly reason: 'unsafe' };
 
+type MetadataHeaderType = 'g' | 'x' | 'X' | 'K' | 'L' | 'N';
+
+type MetadataHeaderSafety =
+  | { readonly safe: true; readonly types: readonly MetadataHeaderType[] }
+  | {
+      readonly safe: false;
+      readonly reason: 'cap';
+      readonly expandedBytes: number;
+      readonly maxExpandedBytes: number;
+    }
+  | { readonly safe: false; readonly reason: 'unsafe' };
+
 function dataAfterNul(block: Buffer, offset: number, length: number): boolean {
   const field = block.subarray(offset, offset + length);
   const nul = field.indexOf(0);
@@ -119,6 +131,73 @@ export async function rawHeadersSafe(
     : { safe: false, reason: 'unsafe' };
 }
 
+function metadataHeaderType(block: Buffer): MetadataHeaderType | undefined {
+  const type = block.toString('ascii', 156, 157);
+  return type === 'g' ||
+    type === 'x' ||
+    type === 'X' ||
+    type === 'K' ||
+    type === 'L' ||
+    type === 'N'
+    ? type
+    : undefined;
+}
+
+async function metadataHeaderTypes(
+  filename: string,
+  maxExpandedBytes = MAX_RAW_HEADER_BYTES,
+): Promise<MetadataHeaderSafety> {
+  let tail = Buffer.alloc(0);
+  let remaining = 0;
+  let expanded = 0;
+  const types: MetadataHeaderType[] = [];
+  const inspect = (block: Buffer): boolean => {
+    const type = remaining === 0 ? metadataHeaderType(block) : undefined;
+    const nextRemaining = inspectRawHeaderBlock(block, remaining);
+    if (nextRemaining === undefined) return false;
+    if (type !== undefined) types.push(type);
+    remaining = nextRemaining;
+    return true;
+  };
+  try {
+    const stream = createReadStream(filename).pipe(createGunzip());
+    for await (const value of stream) {
+      const chunk = Buffer.from(value);
+      expanded += chunk.byteLength;
+      if (expanded > maxExpandedBytes)
+        return { safe: false, reason: 'cap', expandedBytes: expanded, maxExpandedBytes };
+      let offset = 0;
+      if (tail.byteLength > 0) {
+        const needed = 512 - tail.byteLength;
+        if (chunk.byteLength < needed) {
+          const nextTail = Buffer.allocUnsafe(tail.byteLength + chunk.byteLength);
+          tail.copy(nextTail);
+          chunk.copy(nextTail, tail.byteLength);
+          tail = nextTail;
+          continue;
+        }
+        const block = Buffer.allocUnsafe(512);
+        tail.copy(block);
+        chunk.copy(block, tail.byteLength, 0, needed);
+        if (!inspect(block)) return { safe: false, reason: 'unsafe' };
+        tail = Buffer.alloc(0);
+        offset = needed;
+      }
+      while (offset + 512 <= chunk.byteLength) {
+        if (!inspect(chunk.subarray(offset, offset + 512)))
+          return { safe: false, reason: 'unsafe' };
+        offset += 512;
+      }
+      if (offset < chunk.byteLength) tail = Buffer.from(chunk.subarray(offset));
+    }
+  } catch {
+    return { safe: false, reason: 'unsafe' };
+  }
+  return tail.byteLength === 0 && remaining === 0
+    ? { safe: true, types }
+    : { safe: false, reason: 'unsafe' };
+}
+
 function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
   const raw =
     entry.type === 'Directory' && entry.path.endsWith('/') ? entry.path.slice(0, -1) : entry.path;
@@ -152,6 +231,49 @@ function safeEntryPath(entry: ReadEntry, fail: ArchiveError): string {
 
 function deployableEntry(entry: ReadEntry): boolean {
   return entry.type === 'File' || entry.type === 'OldFile' || entry.type === 'Directory';
+}
+
+/**
+ * Fail-closed allowlist of per-entry PAX keys admitted from a pinned GitHub codeload archive.
+ * Every key is either inert for our deployment semantics (times/ownership/mode/device numbers/
+ * charset — live codeload even ships `comment` empty, so no per-entry pin is demanded), skipped
+ * with non-regular entries (linkpath), or fully re-validated downstream: `path` becomes the
+ * entry path and passes safeEntryPath's traversal/segment/collision checks, `size` desyncs the
+ * strict parser if lied about. The provenance pin is the GLOBAL header's comment==commit,
+ * enforced by the unchanged unsafeGlobal rule. Any key outside this set rejects the archive.
+ */
+const GITHUB_PAX_ALLOWLIST: ReadonlySet<string> = new Set([
+  'atime',
+  'charset',
+  'comment',
+  'ctime',
+  'dev',
+  'gid',
+  'gname',
+  'ino',
+  'linkpath',
+  'mode',
+  'mtime',
+  'nlink',
+  'path',
+  'size',
+  'uid',
+  'uname',
+]);
+
+export function acceptableGitHubPax(
+  entry: ReadEntry,
+  expectedGitHub: GitHubArchiveExpectation | undefined,
+): boolean {
+  const extended = entry.extended;
+  if (expectedGitHub === undefined || extended === undefined) return false;
+  // The provenance pin lives in the global header; node-tar attaches it to every subsequent
+  // entry, so a pax-bearing entry without a matching global pin is refused.
+  if (entry.globalExtended?.comment !== expectedGitHub.commit) return false;
+  const contentKeys = Object.entries(extended)
+    .filter(([key, value]) => key !== 'global' && value !== undefined)
+    .map(([key]) => key);
+  return contentKeys.every((key) => GITHUB_PAX_ALLOWLIST.has(key));
 }
 
 function skippedEntryDiagnostic(path: string): Diagnostic {
@@ -198,6 +320,7 @@ function inspectArchiveStructure(
   state: ArchiveState,
   fail: ArchiveError,
   expectedGitHub?: GitHubArchiveExpectation,
+  acceptedPax = acceptableGitHubPax(entry, expectedGitHub),
 ): DeployableArchiveEntry | undefined {
   const global = entry.globalExtended;
   const unsafeGlobal =
@@ -207,7 +330,7 @@ function inspectArchiveStructure(
       Object.entries(global).some(
         ([key, value]) => value !== undefined && key !== 'global' && key !== 'comment',
       ));
-  if (entry.extended !== undefined || unsafeGlobal) {
+  if ((entry.extended !== undefined && !acceptedPax) || unsafeGlobal) {
     throw fail('ARCHIVE_UNSAFE', '归档包含扩展元数据。');
   }
   const path = safeEntryPath(entry, fail);
@@ -326,12 +449,22 @@ async function preflight(
       `归档预检已解压 ${rawHeaderSafety.expandedBytes} bytes，超过 ${rawHeaderSafety.maxExpandedBytes} bytes 上限。`,
     );
   if (!rawHeaderSafety.safe) throw fail('ARCHIVE_UNSAFE', '归档原始 header 不安全或无效。');
+  const metadataHeaderSafety = await metadataHeaderTypes(filename, options.rawHeaderMaxBytes);
+  if (!metadataHeaderSafety.safe && metadataHeaderSafety.reason === 'cap')
+    throw fail(
+      'E_ARCHIVE_PREFLIGHT_CAP',
+      `归档预检已解压 ${metadataHeaderSafety.expandedBytes} bytes，超过 ${metadataHeaderSafety.maxExpandedBytes} bytes 上限。`,
+    );
+  if (!metadataHeaderSafety.safe) throw fail('ARCHIVE_UNSAFE', '归档原始 header 不安全或无效。');
   const state: ArchiveState = { diagnostics: [], githubRootName: undefined };
   const records: DeployableArchiveEntry[] = [];
   const fullDeployment = deploymentState();
   let entries = 0;
   let metaHeaders = 0;
   let consumedMeta = 0;
+  let pendingGlobalHeaders = 0;
+  let pendingPaxHeaders = 0;
+  let pendingOtherMetaHeaders = 0;
   let sawGlobal = false;
   let failure: Error | undefined;
   let parserError: unknown;
@@ -341,7 +474,17 @@ async function preflight(
   try {
     const parser = new Parser({ file: filename, strict: true });
     parser.on('meta', () => {
+      const type = metadataHeaderSafety.types[metaHeaders];
       metaHeaders += 1;
+      if (type === undefined) {
+        record(fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。'));
+      } else if (type === 'g') {
+        pendingGlobalHeaders += 1;
+      } else if (type === 'x' || type === 'X') {
+        pendingPaxHeaders += 1;
+      } else {
+        pendingOtherMetaHeaders += 1;
+      }
     });
     parser.on('ignoredEntry', (entry: ReadEntry) => {
       record(fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。'));
@@ -353,11 +496,27 @@ async function preflight(
         record(fail('ARCHIVE_LIMIT', '归档超过条目数量限制。'));
       if (entry.globalExtended !== undefined && !sawGlobal) {
         sawGlobal = true;
-        consumedMeta += 1;
+        if (pendingGlobalHeaders === 0) {
+          record(fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。'));
+        } else {
+          consumedMeta += 1;
+          pendingGlobalHeaders -= 1;
+        }
+      }
+      const acceptedPax = acceptableGitHubPax(entry, expectedGitHub);
+      if (acceptedPax) {
+        consumedMeta += pendingPaxHeaders;
+        pendingPaxHeaders = 0;
       }
       if (failure === undefined) {
         try {
-          const inspected = inspectArchiveStructure(entry, state, fail, expectedGitHub);
+          const inspected = inspectArchiveStructure(
+            entry,
+            state,
+            fail,
+            expectedGitHub,
+            acceptedPax,
+          );
           if (inspected !== undefined) {
             if (options.selectiveComposeSkills) records.push(inspected);
             else validateDeploymentEntry(inspected, fullDeployment, fail);
@@ -382,7 +541,15 @@ async function preflight(
     throw fail('ARCHIVE_UNSAFE', '归档格式无效或无法安全读取。');
   }
   if (failure !== undefined) throw failure;
-  if (metaHeaders !== consumedMeta) throw fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。');
+  if (
+    metaHeaders !== metadataHeaderSafety.types.length ||
+    metaHeaders !== consumedMeta ||
+    pendingGlobalHeaders !== 0 ||
+    pendingPaxHeaders !== 0 ||
+    pendingOtherMetaHeaders !== 0
+  ) {
+    throw fail('ARCHIVE_UNSAFE', '归档包含未允许的 header。');
+  }
   if (entries === 0) throw fail('ARCHIVE_UNSAFE', '归档为空或无效。');
   if (!options.selectiveComposeSkills)
     return { diagnostics: state.diagnostics, githubRoot: state.githubRootName };
