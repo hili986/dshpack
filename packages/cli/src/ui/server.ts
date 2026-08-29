@@ -749,11 +749,18 @@ function defaultEngines(dshHome: string, suppliedRuntime?: InstallRuntime): UiSe
             runtime,
           );
         case 'doctor':
-          return runDoctor(input as { dshHome: string; profile?: string; strict?: boolean }, {
-            // Profile dump checks can materialize cordis.yml. The UI read surface fails those
-            // checks closed instead of allowing a nominally read-only request to write.
-            runDsh: async () => Promise.reject(new Error('UI doctor is read-only.')),
-          });
+          return runDoctor(
+            {
+              ...(input as { dshHome: string; profile?: string; strict?: boolean }),
+              skipDshHost: true,
+            },
+            {
+              // Profile dump checks can materialize cordis.yml. The UI read surface skips the
+              // dsh host probes (honest info diagnostic) and keeps the rejecting runner as a
+              // defense-in-depth backstop should a probe ever be added without the skip flag.
+              runDsh: async () => Promise.reject(new Error('UI doctor is read-only.')),
+            },
+          );
         case 'composePreview':
           return previewCompose(
             dshHome,

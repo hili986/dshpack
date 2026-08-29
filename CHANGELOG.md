@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.6
+
+**浏览器端诊断诚实化（M3.16）。** UI doctor 只读面此前把"设计上不启动 dsh"伪装成 DSH003"无法在 5 秒内执行 dsh --version"宿主故障；现显式 `skipDshHost` 跳过宿主探针，改 info 级如实诊断并指引命令行 `dshpack doctor`；本地只读检查保留，rejecting runner 留作纵深背底。
+
 ## 0.5.5
 
 **M3.14：组合 Pack 的 provenance 不再因路径形态被静默丢弃；Pack/漂移详情页也不再把“尚未选择上下文”与“健康的零漂移”伪装成空白。**

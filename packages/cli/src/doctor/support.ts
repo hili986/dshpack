@@ -14,6 +14,8 @@ export interface DoctorInput {
   fix?: boolean;
   nodeVersion?: string;
   yes?: boolean;
+  /** Read-only surfaces (browser UI) skip dsh host probes and say so honestly. */
+  skipDshHost?: boolean;
   env?: Readonly<NodeJS.ProcessEnv>;
 }
 

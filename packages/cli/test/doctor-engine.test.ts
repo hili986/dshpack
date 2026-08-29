@@ -130,4 +130,14 @@ describe('doctor engine orchestration branches', () => {
       runDoctor({ dshHome: 'ignored', profile: 'demo', yes: true }),
     ).resolves.toMatchObject({ exitCode: 10 });
   });
+
+  it('skips dsh host probes on read-only surfaces with an honest info diagnostic', async () => {
+    const report = await runDoctor({ dshHome: 'ignored', skipDshHost: true });
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'E_DOCTOR_HOST_SKIPPED', severity: 'info' }),
+      ]),
+    );
+    expect(report.diagnostics.map((item) => item.code)).not.toContain('DSH003');
+  });
 });

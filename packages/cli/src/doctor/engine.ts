@@ -105,7 +105,19 @@ export async function runDoctor(
       profileDiagnostic('DSH001', 'Node 版本必须是 >=22.19 且 <25。', '切换到受支持 Node 版本。'),
     );
   await checkPnpm(input, diagnostics);
-  const version = await dshVersion(input, diagnostics, runDsh);
+  let version: string | undefined;
+  if (input.skipDshHost === true) {
+    diagnostics.push(
+      diagnostic(
+        'E_DOCTOR_HOST_SKIPPED',
+        'info',
+        '浏览器端诊断为只读，跳过 dsh 宿主探针。',
+        '命令行运行 dshpack doctor 获取宿主结论。',
+      ),
+    );
+  } else {
+    version = await dshVersion(input, diagnostics, runDsh);
+  }
   if (input.profile !== undefined) {
     const profile = await readProfile(input.dshHome, input.profile);
     diagnostics.push(...profile.diagnostics);
@@ -144,14 +156,19 @@ export async function runDoctor(
           ),
         );
       await fixEmptyPatch(profile.facts, input, diagnostics);
-      await checkBundles(profile.facts, input, diagnostics, runDsh);
+      if (input.skipDshHost !== true) {
+        await checkBundles(profile.facts, input, diagnostics, runDsh);
+      }
       await checkBuildAuthorization(profile.facts, diagnostics);
-      const dump = await runDsh(['--profile', input.profile, '--dump-default-config'], {
-        cwd: profile.facts.root,
-        dshHome: input.dshHome,
-        timeout: 5_000,
-        ...dshOptions(input),
-      }).catch(() => undefined);
+      const dump =
+        input.skipDshHost === true
+          ? undefined
+          : await runDsh(['--profile', input.profile, '--dump-default-config'], {
+              cwd: profile.facts.root,
+              dshHome: input.dshHome,
+              timeout: 5_000,
+              ...dshOptions(input),
+            }).catch(() => undefined);
       if (dump !== undefined)
         diagnostics.push(
           ...preparePatchExport(dump.stdout, profile.facts.patch).diagnostics.map((item) => ({
